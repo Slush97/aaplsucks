@@ -420,6 +420,14 @@ impl App {
             perf: crate::perf::PerfMonitor::new(300),
         }
     }
+
+    /// Write perf report to `perf_report.txt` in the current directory.
+    fn write_perf_report(&self) {
+        let path = std::path::PathBuf::from("perf_report.txt");
+        if let Err(e) = self.perf.write_report(&path) {
+            tracing::error!("failed to write perf report: {e}");
+        }
+    }
 }
 
 /// Create a multisampled texture and return its view.
@@ -681,6 +689,7 @@ impl ApplicationHandler<AppUserEvent> for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
+                self.write_perf_report();
                 if let Some(w) = self.window.as_ref() {
                     self.delegate.on_close(w);
                 }
@@ -1282,6 +1291,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                 }
                 // Check if the delegate wants to exit.
                 if self.delegate.should_exit() {
+                    self.write_perf_report();
                     if let Some(w) = self.window.as_ref() {
                         self.delegate.on_close(w);
                     }

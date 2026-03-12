@@ -1213,12 +1213,12 @@ impl Renderer3D {
                         },
                         count: None,
                     },
-                    // binding 2: SSAO texture (R8Unorm)
+                    // binding 2: SSAO texture (R8Unorm — filterable)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -1322,6 +1322,30 @@ impl Renderer3D {
             width: w,
             height: h,
         });
+
+        // Material pipelines must target the HDR offscreen format, not the
+        // surface format, when postprocessing is enabled.
+        self.surface_format = HDR_FORMAT;
+        self.rebuild_pipeline_cache(device);
+    }
+
+    /// Rebuild all cached material pipelines for the current `surface_format`.
+    fn rebuild_pipeline_cache(&mut self, device: &wgpu::Device) {
+        let new_cache: HashMap<PipelineKey, wgpu::RenderPipeline> = self
+            .pipeline_cache
+            .keys()
+            .map(|key| {
+                let pipeline = create_pipeline(
+                    device,
+                    self.surface_format,
+                    &self.pipeline_layout,
+                    &self.shader_modules,
+                    key,
+                );
+                (*key, pipeline)
+            })
+            .collect();
+        self.pipeline_cache = new_cache;
     }
 
     /// Set the post-process configuration.

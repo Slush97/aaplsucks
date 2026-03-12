@@ -20,7 +20,7 @@ impl GlyphRasterizer {
 
     /// Rasterize a single glyph at the given pixel size.
     ///
-    /// Returns an RGBA8 image (white text with alpha from the mask).
+    /// Returns an R8 alpha mask (one byte per pixel).
     /// Handles zero-size glyphs (like space) by returning empty data.
     ///
     /// `style` bits: bit 0 = bold (faux embolden), bit 1 = italic (12° skew).
@@ -205,8 +205,8 @@ mod tests {
         assert!(glyph.width > 0, "width={}", glyph.width);
         assert!(glyph.height > 0, "height={}", glyph.height);
         assert!(!glyph.data.is_empty());
-        // RGBA8: 4 bytes per pixel.
-        assert_eq!(glyph.data.len(), (glyph.width * glyph.height * 4) as usize);
+        // R8: 1 byte per pixel (alpha-only).
+        assert_eq!(glyph.data.len(), (glyph.width * glyph.height) as usize);
     }
 
     #[test]
@@ -266,32 +266,20 @@ mod tests {
         assert_eq!(bold.width, regular.width + 1);
         assert_eq!(bold.height, regular.height);
 
-        // Data size must match RGBA8 dimensions.
-        assert_eq!(bold.data.len(), (bold.width * bold.height * 4) as usize);
+        // Data size must match R8 dimensions (1 byte per pixel).
+        assert_eq!(bold.data.len(), (bold.width * bold.height) as usize);
 
         // Bold must have full opacity (not faint from broken embolden).
-        let bold_max_alpha = bold
-            .data
-            .iter()
-            .skip(3)
-            .step_by(4)
-            .copied()
-            .max()
-            .unwrap_or(0);
+        // R8 format: each byte is the alpha value directly.
+        let bold_max_alpha = bold.data.iter().copied().max().unwrap_or(0);
         assert!(
             bold_max_alpha > 200,
             "bold i max alpha too low: {bold_max_alpha}"
         );
 
         // Bold should have more total ink than regular.
-        let bold_total: u64 = bold.data.iter().skip(3).step_by(4).map(|&a| a as u64).sum();
-        let regular_total: u64 = regular
-            .data
-            .iter()
-            .skip(3)
-            .step_by(4)
-            .map(|&a| a as u64)
-            .sum();
+        let bold_total: u64 = bold.data.iter().map(|&a| a as u64).sum();
+        let regular_total: u64 = regular.data.iter().map(|&a| a as u64).sum();
         assert!(bold_total > regular_total, "bold should have more ink");
     }
 
@@ -309,7 +297,8 @@ mod tests {
         assert!(!color.is_color);
         assert!(color.width > 0);
         assert!(color.height > 0);
-        assert_eq!(color.data.len(), (color.width * color.height * 4) as usize);
+        // Monochrome fallback uses R8 (1 byte per pixel).
+        assert_eq!(color.data.len(), (color.width * color.height) as usize);
 
         // Output should match the regular rasterize() path.
         let mono = rasterizer.rasterize(&face, glyph_id, 16.0, 0).unwrap();

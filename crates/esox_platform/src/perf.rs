@@ -84,6 +84,8 @@ pub struct PerfMonitor {
     pub batch_count: u32,
     /// Total frames rendered.
     pub total_frames: u64,
+    /// Frames skipped due to no damage.
+    pub frames_skipped: u64,
 }
 
 impl PerfMonitor {
@@ -119,6 +121,7 @@ impl PerfMonitor {
             instance_count: 0,
             batch_count: 0,
             total_frames: 0,
+            frames_skipped: 0,
         }
     }
 
@@ -277,6 +280,7 @@ impl PerfMonitor {
         writeln!(buf, "SESSION").unwrap();
         writeln!(buf, "  duration:       {:.1}s", session_duration.as_secs_f64()).unwrap();
         writeln!(buf, "  total frames:   {}", total).unwrap();
+        writeln!(buf, "  frames skipped: {}", self.frames_skipped).unwrap();
         if session_duration.as_secs_f64() > 0.0 {
             writeln!(buf, "  actual FPS:     {:.1}", total as f64 / session_duration.as_secs_f64()).unwrap();
         }

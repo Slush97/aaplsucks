@@ -2,6 +2,21 @@
 //!
 //! Uses `rustybuzz` for shaping and `swash` for rasterization, with glyph
 //! caching backed by `esox_gfx::AtlasAllocator`.
+//!
+//! ## Font fallback
+//!
+//! The font pipeline uses `fc-match` to resolve system fonts at startup, then
+//! builds a [`FontFallbackChain`] that maps each codepoint to the best
+//! available font face. CJK, emoji, and symbol ranges are handled by querying
+//! fontconfig for coverage rather than bundling fallback data.
+//!
+//! ## Pipeline
+//!
+//! 1. [`SystemFontDb`] / `fc-match` → font file paths
+//! 2. [`FontFace`] → loaded `ttf-parser` face
+//! 3. [`TextShaper`] → `rustybuzz` shaping → [`ShapedRun`]
+//! 4. [`GlyphRasterizer`] → `swash` rasterization → [`RasterizedGlyph`]
+//! 5. [`GlyphCache`] → atlas-backed LRU cache with generation eviction
 
 pub mod cache;
 pub mod face;

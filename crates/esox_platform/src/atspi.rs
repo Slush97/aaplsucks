@@ -69,6 +69,31 @@ impl AtspiBridge {
     }
 }
 
+/// Convert an `esox_ui::A11yTree` into a snapshot suitable for the bridge.
+pub fn snapshot_from_tree(tree: &esox_ui::A11yTree) -> A11yTreeSnapshot {
+    A11yTreeSnapshot {
+        nodes: tree
+            .nodes
+            .iter()
+            .map(|n| A11yNodeSnapshot {
+                id: n.id,
+                role: map_role(n.role),
+                label: n.label.clone(),
+                value: n.value.clone(),
+                rect: [n.rect.x, n.rect.y, n.rect.w, n.rect.h],
+                focused: n.focused,
+                disabled: n.disabled,
+                expanded: n.expanded,
+                selected: n.selected,
+                checked: n.checked,
+                value_range: n.value_range,
+                children: n.children.clone(),
+            })
+            .collect(),
+        root_children: tree.root_children.clone(),
+    }
+}
+
 /// Main loop for the AT-SPI2 bridge (runs on background thread).
 async fn bridge_main(app_name: String, mut rx: mpsc::Receiver<A11yTreeSnapshot>) {
     // Attempt to connect to the AT-SPI2 bus.
@@ -100,9 +125,34 @@ async fn bridge_main(app_name: String, mut rx: mpsc::Receiver<A11yTreeSnapshot>)
 
 /// Map esox_ui A11yRole to AT-SPI2 role constants.
 ///
-/// See: https://lazka.github.io/pgi-docs/Atspi-2.0/enums.html#Atspi.Role
-pub fn map_role(role: u32) -> u32 {
-    // Placeholder mapping — will be fleshed out in Step 3.
-    // For now, return ROLE_UNKNOWN for everything.
-    role
+/// See: <https://lazka.github.io/pgi-docs/Atspi-2.0/enums.html#Atspi.Role>
+pub fn map_role(role: esox_ui::A11yRole) -> u32 {
+    use esox_ui::A11yRole;
+    match role {
+        A11yRole::Button => 62,       // ROLE_PUSH_BUTTON
+        A11yRole::Checkbox => 20,     // ROLE_CHECK_BOX
+        A11yRole::RadioButton => 72,  // ROLE_RADIO_BUTTON
+        A11yRole::TextInput => 84,    // ROLE_TEXT
+        A11yRole::TextArea => 84,     // ROLE_TEXT
+        A11yRole::Slider => 79,       // ROLE_SLIDER
+        A11yRole::Select => 24,       // ROLE_COMBO_BOX
+        A11yRole::Tab => 87,          // ROLE_PAGE_TAB
+        A11yRole::TabPanel => 88,     // ROLE_PAGE_TAB_LIST
+        A11yRole::Table => 83,        // ROLE_TABLE
+        A11yRole::TableRow => 86,     // ROLE_TABLE_ROW
+        A11yRole::TableCell => 85,    // ROLE_TABLE_CELL
+        A11yRole::Tree => 93,         // ROLE_TREE
+        A11yRole::TreeItem => 94,     // ROLE_TREE_ITEM
+        A11yRole::ProgressBar => 61,  // ROLE_PROGRESS_BAR
+        A11yRole::Dialog => 28,       // ROLE_DIALOG
+        A11yRole::Alert => 2,         // ROLE_ALERT
+        A11yRole::Label => 47,        // ROLE_LABEL
+        A11yRole::Separator => 78,    // ROLE_SEPARATOR
+        A11yRole::ScrollView => 76,   // ROLE_SCROLL_PANE
+        A11yRole::Group => 60,        // ROLE_PANEL
+        A11yRole::ToggleButton => 82, // ROLE_TOGGLE_BUTTON
+        A11yRole::Link => 48,         // ROLE_LINK
+        A11yRole::SpinButton => 81,   // ROLE_SPIN_BUTTON
+        A11yRole::Combobox => 24,     // ROLE_COMBO_BOX
+    }
 }

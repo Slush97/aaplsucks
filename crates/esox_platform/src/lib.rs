@@ -1,4 +1,27 @@
 //! `esox_platform` — Windowing, input dispatch, and platform integration.
+//!
+//! ## Event loop
+//!
+//! Call [`run()`] with a [`PlatformConfig`](config::PlatformConfig) and a boxed
+//! [`AppDelegate`]. The platform creates a winit window, initialises wgpu via
+//! [`esox_gfx::GpuContext`], and enters the event loop. Input events are
+//! dispatched to `AppDelegate` methods; rendering happens in
+//! [`AppDelegate::on_redraw`].
+//!
+//! ## AppDelegate pattern
+//!
+//! Implement [`AppDelegate`] to receive lifecycle callbacks:
+//!
+//! - **`on_init`** — called once after GPU is ready; load textures here
+//! - **`on_redraw`** — called each frame; build your [`esox_gfx::Frame`] here
+//! - **`on_key`** / **`on_mouse`** — input dispatch
+//! - **`needs_continuous_redraw`** — return `true` while animating; `false` to
+//!   idle and save power (the platform sleeps via `WaitUntil`)
+//!
+//! ## Optional features
+//!
+//! - `a11y` — AT-SPI2 accessibility bridge (Linux, requires `zbus` + `tokio`)
+//! - `sandbox` — seccomp/Landlock sandboxing (Linux)
 
 pub mod config;
 pub mod perf;
@@ -208,6 +231,29 @@ pub trait AppDelegate {
 
     /// Called just before the window is destroyed (close or exit).
     fn on_close(&mut self, _window: &winit::window::Window) {}
+
+    /// Whether the current frame has damage that requires GPU submission.
+    ///
+    /// When `false`, the platform skips rendering and GPU submission for this
+    /// frame, saving power.  Defaults to `true` (always redraw).
+    fn needs_redraw(&self) -> bool {
+        true
+    }
+
+    /// Called before the 2D render pass, with the pre-acquired surface view.
+    ///
+    /// Override this to render 3D content (via `Renderer3D::encode()`) to the
+    /// surface before the 2D UI is composited on top. Return any command
+    /// buffers that should be submitted before the 2D pass.
+    ///
+    /// Default is no-op (no pre-render pass).
+    fn on_pre_render(
+        &mut self,
+        _gpu: &esox_gfx::GpuContext,
+        _surface_view: &wgpu::TextureView,
+    ) -> Vec<wgpu::CommandBuffer> {
+        vec![]
+    }
 
     /// Whether continuous redraw is needed (animations, active PTY output, etc.).
     ///
@@ -1246,6 +1292,14 @@ impl ApplicationHandler<AppUserEvent> for App {
                 if let (Some(gpu), Some(resources)) =
                     (self.gpu.as_ref(), self.render_resources.as_mut())
                 {
+                    // Skip GPU submission if the delegate reports no damage.
+                    if !self.delegate.needs_redraw() {
+                        self.perf.frames_skipped += 1;
+                        tracing::trace!("frame skipped (no damage), total skipped: {}", self.perf.frames_skipped);
+                        self.redraw_pending = false;
+                        return;
+                    }
+
                     self.perf.begin_frame();
                     self.frame.clear();
                     self.delegate.on_redraw(gpu, resources, &mut self.frame, &self.perf);
@@ -1271,8 +1325,44 @@ impl ApplicationHandler<AppUserEvent> for App {
                         }
                     };
 
+                    // Acquire surface early so 3D pre-render can target it.
+                    let surface = match gpu.acquire_surface() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("surface acquisition failed: {e}");
+                            self.consecutive_render_failures += 1;
+                            if self.consecutive_render_failures >= 3 {
+                                tracing::error!("3 consecutive render failures, exiting");
+                                self.write_perf_report();
+                                event_loop.exit();
+                            }
+                            return;
+                        }
+                    };
+
+                    // Call pre-render (3D pass) — default is no-op.
+                    let pre_render_bufs = self.delegate.on_pre_render(gpu, &surface.view);
+                    let has_pre_render = !pre_render_bufs.is_empty();
+
+                    // Submit 3D command buffers before the 2D pass.
+                    if has_pre_render {
+                        gpu.queue.submit(pre_render_bufs);
+                    }
+
+                    // Choose load op: Load if 3D was rendered, Clear otherwise.
+                    let color_load_op = if has_pre_render {
+                        esox_gfx::ColorLoadOp::Load
+                    } else {
+                        let bg = &self.clear_color;
+                        esox_gfx::ColorLoadOp::Clear(wgpu::Color {
+                            r: bg.r as f64,
+                            g: bg.g as f64,
+                            b: bg.b as f64,
+                            a: bg.a as f64,
+                        })
+                    };
+
                     let pp = if self.delegate.post_process_enabled() {
-                        // Upload post-process params before encoding.
                         if let Some(offscreen) = self.offscreen.as_ref() {
                             let mut params = self.delegate.post_process_params();
                             params.time = elapsed;
@@ -1289,13 +1379,14 @@ impl ApplicationHandler<AppUserEvent> for App {
                         None
                     };
 
-                    if let Err(e) = esox_gfx::FrameEncoder::encode_and_submit_with_post_process(
+                    if let Err(e) = esox_gfx::FrameEncoder::encode_and_submit_with_surface(
                         gpu,
                         resources,
                         &mut self.frame,
                         &uniforms,
-                        &self.clear_color,
                         registry,
+                        surface,
+                        color_load_op,
                         pp,
                         self.msaa_view.as_ref(),
                         self.depth_view.as_ref(),

@@ -4,8 +4,9 @@ use esox_gfx::{Frame, GpuContext, RenderResources};
 use esox_platform::config::{PlatformConfig, WindowConfig};
 use esox_platform::{AppDelegate, Clipboard, MouseInputEvent};
 use esox_ui::{
-    fnv1a_mix, id, ClipboardProvider, ColumnWidth, InputState, Rect, RichText, SelectState,
-    TabState, TableColumn, TableState, TextRenderer, Theme, TreeState, UiState, VirtualScrollState,
+    fnv1a_mix, id, ClipboardProvider, ColumnWidth, FieldStatus, ImageCache, ImageHandle,
+    InputState, ModalAction, Rect, RichText, SelectState, TabState, TableColumn, TableState,
+    TextRenderer, Theme, TreeState, UiState, VirtualScrollState,
 };
 
 /// Clipboard provider backed by the platform clipboard.
@@ -29,6 +30,7 @@ struct DemoApp {
     viewport: (u32, u32),
     checkbox_states: HashMap<u64, InputState>,
     slider_state: InputState,
+    text_input_state: InputState,
     text_area_state: InputState,
     text_area_disabled_state: InputState,
     text_area_wrapped_state: InputState,
@@ -41,6 +43,17 @@ struct DemoApp {
     tree_state: TreeState,
     virtual_scroll_state: VirtualScrollState,
     drag_drop_log: String,
+    // Image widget.
+    image_cache: Option<ImageCache>,
+    test_image: Option<ImageHandle>,
+    // Modal.
+    modal_open: bool,
+    confirm_modal_open: bool,
+    confirm_result: String,
+    // New widgets.
+    toggle_state: InputState,
+    number_value: f64,
+    combobox_selected: Option<usize>,
 }
 
 impl DemoApp {
@@ -55,9 +68,10 @@ impl DemoApp {
             text: None,
             base_theme: Theme::dark(),
             theme: Theme::dark(),
-            viewport: (650, 1200),
+            viewport: (650, 1400),
             checkbox_states: HashMap::new(),
             slider_state: slider,
+            text_input_state: InputState::new(),
             text_area_state: InputState::new(),
             text_area_disabled_state: {
                 let mut s = InputState::new();
@@ -85,6 +99,14 @@ impl DemoApp {
             },
             virtual_scroll_state: VirtualScrollState::new(10_000),
             drag_drop_log: String::new(),
+            image_cache: None,
+            test_image: None,
+            modal_open: false,
+            confirm_modal_open: false,
+            confirm_result: String::new(),
+            toggle_state: InputState::new(),
+            number_value: 42.0,
+            combobox_selected: None,
         }
     }
 }
@@ -95,6 +117,28 @@ impl AppDelegate for DemoApp {
             Ok(tr) => self.text = Some(tr),
             Err(e) => eprintln!("failed to initialize text renderer: {e}"),
         }
+
+        // Generate a small test image (8x8 gradient) for the image widget demo.
+        let mut cache = ImageCache::new(gpu);
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for y in 0..8u8 {
+            for x in 0..8u8 {
+                pixels.extend_from_slice(&[x * 32, y * 32, 128, 255]);
+            }
+        }
+        // Encode as PNG in memory.
+        let mut png_buf = std::io::Cursor::new(Vec::new());
+        image::write_buffer_with_format(
+            &mut png_buf,
+            &pixels,
+            8,
+            8,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .ok();
+        self.test_image = cache.load_from_bytes(png_buf.get_ref(), gpu);
+        self.image_cache = Some(cache);
     }
 
     fn on_redraw(
@@ -146,6 +190,67 @@ impl AppDelegate for DemoApp {
                 });
                 ui.add_space(16.0);
 
+                // ── New Widgets ──
+                ui.header_label("TOGGLE");
+                ui.toggle(id!("demo_toggle"), &mut self.toggle_state, "Dark mode");
+                ui.add_space(16.0);
+
+                ui.header_label("NUMBER INPUT");
+                ui.number_input_clamped(id!("demo_num"), &mut self.number_value, 1.0, 0.0, 100.0);
+                ui.add_space(16.0);
+
+                ui.header_label("COMBOBOX");
+                ui.combobox(id!("demo_combo"), &["Apple", "Banana", "Cherry", "Date", "Elderberry"], &mut self.combobox_selected);
+                ui.add_space(16.0);
+
+                ui.header_label("SPINNER");
+                ui.row(|ui| {
+                    ui.spinner();
+                    ui.label(" Loading...");
+                });
+                ui.add_space(16.0);
+
+                ui.header_label("CHIPS & BADGES");
+                ui.row(|ui| {
+                    ui.chip(id!("chip1"), "Tag A");
+                    ui.chip(id!("chip2"), "Tag B");
+                    ui.badge(3);
+                    ui.badge_dot();
+                });
+                ui.add_space(16.0);
+
+                ui.header_label("HYPERLINK");
+                ui.hyperlink(id!("demo_link"), "Visit example.com", "https://example.com");
+                ui.add_space(16.0);
+
+                ui.header_label("COLLAPSING");
+                ui.collapsing_header(id!("collapse1"), "Click to expand", false, |ui| {
+                    ui.label("Hidden content revealed!");
+                    ui.muted_label("This section is collapsible.");
+                });
+                ui.add_space(16.0);
+
+                ui.header_label("CONTAINER / CARD");
+                ui.card(|ui| {
+                    ui.label("Content inside a card.");
+                    ui.muted_label("Cards have elevated backgrounds.");
+                });
+                ui.add_space(16.0);
+
+                ui.header_label("FORM FIELD");
+                ui.form_field("Username", FieldStatus::None, "", |ui| {
+                    ui.text_input(id!("form_input"), &mut self.text_input_state, "Enter username...")
+                });
+                ui.add_space(16.0);
+
+                ui.header_label("EMPTY STATE");
+                ui.empty_state("No items to display.");
+                ui.add_space(16.0);
+
+                ui.header_label("STATUS BAR");
+                ui.status_bar("Ready", "Ln 42, Col 8");
+                ui.add_space(16.0);
+
                 // ── Tabs ──
                 ui.header_label("TABS");
                 ui.tabs(id!("demo_tabs"), &mut self.tab_state, &["Overview", "Settings", "About"], |ui, selected| {
@@ -190,6 +295,58 @@ impl AppDelegate for DemoApp {
                         .colored_bold("bold colored", red)
                         .span(" spans that wrap correctly across multiple lines when the text exceeds the available width."),
                 );
+                ui.add_space(16.0);
+
+                // ── Text Input ──
+                ui.header_label("TEXT INPUT");
+                ui.text_input(id!("text_input"), &mut self.text_input_state, "Single-line input...");
+                ui.add_space(16.0);
+
+                // ── Select / Dropdown ──
+                ui.header_label("SELECT");
+                ui.select(id!("demo_select"), &mut self.select_state, &["Option A", "Option B", "Option C", "Option D"]);
+                ui.add_space(16.0);
+
+                // ── Slider ──
+                ui.header_label("SLIDER");
+                ui.slider(id!("demo_slider"), &mut self.slider_state, 0.0, 100.0);
+                ui.add_space(16.0);
+
+                // ── Image ──
+                ui.header_label("IMAGE");
+                if let (Some(cache), Some(handle)) = (&self.image_cache, self.test_image) {
+                    ui.image(id!("test_image"), cache, handle, 64.0, 64.0);
+                }
+                ui.add_space(16.0);
+
+                // ── Separator ──
+                ui.header_label("SEPARATOR");
+                ui.label("Above the separator");
+                ui.separator();
+                ui.label("Below the separator");
+                ui.add_space(16.0);
+
+                // ── Modals ──
+                ui.header_label("MODALS");
+                if ui.button(id!("open_modal"), "Open Modal").clicked {
+                    self.modal_open = true;
+                }
+                ui.modal(id!("demo_modal"), &mut self.modal_open, "Demo Modal", 400.0, |ui| {
+                    ui.label("This is a custom modal dialog.");
+                    ui.label("Press Escape or click outside to close.");
+                });
+                if ui.button(id!("open_confirm"), "Confirm Dialog").clicked {
+                    self.confirm_modal_open = true;
+                }
+                let action = ui.modal_confirm(id!("confirm_modal"), &mut self.confirm_modal_open, "Confirm", "Are you sure?");
+                if action == ModalAction::Confirm {
+                    self.confirm_result = "Confirmed!".into();
+                } else if action == ModalAction::Cancel {
+                    self.confirm_result = "Cancelled.".into();
+                }
+                if !self.confirm_result.is_empty() {
+                    ui.muted_label(&self.confirm_result);
+                }
                 ui.add_space(16.0);
 
                 // ── Text Area Word Wrap ──
@@ -315,6 +472,9 @@ impl AppDelegate for DemoApp {
 
                 ui.header_label("TEXT AREA");
                 ui.text_area(id!("text_area"), &mut self.text_area_state, 6, "Type multi-line text here...");
+                ui.add_space(8.0);
+                ui.muted_label("Disabled:");
+                ui.text_area(id!("text_area_disabled"), &mut self.text_area_disabled_state, 3, "");
                 ui.add_space(16.0);
 
                 ui.header_label("SCROLLABLE");
@@ -444,8 +604,12 @@ impl AppDelegate for DemoApp {
     }
     fn on_copy(&mut self) -> Option<String> { None }
 
+    fn needs_redraw(&self) -> bool {
+        self.ui_state.needs_redraw()
+    }
+
     fn needs_continuous_redraw(&self) -> bool {
-        true // progress bar animates
+        self.ui_state.needs_continuous_redraw()
     }
 
     fn cursor_icon(&self, x: f64, y: f64) -> winit::window::CursorIcon {
@@ -468,7 +632,7 @@ fn main() {
         window: WindowConfig {
             title: "esox_ui Demo".into(),
             width: Some(650),
-            height: Some(1200),
+            height: Some(1400),
             ..Default::default()
         },
         ..Default::default()

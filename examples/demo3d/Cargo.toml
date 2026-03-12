@@ -1,13 +1,12 @@
 [package]
-name = "demo"
+name = "demo3d"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-esox_gfx = { workspace = true }
-esox_font = { workspace = true }
-esox_ui = { workspace = true }
+esox_gfx = { workspace = true, features = ["mesh3d"] }
 esox_platform = { workspace = true }
-image = { workspace = true }
+glam = "0.29"
 tracing-subscriber = { workspace = true }
+wgpu = { workspace = true }
 winit = { workspace = true }

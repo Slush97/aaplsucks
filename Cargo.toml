@@ -6,6 +6,9 @@ members = [
     "crates/esox_ui",
     "crates/esox_platform",
     "examples/demo",
+    "examples/demo3d",
+    "examples/bench3d",
+    "apps/dwnldr-gui",
 ]
 
 [workspace.package]
@@ -27,7 +30,7 @@ bytemuck = { version = "1", features = ["derive"] }
 raw-window-handle = "0.6"
 
 # Windowing
-winit = "0.30"
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 # Text
 rustybuzz = "0.20"
@@ -43,6 +46,9 @@ tokio = { version = "1", features = ["rt", "sync", "macros"] }
 
 # Image
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# 3D asset loading
+gltf = "1"
 
 # Utilities
 thiserror = "2"

@@ -25,15 +25,24 @@
 - **Table widget** — `table()` with `Fixed`/`Weight`/`Auto` column widths, virtual-scrolled body, zebra striping, row selection, keyboard nav
 - **Tree widget** — `tree_node()` + `tree_indent()`, expand/collapse, selection, keyboard nav
 
-## Tier 4 — Polish & power features
+## Tier 4 — Polish & power features (done)
 
-- **Resizable table columns** — drag column borders to resize
-- **Table sorting** — click header to sort, sort indicator arrows
-- **Multi-select** — Shift+click range select, Ctrl+click toggle in table/tree
-- **Keyboard focus ring** — visible focus indicator for all focusable widgets
-- **Animations** — expand/collapse transitions for tree, tab content fade
-- **Accessibility** — screen reader labels, ARIA-style semantics
-- **Theming** — runtime theme switching, custom theme builder
-- **Layout constraints** — min/max width/height, aspect ratio
-- **Modal dialogs** — overlay with backdrop, focus trap
-- **Toasts/notifications** — timed popups with dismiss
+- **Resizable table columns** — drag column borders to resize ✓
+- **Table sorting** — click header to sort, sort indicator arrows ✓
+- **Multi-select** — Shift+click range select, Ctrl+click toggle in table/tree ✓
+- **Keyboard focus ring** — visible focus indicator for all focusable widgets ✓
+- **Animations** — expand/collapse transitions for tree, tab content fade ✓
+- **Accessibility** — screen reader labels, a11y tree, AT-SPI2 bridge foundation ✓
+- **Theming** — runtime theme switching, `ThemeBuilder`, `ThemeTransition` ✓
+- **Layout constraints** — min/max width/height, aspect ratio ✓
+- **Modal dialogs** — overlay with backdrop, focus trap ✓
+- **Toasts/notifications** — timed popups with dismiss ✓
+
+## Tier 5 — Hardening
+
+- **Unit tests** — ~70 tests covering pure logic modules (id, layout, state, theme, paint) ✓
+- **Public animation API** — `ui.animate()`, `ui.animate_bool()`, `ui.is_animating()` ✓
+- **Smooth scrolling** — inertial momentum with exponential decay ✓
+- **Damage tracking** — frame-skip when idle via `DamageTracker` integration ✓
+- **AT-SPI2 bridge** — widget a11y metadata, snapshot conversion, role mapping ✓
+- **Documentation** — crate-level docs, architecture notes ✓

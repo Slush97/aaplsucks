@@ -26,6 +26,7 @@ struct Demo3dApp {
     camera: Camera,
     angle: f32,
     start: std::time::Instant,
+    last_frame: std::time::Instant,
     viewport: (u32, u32),
     gltf_path: Option<PathBuf>,
 }
@@ -49,6 +50,7 @@ impl Demo3dApp {
             },
             angle: 0.0,
             start: std::time::Instant::now(),
+            last_frame: std::time::Instant::now(),
             viewport: (800, 600),
             gltf_path,
         }
@@ -64,6 +66,8 @@ impl AppDelegate for Demo3dApp {
         renderer.set_postprocess(PostProcess3DConfig {
             bloom_enabled: true,
             bloom_intensity: 0.3,
+            bloom_threshold: 1.0,
+            bloom_soft_knee: 0.5,
             tone_map_enabled: true,
             ssao_enabled: true,
             motion_blur_enabled: false,
@@ -74,9 +78,9 @@ impl AppDelegate for Demo3dApp {
         renderer.set_shadow_config(ShadowConfig {
             enabled: true,
             cascade_count: 3,
-            shadow_distance: 30.0,
+            shadow_distance: 15.0,
             depth_bias: 0.002,
-            normal_bias: 0.01,
+            normal_bias: 0.03,
         });
 
         // Enable SSAO.
@@ -112,6 +116,7 @@ impl AppDelegate for Demo3dApp {
             ],
         };
         renderer.set_lights(&lights);
+        renderer.generate_procedural_ibl(gpu);
 
         // Try loading a glTF file if provided.
         if let Some(path) = &self.gltf_path {
@@ -202,8 +207,10 @@ impl AppDelegate for Demo3dApp {
             None => return vec![],
         };
 
+        let now = std::time::Instant::now();
         let elapsed = self.start.elapsed().as_secs_f32();
-        let dt = 1.0 / 60.0; // approximate
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+        self.last_frame = now;
         self.angle = elapsed * 0.8;
 
         let mut cmd_bufs = Vec::new();
@@ -211,6 +218,13 @@ impl AppDelegate for Demo3dApp {
         // Advance animation if playing.
         if let Some(player) = self.anim_player.as_mut() {
             player.advance(dt, &self.anim_clips);
+
+            // Upload joint matrices to GPU for all skinned meshes.
+            if let Some(handles) = &self.gltf_handles {
+                for &si in handles.skinned_mesh_indices.iter().flatten() {
+                    renderer.update_joints(gpu, si, player.skinning_matrices());
+                }
+            }
         }
 
         // Dispatch compute skinning if needed.

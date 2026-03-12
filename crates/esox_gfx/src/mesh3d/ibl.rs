@@ -161,6 +161,25 @@ impl IblState {
         }
     }
 
+    /// Generate IBL textures from a procedural sky environment.
+    ///
+    /// Creates a sky gradient with a sun disc and glow, then runs the full IBL
+    /// pipeline (equirect → cubemap → irradiance + specular prefiltering + BRDF LUT).
+    pub fn from_procedural_sky(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sun_dir: Vec3,
+        sun_color: Vec3,
+        sun_intensity: f32,
+        sky_color: Vec3,
+        ground_color: Vec3,
+    ) -> Self {
+        let (data, w, h) = generate_procedural_sky_equirect(
+            sun_dir, sun_color, sun_intensity, sky_color, ground_color,
+        );
+        Self::from_equirect(device, queue, &data, w, h).unwrap()
+    }
+
     /// Generate IBL textures from equirectangular HDR image data.
     ///
     /// `hdr_data` is a flat array of f32 RGB pixels, row-major, `width * height * 3` elements.
@@ -220,6 +239,83 @@ impl IblState {
             brdf_lut_view,
         })
     }
+}
+
+// ── Procedural sky ──
+
+/// Generate a procedural sky environment as equirectangular f32 RGB data.
+///
+/// Returns `(data, width, height)` where `data` is `width * height * 3` floats.
+/// The sky is a simple gradient with a sun disc and glow, suitable for IBL.
+pub fn generate_procedural_sky_equirect(
+    sun_dir: Vec3,
+    sun_color: Vec3,
+    sun_intensity: f32,
+    sky_color: Vec3,
+    ground_color: Vec3,
+) -> (Vec<f32>, u32, u32) {
+    let width = 256u32;
+    let height = 128u32;
+    let sun_dir = sun_dir.normalize();
+    let horizon_color = sky_color * 0.5 + sun_color * 0.2;
+
+    let mut data = Vec::with_capacity((width * height * 3) as usize);
+
+    for y in 0..height {
+        let v = (y as f32 + 0.5) / height as f32;
+        let phi = (v - 0.5) * PI;
+        let cos_phi = phi.cos();
+        let sin_phi = phi.sin();
+
+        for x in 0..width {
+            let u = (x as f32 + 0.5) / width as f32;
+            let theta = (u - 0.5) * 2.0 * PI;
+
+            let dir = Vec3::new(
+                cos_phi * theta.cos(),
+                sin_phi,
+                cos_phi * theta.sin(),
+            );
+
+            // Sky gradient
+            let up_factor = dir.y;
+            let base = if up_factor >= 0.0 {
+                // Upper hemisphere: horizon → sky
+                lerp_vec3(horizon_color, sky_color, up_factor)
+            } else {
+                // Lower hemisphere: horizon → ground
+                lerp_vec3(horizon_color, ground_color, up_factor.abs())
+            };
+
+            // Sun disc and glow
+            let cos_angle = dir.dot(sun_dir).max(0.0);
+            let mut pixel = base;
+
+            // Sun glow: wider warm halo
+            pixel += sun_color * 0.5 * cos_angle.powf(8.0);
+
+            // Sun disc: tight bright spot
+            if cos_angle > 0.995 {
+                let t = smoothstep(0.995, 1.0, cos_angle);
+                pixel += sun_color * sun_intensity * t;
+            }
+
+            data.push(pixel.x.max(0.0));
+            data.push(pixel.y.max(0.0));
+            data.push(pixel.z.max(0.0));
+        }
+    }
+
+    (data, width, height)
+}
+
+fn lerp_vec3(a: Vec3, b: Vec3, t: f32) -> Vec3 {
+    a + (b - a) * t
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 // ── Cubemap helpers ──
@@ -1010,6 +1106,56 @@ mod tests {
         // Tiny denormal values must not panic (shift overflow regression).
         let _ = f32_to_f16_bytes(1.0e-20);
         let _ = f32_to_f16_bytes(5.0e-42);
+    }
+
+    #[test]
+    fn procedural_sky_dimensions() {
+        let (data, w, h) = generate_procedural_sky_equirect(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.95, 0.85),
+            2.0,
+            Vec3::new(0.4, 0.6, 1.0),
+            Vec3::new(0.15, 0.12, 0.1),
+        );
+        assert_eq!(w, 256);
+        assert_eq!(h, 128);
+        assert_eq!(data.len(), (256 * 128 * 3) as usize);
+    }
+
+    #[test]
+    fn procedural_sky_sun_brighter_than_sky() {
+        // Sun pointing straight up — zenith pixel should be brighter than horizon.
+        let (data, w, h) = generate_procedural_sky_equirect(
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.95, 0.85),
+            5.0,
+            Vec3::new(0.4, 0.6, 1.0),
+            Vec3::new(0.15, 0.12, 0.1),
+        );
+        // Zenith is at v=1.0 → y = h-1, any x.
+        let zenith_idx = ((h - 1) * w * 3) as usize;
+        let zenith_lum = data[zenith_idx] + data[zenith_idx + 1] + data[zenith_idx + 2];
+        // Horizon is at v=0.5 → y = h/2.
+        let horizon_idx = ((h / 2) * w * 3) as usize;
+        let horizon_lum = data[horizon_idx] + data[horizon_idx + 1] + data[horizon_idx + 2];
+        assert!(
+            zenith_lum > horizon_lum,
+            "zenith ({zenith_lum}) should be brighter than horizon ({horizon_lum})"
+        );
+    }
+
+    #[test]
+    fn procedural_sky_all_positive() {
+        let (data, _, _) = generate_procedural_sky_equirect(
+            Vec3::new(-0.5, -1.0, -0.3).normalize(),
+            Vec3::new(1.0, 0.95, 0.85),
+            2.0,
+            Vec3::new(0.4, 0.6, 1.0),
+            Vec3::new(0.15, 0.12, 0.1),
+        );
+        for (i, &v) in data.iter().enumerate() {
+            assert!(v >= 0.0, "negative value at index {i}: {v}");
+        }
     }
 
     #[test]

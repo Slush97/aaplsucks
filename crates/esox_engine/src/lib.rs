@@ -33,7 +33,7 @@ pub mod time;
 // Re-export core types.
 pub use assets::{AssetHandle, AssetId, AssetManager, MaterialAsset, MeshAsset, TextureAsset};
 pub use ecs::{
-    Camera3D, Children, DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent,
+    Animator, Camera3D, Children, DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent,
     PointLightComponent, SpotLightComponent, Transform3D,
 };
 pub use engine::EngineConfig;

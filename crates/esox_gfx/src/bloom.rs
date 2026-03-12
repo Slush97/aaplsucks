@@ -21,8 +21,10 @@ const BLOOM_MIP_LEVELS: usize = 5;
 pub struct BloomParams {
     /// Texel size of the source texture (1/width, 1/height).
     pub texel_size: [f32; 2],
-    /// Padding to 16-byte alignment.
-    pub _pad: [f32; 2],
+    /// Luminance threshold for bloom extraction (only first downsample uses this).
+    pub threshold: f32,
+    /// Soft knee width around threshold (smooth transition, 0 = hard cutoff).
+    pub soft_knee: f32,
 }
 
 /// A single mip level in the bloom chain.
@@ -172,12 +174,18 @@ impl BloomPass {
     }
 
     /// Encode the bloom downsample and upsample passes into the command encoder.
+    ///
+    /// `threshold` is the HDR luminance cutoff — only pixels brighter than this
+    /// contribute to bloom. `soft_knee` controls the width of the soft transition
+    /// around the threshold (0 = hard cutoff, 0.5 = smooth).
     pub fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         downsample_pipeline: &wgpu::RenderPipeline,
         upsample_pipeline: &wgpu::RenderPipeline,
+        threshold: f32,
+        soft_knee: f32,
     ) {
         let mip_count = self.mips.len();
         if mip_count == 0 {
@@ -192,9 +200,12 @@ impl BloomPass {
                 (self.mips[i - 1].width, self.mips[i - 1].height)
             };
 
+            // Only the first downsample (scene → mip0) applies the brightness
+            // threshold. Subsequent levels just blur.
             let params = BloomParams {
                 texel_size: [1.0 / src_w.max(1) as f32, 1.0 / src_h.max(1) as f32],
-                _pad: [0.0; 2],
+                threshold: if i == 0 { threshold } else { 0.0 },
+                soft_knee: if i == 0 { soft_knee } else { 0.0 },
             };
             queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -226,7 +237,8 @@ impl BloomPass {
 
             let params = BloomParams {
                 texel_size: [1.0 / src_w.max(1) as f32, 1.0 / src_h.max(1) as f32],
-                _pad: [0.0; 2],
+                threshold: 0.0,
+                soft_knee: 0.0,
             };
             queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -444,7 +456,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 const BLOOM_BIND_GROUP_PREAMBLE: &str = r"
 struct BloomParams {
     texel_size: vec2<f32>,
-    _pad: vec2<f32>,
+    threshold: f32,
+    soft_knee: f32,
 }
 
 @group(0) @binding(0) var src_texture: texture_2d<f32>;
@@ -455,19 +468,44 @@ struct BloomParams {
 /// Dual-Kawase downsample fragment shader.
 ///
 /// 5-tap kernel: center sample weighted ×4, plus 4 diagonal samples.
+/// On the first downsample (threshold > 0), applies a soft brightness prefilter
+/// so only HDR-bright pixels contribute to bloom.
 pub const BLOOM_DOWNSAMPLE_FRAGMENT: &str = r"
+// Soft brightness thresholding: smoothly ramps from 0 at (threshold - knee)
+// to full brightness at (threshold + knee). Returns the color contribution.
+fn prefilter(color: vec3<f32>, threshold: f32, knee: f32) -> vec3<f32> {
+    let brightness = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    // Soft knee curve: quadratic ramp in the transition region.
+    let soft = brightness - threshold + knee;
+    let soft_clamped = clamp(soft, 0.0, 2.0 * knee);
+    var contribution = soft_clamped * soft_clamped / (4.0 * knee + 0.00001);
+    // Above threshold, use full excess brightness.
+    contribution = max(contribution, brightness - threshold);
+    contribution = max(contribution, 0.0);
+    return color * (contribution / max(brightness, 0.00001));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let ts = params.texel_size;
 
-    let center = textureSample(src_texture, src_sampler, uv) * 4.0;
-    let tl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x, -ts.y));
-    let tr = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x, -ts.y));
-    let bl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x,  ts.y));
-    let br = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x,  ts.y));
+    var center = textureSample(src_texture, src_sampler, uv);
+    var tl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x, -ts.y));
+    var tr = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x, -ts.y));
+    var bl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x,  ts.y));
+    var br = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x,  ts.y));
 
-    return (center + tl + tr + bl + br) / 8.0;
+    // Apply brightness threshold on first downsample only (threshold > 0).
+    if params.threshold > 0.0 {
+        center = vec4<f32>(prefilter(center.rgb, params.threshold, params.soft_knee), center.a);
+        tl = vec4<f32>(prefilter(tl.rgb, params.threshold, params.soft_knee), tl.a);
+        tr = vec4<f32>(prefilter(tr.rgb, params.threshold, params.soft_knee), tr.a);
+        bl = vec4<f32>(prefilter(bl.rgb, params.threshold, params.soft_knee), bl.a);
+        br = vec4<f32>(prefilter(br.rgb, params.threshold, params.soft_knee), br.a);
+    }
+
+    return (center * 4.0 + tl + tr + bl + br) / 8.0;
 }
 ";
 

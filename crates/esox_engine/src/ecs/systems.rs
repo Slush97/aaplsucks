@@ -6,10 +6,11 @@ use hecs::World;
 use esox_gfx::mesh3d::{
     Camera, DirectionalLight, InstanceData, LightEnvironment, PointLight, Renderer3D, SpotLight,
 };
+use esox_gfx::GpuContext;
 
 use super::components::{
-    Camera3D, DirectionalLightComponent, GlobalTransform, MeshRenderer, PointLightComponent,
-    SpotLightComponent,
+    Animator, Camera3D, DirectionalLightComponent, GlobalTransform, MeshRenderer,
+    PointLightComponent, SpotLightComponent,
 };
 
 /// Extract renderable entities and issue draw calls to the renderer.
@@ -95,6 +96,19 @@ pub fn light_collection_system(world: &World) -> LightEnvironment {
     }
 
     env
+}
+
+/// Advance animation players and upload joint matrices to the GPU.
+pub fn animation_system(
+    world: &mut World,
+    renderer: &mut Renderer3D,
+    gpu: &GpuContext,
+    dt: f32,
+) {
+    for (_e, animator) in world.query_mut::<&mut Animator>() {
+        animator.player.advance(dt, &animator.clips);
+        renderer.update_joints(gpu, animator.skinned_mesh_index, animator.player.skinning_matrices());
+    }
 }
 
 /// Find the active camera and produce a renderer Camera.

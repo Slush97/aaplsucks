@@ -198,9 +198,9 @@ fn sample_channel(channel: &AnimChannel, time: f32) -> [f32; 4] {
         Interpolation::Linear => {
             match channel.property {
                 AnimProperty::Rotation => {
-                    // Slerp for quaternions.
-                    let q0 = Quat::from_array(values[i0]);
-                    let q1 = Quat::from_array(values[i1]);
+                    // Slerp for quaternions (normalize keyframes for robustness).
+                    let q0 = Quat::from_array(values[i0]).normalize();
+                    let q1 = Quat::from_array(values[i1]).normalize();
                     q0.slerp(q1, t).to_array()
                 }
                 _ => {
@@ -231,10 +231,16 @@ fn sample_channel(channel: &AnimChannel, time: f32) -> [f32; 4] {
             }
             let dt = t1 - t0;
             // Indices into cubic spline triples: [in_tangent, value, out_tangent]
-            let v0 = values[i0 * 3 + 1]; // value at i0
+            let mut v0 = values[i0 * 3 + 1]; // value at i0
             let b0 = values[i0 * 3 + 2]; // out-tangent at i0
             let a1 = values[i1 * 3]; // in-tangent at i1
-            let v1 = values[i1 * 3 + 1]; // value at i1
+            let mut v1 = values[i1 * 3 + 1]; // value at i1
+
+            // Normalize quaternion keyframe values before interpolation.
+            if channel.property == AnimProperty::Rotation {
+                v0 = Quat::from_array(v0).normalize().to_array();
+                v1 = Quat::from_array(v1).normalize().to_array();
+            }
 
             let t2 = t * t;
             let t3 = t2 * t;

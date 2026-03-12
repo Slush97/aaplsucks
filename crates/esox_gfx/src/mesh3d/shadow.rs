@@ -92,8 +92,8 @@ impl Default for ShadowConfig {
             enabled: true,
             cascade_count: 3,
             shadow_distance: 100.0,
-            depth_bias: 0.005,
-            normal_bias: 0.02,
+            depth_bias: 0.002,
+            normal_bias: 0.03,
         }
     }
 }
@@ -361,8 +361,9 @@ impl ShadowPass {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                // Use back-face culling to reduce shadow acne on front faces.
-                cull_mode: Some(wgpu::Face::Back),
+                // Cull front faces: depth values come from back faces, which
+                // prevents front-face self-shadowing (shadow acne).
+                cull_mode: Some(wgpu::Face::Front),
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
@@ -511,8 +512,8 @@ mod tests {
         assert!(cfg.enabled);
         assert_eq!(cfg.cascade_count, 3);
         assert_eq!(cfg.shadow_distance, 100.0);
-        assert!((cfg.depth_bias - 0.005).abs() < 1e-9);
-        assert!((cfg.normal_bias - 0.02).abs() < 1e-9);
+        assert!((cfg.depth_bias - 0.002).abs() < 1e-9);
+        assert!((cfg.normal_bias - 0.03).abs() < 1e-9);
     }
 
     #[test]

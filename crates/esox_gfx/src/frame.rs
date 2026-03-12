@@ -689,7 +689,7 @@ impl FrameEncoder {
             let down_id = crate::bloom::PIPELINE_BLOOM_DOWNSAMPLE;
             let up_id = crate::bloom::PIPELINE_BLOOM_UPSAMPLE;
             if let (Some(down), Some(up)) = (registry.get(down_id), registry.get(up_id)) {
-                bloom.encode(&mut encoder, &gpu.queue, &down.pipeline, &up.pipeline);
+                bloom.encode(&mut encoder, &gpu.queue, &down.pipeline, &up.pipeline, 0.0, 0.0);
             }
         }
 
@@ -909,7 +909,7 @@ impl FrameEncoder {
             let down_id = crate::bloom::PIPELINE_BLOOM_DOWNSAMPLE;
             let up_id = crate::bloom::PIPELINE_BLOOM_UPSAMPLE;
             if let (Some(down), Some(up)) = (registry.get(down_id), registry.get(up_id)) {
-                bloom.encode(&mut encoder, &gpu.queue, &down.pipeline, &up.pipeline);
+                bloom.encode(&mut encoder, &gpu.queue, &down.pipeline, &up.pipeline, 0.0, 0.0);
             }
         }
 

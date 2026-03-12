@@ -2,7 +2,7 @@
 
 use glam::{Mat4, Quat, Vec3};
 
-use esox_gfx::mesh3d::{MaterialHandle, MeshHandle};
+use esox_gfx::mesh3d::{AnimationClip, AnimationPlayer, MaterialHandle, MeshHandle};
 
 /// Local-space transform (position, rotation, scale).
 #[derive(Debug, Clone, Copy)]
@@ -95,4 +95,11 @@ pub struct SpotLightComponent {
 pub struct DirectionalLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
+}
+
+/// Skeletal animation component — drives skinned meshes via an animation player.
+pub struct Animator {
+    pub player: AnimationPlayer,
+    pub clips: Vec<AnimationClip>,
+    pub skinned_mesh_index: usize,
 }

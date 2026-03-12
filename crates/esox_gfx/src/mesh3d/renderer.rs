@@ -103,6 +103,12 @@ pub struct PostProcess3DConfig {
     pub bloom_enabled: bool,
     /// Bloom intensity multiplier.
     pub bloom_intensity: f32,
+    /// HDR luminance threshold — only pixels brighter than this bloom.
+    /// Set to 0.0 to bloom everything (old behavior). Default: 1.0.
+    pub bloom_threshold: f32,
+    /// Soft knee width around the bloom threshold (smooth transition).
+    /// 0.0 = hard cutoff, 0.5 = gentle ramp. Default: 0.5.
+    pub bloom_soft_knee: f32,
     /// Enable ACES tone mapping.
     pub tone_map_enabled: bool,
     /// Enable SSAO.
@@ -116,6 +122,8 @@ impl Default for PostProcess3DConfig {
         Self {
             bloom_enabled: true,
             bloom_intensity: 0.3,
+            bloom_threshold: 1.0,
+            bloom_soft_knee: 0.5,
             tone_map_enabled: true,
             ssao_enabled: false,
             motion_blur_enabled: false,
@@ -1424,8 +1432,36 @@ impl Renderer3D {
         height: u32,
     ) -> Result<(), String> {
         self.ibl_state = IblState::from_equirect(&gpu.device, &gpu.queue, hdr_data, width, height)?;
+        self.rebuild_light_bind_group(gpu);
+        Ok(())
+    }
 
-        // Rebuild light bind group with new IBL textures.
+    /// Generate procedural sky IBL from the current directional light.
+    ///
+    /// Uses the directional light's direction, color, and intensity to create
+    /// a sky environment map, then runs the full IBL precomputation pipeline.
+    pub fn generate_procedural_ibl(&mut self, gpu: &GpuContext) {
+        let dir_light = &self.light_env.directional;
+        let sun_dir = glam::Vec3::from(dir_light.direction).normalize() * -1.0;
+        let sun_color = glam::Vec3::from(dir_light.color);
+        let sun_intensity = dir_light.intensity;
+        let sky_color = glam::Vec3::new(0.4, 0.6, 1.0);
+        let ground_color = glam::Vec3::new(0.15, 0.12, 0.1);
+
+        self.ibl_state = IblState::from_procedural_sky(
+            &gpu.device,
+            &gpu.queue,
+            sun_dir,
+            sun_color,
+            sun_intensity,
+            sky_color,
+            ground_color,
+        );
+        self.rebuild_light_bind_group(gpu);
+    }
+
+    /// Rebuild the light bind group after IBL textures change.
+    fn rebuild_light_bind_group(&mut self, gpu: &GpuContext) {
         self.light_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("esox_3d_light_bg"),
             layout: &self.light_bind_group_layout,
@@ -1452,8 +1488,6 @@ impl Renderer3D {
                 },
             ],
         });
-
-        Ok(())
     }
 
     /// Enable motion blur post-processing.
@@ -2228,7 +2262,7 @@ impl Renderer3D {
 
             // Run bloom on the scene HDR texture.
             if config.bloom_enabled {
-                pp.bloom_pass.encode(&mut encoder, &gpu.queue, &pp.bloom_down_pipeline, &pp.bloom_up_pipeline);
+                pp.bloom_pass.encode(&mut encoder, &gpu.queue, &pp.bloom_down_pipeline, &pp.bloom_up_pipeline, config.bloom_threshold, config.bloom_soft_knee);
             }
 
             // SSAO result (or fallback white).
@@ -2551,24 +2585,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Shadow factor: returns 0.0 (fully shadowed) to 1.0 (fully lit).
-fn shadow_factor(world_pos: vec3<f32>, view_depth: f32) -> f32 {
-    let cascade_count = i32(shadow.shadow_config.w);
-    if cascade_count == 0 {
-        return 1.0;
-    }
-
-    // Select cascade by view depth.
-    var cascade = cascade_count - 1;
-    for (var i = 0; i < cascade_count; i = i + 1) {
-        if view_depth < shadow.splits_count[i] {
-            cascade = i;
-            break;
-        }
-    }
-
-    // Project world position into light space.
-    let light_pos = shadow.light_vp[cascade] * vec4<f32>(world_pos, 1.0);
+// Sample shadow for a single cascade. Returns 0.0 (shadowed) to 1.0 (lit).
+fn shadow_sample_cascade(biased_pos: vec3<f32>, cascade: i32) -> f32 {
+    let light_pos = shadow.light_vp[cascade] * vec4<f32>(biased_pos, 1.0);
     var proj = light_pos.xyz / light_pos.w;
 
     // NDC to UV: [-1,1] -> [0,1], flip Y.
@@ -2579,8 +2598,8 @@ fn shadow_factor(world_pos: vec3<f32>, view_depth: f32) -> f32 {
         return 1.0;
     }
 
-    let bias = shadow.shadow_config.x;
-    let compare_depth = proj.z - bias;
+    let depth_bias = shadow.shadow_config.x;
+    let compare_depth = proj.z - depth_bias;
 
     // 3x3 PCF (percentage-closer filtering).
     let tex_size = vec2<f32>(textureDimensions(shadow_depth));
@@ -2600,6 +2619,47 @@ fn shadow_factor(world_pos: vec3<f32>, view_depth: f32) -> f32 {
     }
 
     return total / 9.0;
+}
+
+// Shadow factor: returns 0.0 (fully shadowed) to 1.0 (fully lit).
+// Applies normal bias and blends between adjacent cascades at split boundaries.
+fn shadow_factor(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -> f32 {
+    let cascade_count = i32(shadow.shadow_config.w);
+    if cascade_count == 0 {
+        return 1.0;
+    }
+
+    // Apply normal bias: offset along surface normal to reduce acne at
+    // grazing angles.
+    let normal_bias = shadow.shadow_config.y;
+    let biased_pos = world_pos + normal * normal_bias;
+
+    // Select cascade by view depth.
+    var cascade = cascade_count - 1;
+    for (var i = 0; i < cascade_count; i = i + 1) {
+        if view_depth < shadow.splits_count[i] {
+            cascade = i;
+            break;
+        }
+    }
+
+    let sf = shadow_sample_cascade(biased_pos, cascade);
+
+    // Blend with next cascade near the split boundary to hide seams.
+    let next = cascade + 1;
+    if next < cascade_count {
+        let split_far = shadow.splits_count[cascade];
+        // Blend zone: last 10% of current cascade's range.
+        let split_near = select(0.0, shadow.splits_count[cascade - 1], cascade > 0);
+        let blend_start = mix(split_near, split_far, 0.9);
+        if view_depth > blend_start {
+            let t = (view_depth - blend_start) / max(split_far - blend_start, 0.001);
+            let sf_next = shadow_sample_cascade(biased_pos, next);
+            return mix(sf, sf_next, t);
+        }
+    }
+
+    return sf;
 }
 
 // Spot light attenuation.
@@ -2674,7 +2734,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = lights.ambient.rgb * lights.ambient.w;
 
     // Shadow factor for directional light.
-    let sf = shadow_factor(in.world_position, in.view_depth);
+    let sf = shadow_factor(in.world_position, n, in.view_depth);
 
     // Directional light (with shadows).
     let light_dir = normalize(lights.directional_dir_intensity.xyz);
@@ -2824,7 +2884,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n_dot_v = max(dot(n, v), 0.001);
 
     // Shadow factor for directional light.
-    let sf = shadow_factor(in.world_position, in.view_depth);
+    let sf = shadow_factor(in.world_position, n, in.view_depth);
 
     // Directional light (with shadows).
     let light_dir = normalize(lights.directional_dir_intensity.xyz);

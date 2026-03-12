@@ -354,12 +354,16 @@ fn skin_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Transform position.
     let skinned_pos = skin_mat * position;
 
-    // Transform normal (using mat3 of skin_mat, then normalize).
-    let normal_mat = mat3x3<f32>(skin_mat[0].xyz, skin_mat[1].xyz, skin_mat[2].xyz);
-    let skinned_normal = normalize(normal_mat * normal);
+    // Transform normal using adjugate (cofactor) for correctness with non-uniform scale.
+    let m0 = skin_mat[0].xyz;
+    let m1 = skin_mat[1].xyz;
+    let m2 = skin_mat[2].xyz;
+    let adj = mat3x3<f32>(cross(m1, m2), cross(m2, m0), cross(m0, m1));
+    let skinned_normal = normalize(normal * adj);
 
-    // Transform tangent direction.
-    let skinned_tangent = normalize(normal_mat * tangent_xyz);
+    // Transform tangent direction (tangents use the regular linear transform).
+    let linear_mat = mat3x3<f32>(m0, m1, m2);
+    let skinned_tangent = normalize(linear_mat * tangent_xyz);
 
     // Write output — preserve UV, color, tangent handedness.
     var out: array<vec4<f32>, 4>;

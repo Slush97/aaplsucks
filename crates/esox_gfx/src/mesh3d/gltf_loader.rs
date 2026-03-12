@@ -704,6 +704,8 @@ pub struct GltfSceneHandles {
     pub skin_data: Vec<Option<SkinningData>>,
     /// Per-mesh material index from glTF (same length as meshes, None = default material).
     pub mesh_material_indices: Vec<Option<usize>>,
+    /// Per-mesh skinned mesh index into `Renderer3D::skinned_meshes` (None for non-skinned).
+    pub skinned_mesh_indices: Vec<Option<usize>>,
 }
 
 impl super::renderer::Renderer3D {
@@ -743,13 +745,35 @@ impl super::renderer::Renderer3D {
             })
             .collect();
 
-        // Upload meshes, collecting skin data and material indices.
+        // Build mesh → skin mapping from nodes.
+        let mut mesh_skin_map = std::collections::HashMap::new();
+        for node in &scene.nodes {
+            if let Some(skin_idx) = node.skin_index {
+                for &mesh_idx in &node.mesh_indices {
+                    mesh_skin_map.insert(mesh_idx, skin_idx);
+                }
+            }
+        }
+
+        // Upload meshes, using skinned upload for meshes with skinning data.
         let mut mesh_handles = Vec::with_capacity(scene.meshes.len());
         let mut skin_data = Vec::with_capacity(scene.meshes.len());
+        let mut skinned_mesh_indices = Vec::with_capacity(scene.meshes.len());
         let mut mesh_material_indices = Vec::with_capacity(scene.meshes.len());
-        for mesh in scene.meshes {
-            let handle = self.upload_mesh(gpu, &mesh.data);
-            mesh_handles.push(handle);
+        for (i, mesh) in scene.meshes.into_iter().enumerate() {
+            match (&mesh.skin_data, mesh_skin_map.get(&i)) {
+                (Some(sd), Some(&skin_idx)) => {
+                    let joint_count = scene.skins[skin_idx].joint_count as u32;
+                    let (handle, si) =
+                        self.upload_skinned_mesh(gpu, &mesh.data, sd, joint_count);
+                    mesh_handles.push(handle);
+                    skinned_mesh_indices.push(Some(si));
+                }
+                _ => {
+                    mesh_handles.push(self.upload_mesh(gpu, &mesh.data));
+                    skinned_mesh_indices.push(None);
+                }
+            }
             skin_data.push(mesh.skin_data);
             mesh_material_indices.push(mesh.material_index);
         }
@@ -764,6 +788,7 @@ impl super::renderer::Renderer3D {
             animations: scene.animations,
             skin_data,
             mesh_material_indices,
+            skinned_mesh_indices,
         }
     }
 }

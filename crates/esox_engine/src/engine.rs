@@ -7,7 +7,8 @@ use esox_platform::{AppDelegate, MouseInputEvent};
 
 use crate::assets::AssetManager;
 use crate::ecs::{
-    camera_sync_system, hierarchy_system, light_collection_system, render_extraction_system,
+    animation_system, camera_sync_system, hierarchy_system, light_collection_system,
+    render_extraction_system,
 };
 use crate::game::Game;
 use crate::input::InputManager;
@@ -100,6 +101,8 @@ impl AppDelegate for Engine {
             renderer.set_postprocess(esox_gfx::mesh3d::PostProcess3DConfig {
                 bloom_enabled: true,
                 bloom_intensity: 0.3,
+                bloom_threshold: 1.0,
+                bloom_soft_knee: 0.5,
                 tone_map_enabled: true,
                 ssao_enabled: true,
                 motion_blur_enabled: false,
@@ -190,6 +193,10 @@ impl AppDelegate for Engine {
 
         // 7. Render extraction — issue draw calls from ECS entities.
         render_extraction_system(&self.world, renderer);
+
+        // 7.5. Animation — advance players and upload joint matrices.
+        let frame_dt = self.timestep.time_state_cache.frame_dt;
+        animation_system(&mut self.world, renderer, gpu, frame_dt);
 
         // 8. Dispatch skinning compute (if any).
         let mut cmd_bufs = Vec::new();

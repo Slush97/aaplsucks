@@ -1,6 +1,7 @@
 //! `esox_platform` — Windowing, input dispatch, and platform integration.
 
 pub mod config;
+pub mod perf;
 pub mod sandbox;
 
 use std::sync::Arc;
@@ -83,11 +84,15 @@ pub trait AppDelegate {
     fn on_init(&mut self, gpu: &esox_gfx::GpuContext, resources: &mut esox_gfx::RenderResources);
 
     /// Called each frame to render content.
+    ///
+    /// `perf` provides live performance statistics (FPS, RSS, CPU%) that can
+    /// be rendered as an overlay.
     fn on_redraw(
         &mut self,
         gpu: &esox_gfx::GpuContext,
         resources: &mut esox_gfx::RenderResources,
         frame: &mut esox_gfx::Frame,
+        perf: &crate::perf::PerfMonitor,
     );
 
     /// Called when a keyboard event is received.
@@ -378,6 +383,8 @@ pub struct App {
     pipeline_rx: Option<esox_gfx::PipelineReceiver>,
     /// Event loop proxy for waking the main thread from background compilation.
     event_proxy: Option<EventLoopProxy<AppUserEvent>>,
+    /// Live performance monitor (frame times, RSS, CPU%).
+    perf: crate::perf::PerfMonitor,
 }
 
 impl App {
@@ -410,6 +417,7 @@ impl App {
             redraw_pending: false,
             pipeline_rx: None,
             event_proxy: None,
+            perf: crate::perf::PerfMonitor::new(300),
         }
     }
 }
@@ -1209,8 +1217,9 @@ impl ApplicationHandler<AppUserEvent> for App {
                 if let (Some(gpu), Some(resources)) =
                     (self.gpu.as_ref(), self.render_resources.as_mut())
                 {
+                    self.perf.begin_frame();
                     self.frame.clear();
-                    self.delegate.on_redraw(gpu, resources, &mut self.frame);
+                    self.delegate.on_redraw(gpu, resources, &mut self.frame, &self.perf);
 
                     let elapsed = self.start_time.elapsed().as_secs_f32();
                     let delta = elapsed - self.last_frame_elapsed;
@@ -1251,6 +1260,9 @@ impl ApplicationHandler<AppUserEvent> for App {
                         None
                     };
 
+                    let instance_count = self.frame.instance_count() as u32;
+                    let batch_count = self.frame.batch_count() as u32;
+
                     if let Err(e) = esox_gfx::FrameEncoder::encode_and_submit_with_post_process(
                         gpu,
                         resources,
@@ -1265,6 +1277,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                         tracing::error!("render error: {e}");
                     }
 
+                    self.perf.end_frame(instance_count, batch_count);
                     self.frame_number += 1;
                 }
                 // Check if the delegate wants to exit.

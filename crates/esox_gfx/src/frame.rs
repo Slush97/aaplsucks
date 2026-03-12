@@ -219,6 +219,11 @@ impl Frame {
         &self.batches
     }
 
+    /// Number of draw batches (available after `build_batches()`).
+    pub fn batch_count(&self) -> usize {
+        self.batches.len()
+    }
+
     /// Enable multi-phase rendering for this frame.
     ///
     /// Must be called before pushing any instances. When enabled, phase

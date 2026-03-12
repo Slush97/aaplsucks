@@ -82,6 +82,7 @@ impl AppDelegate for DemoApp {
         gpu: &GpuContext,
         resources: &mut RenderResources,
         frame: &mut Frame,
+        perf: &esox_platform::perf::PerfMonitor,
     ) {
         self.ui_state.update_blink(self.theme.cursor_blink_ms);
 
@@ -314,6 +315,46 @@ impl AppDelegate for DemoApp {
         }); // page_scroll
 
         ui.finish();
+
+        // ── Performance overlay (top-right, drawn after UI so it's on top) ──
+        let stats = perf.summary();
+        let line_count = stats.lines().count();
+        let overlay_h = line_count as f32 * 16.0 + 12.0;
+        // Measure widest line.
+        let mut max_w = 0.0f32;
+        for line in stats.lines() {
+            let w = text.measure_text(line, 12.0);
+            if w > max_w { max_w = w; }
+        }
+        let overlay_w = max_w + 16.0;
+        let overlay_x = self.viewport.0 as f32 - overlay_w - 4.0;
+        // Background panel.
+        frame.push(esox_gfx::QuadInstance {
+            rect: [overlay_x, 4.0, overlay_w, overlay_h],
+            uv: [0.0; 4],
+            color: [0.0, 0.0, 0.0, 0.7],
+            border_radius: [4.0, 4.0, 4.0, 4.0],
+            sdf_params: [0.0; 4],
+            flags: [0.0; 4],
+            clip_rect: [0.0; 4],
+            color2: [0.0; 4],
+            extra: [0.0; 4],
+        });
+        // Text lines.
+        for (i, line) in stats.lines().enumerate() {
+            let y = 10.0 + i as f32 * 16.0;
+            let w = text.measure_text(line, 12.0);
+            text.draw_text(
+                line,
+                self.viewport.0 as f32 - w - 12.0,
+                y,
+                12.0,
+                esox_gfx::Color::new(0.0, 1.0, 0.0, 0.9),
+                frame,
+                gpu,
+                resources,
+            );
+        }
     }
 
     fn on_key(

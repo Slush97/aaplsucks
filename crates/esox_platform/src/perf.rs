@@ -15,8 +15,8 @@ struct Snapshot {
     /// Seconds since session start.
     elapsed_s: f32,
     fps: f32,
-    frame_time_avg_ms: f32,
-    frame_time_p99_ms: f32,
+    cpu_time_avg_ms: f32,
+    cpu_time_p99_ms: f32,
     rss_mb: f32,
     cpu_percent: f32,
     instance_count: u32,
@@ -26,22 +26,28 @@ struct Snapshot {
 /// Rolling performance statistics updated each frame.
 #[derive(Debug, Clone)]
 pub struct PerfMonitor {
-    /// Rolling window of frame durations (ms).
-    frame_times: VecDeque<f64>,
+    /// Rolling window of CPU frame durations (ms) — time spent in on_redraw + encode.
+    cpu_frame_times: VecDeque<f64>,
+    /// Rolling window of wall-clock intervals between frames (ms) — actual frame period.
+    wall_intervals: VecDeque<f64>,
     /// Maximum number of frame times to keep.
     window_size: usize,
     /// How often to re-read /proc (expensive-ish).
     sample_interval: Duration,
     last_sample: Instant,
     frame_start: Instant,
+    /// Timestamp of the previous begin_frame call (for wall-clock FPS).
+    prev_frame_start: Option<Instant>,
     /// Previous CPU jiffies reading for delta computation.
     prev_cpu_jiffies: u64,
     prev_cpu_time: Instant,
 
     // ── Session-level tracking ──
 
-    /// All frame times for the entire session (for histogram / full stats).
-    all_frame_times: Vec<f64>,
+    /// All CPU frame times for the entire session (for histogram / full stats).
+    all_cpu_times: Vec<f64>,
+    /// All wall-clock intervals for the entire session.
+    all_wall_intervals: Vec<f64>,
     /// Periodic snapshots for time-series output.
     snapshots: Vec<Snapshot>,
     /// Session start time.
@@ -56,16 +62,16 @@ pub struct PerfMonitor {
 
     // ── Public stats (rolling window) ──
 
-    /// Frames per second (smoothed over the rolling window).
+    /// Actual frames per second (wall-clock, accounting for vsync waits).
     pub fps: f32,
-    /// Average frame time in milliseconds.
-    pub frame_time_avg_ms: f32,
-    /// 99th-percentile frame time in milliseconds.
-    pub frame_time_p99_ms: f32,
-    /// Minimum frame time in the window (ms).
-    pub frame_time_min_ms: f32,
-    /// Maximum frame time in the window (ms).
-    pub frame_time_max_ms: f32,
+    /// Average CPU frame time in milliseconds (time spent rendering, not waiting).
+    pub cpu_time_avg_ms: f32,
+    /// 99th-percentile CPU frame time in milliseconds.
+    pub cpu_time_p99_ms: f32,
+    /// Minimum CPU frame time in the window (ms).
+    pub cpu_time_min_ms: f32,
+    /// Maximum CPU frame time in the window (ms).
+    pub cpu_time_max_ms: f32,
     /// Resident set size in megabytes.
     pub rss_mb: f32,
     /// Virtual memory size in megabytes.
@@ -85,14 +91,17 @@ impl PerfMonitor {
     pub fn new(window_size: usize) -> Self {
         let now = Instant::now();
         Self {
-            frame_times: VecDeque::with_capacity(window_size),
+            cpu_frame_times: VecDeque::with_capacity(window_size),
+            wall_intervals: VecDeque::with_capacity(window_size),
             window_size,
             sample_interval: Duration::from_millis(500),
             last_sample: now,
             frame_start: now,
+            prev_frame_start: None,
             prev_cpu_jiffies: read_cpu_jiffies(),
             prev_cpu_time: now,
-            all_frame_times: Vec::with_capacity(8192),
+            all_cpu_times: Vec::with_capacity(8192),
+            all_wall_intervals: Vec::with_capacity(8192),
             snapshots: Vec::with_capacity(256),
             session_start: now,
             peak_rss_mb: 0.0,
@@ -100,10 +109,10 @@ impl PerfMonitor {
             cpu_sum: 0.0,
             cpu_sample_count: 0,
             fps: 0.0,
-            frame_time_avg_ms: 0.0,
-            frame_time_p99_ms: 0.0,
-            frame_time_min_ms: 0.0,
-            frame_time_max_ms: 0.0,
+            cpu_time_avg_ms: 0.0,
+            cpu_time_p99_ms: 0.0,
+            cpu_time_min_ms: 0.0,
+            cpu_time_max_ms: 0.0,
             rss_mb: 0.0,
             virt_mb: 0.0,
             cpu_percent: 0.0,
@@ -115,7 +124,18 @@ impl PerfMonitor {
 
     /// Call at the start of each frame (before `on_redraw`).
     pub fn begin_frame(&mut self) {
-        self.frame_start = Instant::now();
+        let now = Instant::now();
+        // Track wall-clock interval between frames (actual FPS).
+        if let Some(prev) = self.prev_frame_start {
+            let wall_ms = now.duration_since(prev).as_secs_f64() * 1000.0;
+            if self.wall_intervals.len() >= self.window_size {
+                self.wall_intervals.pop_front();
+            }
+            self.wall_intervals.push_back(wall_ms);
+            self.all_wall_intervals.push(wall_ms);
+        }
+        self.prev_frame_start = Some(now);
+        self.frame_start = now;
     }
 
     /// Call at the end of each frame (after GPU submit).
@@ -125,17 +145,17 @@ impl PerfMonitor {
         let elapsed = self.frame_start.elapsed();
         let ms = elapsed.as_secs_f64() * 1000.0;
 
-        if self.frame_times.len() >= self.window_size {
-            self.frame_times.pop_front();
+        if self.cpu_frame_times.len() >= self.window_size {
+            self.cpu_frame_times.pop_front();
         }
-        self.frame_times.push_back(ms);
-        self.all_frame_times.push(ms);
+        self.cpu_frame_times.push_back(ms);
+        self.all_cpu_times.push(ms);
 
         self.instance_count = instance_count;
         self.batch_count = batch_count;
         self.total_frames += 1;
 
-        // Recompute rolling stats every frame (cheap over a small window).
+        // Recompute rolling stats every frame.
         self.recompute_frame_stats();
 
         // Sample /proc periodically.
@@ -148,8 +168,8 @@ impl PerfMonitor {
             self.snapshots.push(Snapshot {
                 elapsed_s: now.duration_since(self.session_start).as_secs_f32(),
                 fps: self.fps,
-                frame_time_avg_ms: self.frame_time_avg_ms,
-                frame_time_p99_ms: self.frame_time_p99_ms,
+                cpu_time_avg_ms: self.cpu_time_avg_ms,
+                cpu_time_p99_ms: self.cpu_time_p99_ms,
                 rss_mb: self.rss_mb,
                 cpu_percent: self.cpu_percent,
                 instance_count,
@@ -169,37 +189,34 @@ impl PerfMonitor {
     }
 
     fn recompute_frame_stats(&mut self) {
-        let n = self.frame_times.len();
-        if n == 0 {
-            return;
+        // CPU frame time stats.
+        let n = self.cpu_frame_times.len();
+        if n > 0 {
+            let sum: f64 = self.cpu_frame_times.iter().sum();
+            self.cpu_time_avg_ms = (sum / n as f64) as f32;
+
+            let mut min = f64::MAX;
+            let mut max = f64::MIN;
+            for &t in &self.cpu_frame_times {
+                if t < min { min = t; }
+                if t > max { max = t; }
+            }
+            self.cpu_time_min_ms = min as f32;
+            self.cpu_time_max_ms = max as f32;
+
+            let mut sorted: Vec<f64> = self.cpu_frame_times.iter().copied().collect();
+            sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let p99_idx = ((n as f64) * 0.99).ceil() as usize;
+            self.cpu_time_p99_ms = sorted[p99_idx.min(n - 1)] as f32;
         }
 
-        let sum: f64 = self.frame_times.iter().sum();
-        self.frame_time_avg_ms = (sum / n as f64) as f32;
-        self.fps = if self.frame_time_avg_ms > 0.0 {
-            1000.0 / self.frame_time_avg_ms
-        } else {
-            0.0
-        };
-
-        let mut min = f64::MAX;
-        let mut max = f64::MIN;
-        for &t in &self.frame_times {
-            if t < min {
-                min = t;
-            }
-            if t > max {
-                max = t;
-            }
+        // Actual FPS from wall-clock intervals.
+        let wn = self.wall_intervals.len();
+        if wn > 0 {
+            let wall_sum: f64 = self.wall_intervals.iter().sum();
+            let wall_avg_ms = wall_sum / wn as f64;
+            self.fps = if wall_avg_ms > 0.0 { 1000.0 / wall_avg_ms as f32 } else { 0.0 };
         }
-        self.frame_time_min_ms = min as f32;
-        self.frame_time_max_ms = max as f32;
-
-        // p99: sort a copy and pick the 99th percentile index.
-        let mut sorted: Vec<f64> = self.frame_times.iter().copied().collect();
-        sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let p99_idx = ((n as f64) * 0.99).ceil() as usize;
-        self.frame_time_p99_ms = sorted[p99_idx.min(n - 1)] as f32;
     }
 
     fn sample_proc(&mut self, now: Instant) {
@@ -222,12 +239,12 @@ impl PerfMonitor {
     /// Format a compact multi-line summary suitable for an overlay.
     pub fn summary(&self) -> String {
         format!(
-            "FPS: {:.0}  frame: {:.2}ms (p99: {:.2}ms)\n\
+            "FPS: {:.0}  cpu: {:.2}ms (p99: {:.2}ms)\n\
              CPU: {:.1}%  RSS: {:.1}MB  VIRT: {:.0}MB\n\
              instances: {}  batches: {}  frames: {}",
             self.fps,
-            self.frame_time_avg_ms,
-            self.frame_time_p99_ms,
+            self.cpu_time_avg_ms,
+            self.cpu_time_p99_ms,
             self.cpu_percent,
             self.rss_mb,
             self.virt_mb,
@@ -246,7 +263,7 @@ impl PerfMonitor {
         use std::io::Write;
 
         let session_duration = self.session_start.elapsed();
-        let total = self.all_frame_times.len();
+        let total = self.all_cpu_times.len();
 
         let mut buf = String::with_capacity(4096);
 
@@ -261,7 +278,7 @@ impl PerfMonitor {
         writeln!(buf, "  duration:       {:.1}s", session_duration.as_secs_f64()).unwrap();
         writeln!(buf, "  total frames:   {}", total).unwrap();
         if session_duration.as_secs_f64() > 0.0 {
-            writeln!(buf, "  avg FPS:        {:.1}", total as f64 / session_duration.as_secs_f64()).unwrap();
+            writeln!(buf, "  actual FPS:     {:.1}", total as f64 / session_duration.as_secs_f64()).unwrap();
         }
         writeln!(buf).unwrap();
 
@@ -272,43 +289,61 @@ impl PerfMonitor {
             return Ok(());
         }
 
-        // ── Compute session-wide stats ──
-        let mut sorted = self.all_frame_times.clone();
-        sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let sum: f64 = sorted.iter().sum();
-        let avg = sum / total as f64;
-        let min = sorted[0];
-        let max = sorted[total - 1];
-        let median = sorted[total / 2];
-        let p50 = percentile(&sorted, 0.50);
-        let p90 = percentile(&sorted, 0.90);
-        let p95 = percentile(&sorted, 0.95);
-        let p99 = percentile(&sorted, 0.99);
-        let p999 = percentile(&sorted, 0.999);
+        // ── CPU frame time stats ──
+        let mut sorted_cpu = self.all_cpu_times.clone();
+        sorted_cpu.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let cpu_sum: f64 = sorted_cpu.iter().sum();
+        let cpu_avg = cpu_sum / total as f64;
+        let cpu_min = sorted_cpu[0];
+        let cpu_max = sorted_cpu[total - 1];
+        let cpu_median = sorted_cpu[total / 2];
+        let cpu_p90 = percentile(&sorted_cpu, 0.90);
+        let cpu_p95 = percentile(&sorted_cpu, 0.95);
+        let cpu_p99 = percentile(&sorted_cpu, 0.99);
+        let cpu_p999 = percentile(&sorted_cpu, 0.999);
 
-        // Variance / stdev.
-        let variance: f64 = sorted.iter().map(|&t| (t - avg).powi(2)).sum::<f64>() / total as f64;
-        let stdev = variance.sqrt();
+        let cpu_variance: f64 = sorted_cpu.iter().map(|&t| (t - cpu_avg).powi(2)).sum::<f64>() / total as f64;
+        let cpu_stdev = cpu_variance.sqrt();
 
-        // Jank: frames > 2x the median.
-        let jank_threshold = median * 2.0;
-        let jank_count = sorted.iter().filter(|&&t| t > jank_threshold).count();
-        let jank_pct = jank_count as f64 / total as f64 * 100.0;
-
-        writeln!(buf, "FRAME TIMES (ms)").unwrap();
-        writeln!(buf, "  avg:            {avg:.3}").unwrap();
-        writeln!(buf, "  stdev:          {stdev:.3}").unwrap();
-        writeln!(buf, "  min:            {min:.3}").unwrap();
-        writeln!(buf, "  max:            {max:.3}").unwrap();
-        writeln!(buf, "  median:         {median:.3}").unwrap();
-        writeln!(buf, "  p50:            {p50:.3}").unwrap();
-        writeln!(buf, "  p90:            {p90:.3}").unwrap();
-        writeln!(buf, "  p95:            {p95:.3}").unwrap();
-        writeln!(buf, "  p99:            {p99:.3}").unwrap();
-        writeln!(buf, "  p99.9:          {p999:.3}").unwrap();
+        writeln!(buf, "CPU FRAME TIME (ms) — time spent rendering each frame").unwrap();
+        writeln!(buf, "  avg:            {cpu_avg:.3}").unwrap();
+        writeln!(buf, "  stdev:          {cpu_stdev:.3}").unwrap();
+        writeln!(buf, "  min:            {cpu_min:.3}").unwrap();
+        writeln!(buf, "  max:            {cpu_max:.3}").unwrap();
+        writeln!(buf, "  median:         {cpu_median:.3}").unwrap();
+        writeln!(buf, "  p90:            {cpu_p90:.3}").unwrap();
+        writeln!(buf, "  p95:            {cpu_p95:.3}").unwrap();
+        writeln!(buf, "  p99:            {cpu_p99:.3}").unwrap();
+        writeln!(buf, "  p99.9:          {cpu_p999:.3}").unwrap();
         writeln!(buf).unwrap();
 
-        writeln!(buf, "JANK (>{:.2}ms = 2x median)", jank_threshold).unwrap();
+        // ── Wall-clock frame interval stats ──
+        if !self.all_wall_intervals.is_empty() {
+            let wn = self.all_wall_intervals.len();
+            let mut sorted_wall = self.all_wall_intervals.clone();
+            sorted_wall.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let wall_sum: f64 = sorted_wall.iter().sum();
+            let wall_avg = wall_sum / wn as f64;
+            let wall_min = sorted_wall[0];
+            let wall_max = sorted_wall[wn - 1];
+            let wall_median = sorted_wall[wn / 2];
+            let wall_p99 = percentile(&sorted_wall, 0.99);
+
+            writeln!(buf, "WALL-CLOCK FRAME INTERVAL (ms) — actual time between frames").unwrap();
+            writeln!(buf, "  avg:            {wall_avg:.3}  ({:.1} FPS)", 1000.0 / wall_avg).unwrap();
+            writeln!(buf, "  min:            {wall_min:.3}  ({:.1} FPS)", 1000.0 / wall_min).unwrap();
+            writeln!(buf, "  max:            {wall_max:.3}  ({:.1} FPS)", 1000.0 / wall_max).unwrap();
+            writeln!(buf, "  median:         {wall_median:.3}  ({:.1} FPS)", 1000.0 / wall_median).unwrap();
+            writeln!(buf, "  p99:            {wall_p99:.3}  ({:.1} FPS)", 1000.0 / wall_p99).unwrap();
+            writeln!(buf).unwrap();
+        }
+
+        // ── Jank ──
+        let jank_threshold = cpu_median * 2.0;
+        let jank_count = sorted_cpu.iter().filter(|&&t| t > jank_threshold).count();
+        let jank_pct = jank_count as f64 / total as f64 * 100.0;
+
+        writeln!(buf, "JANK (cpu time >{:.2}ms = 2x median)", jank_threshold).unwrap();
         writeln!(buf, "  count:          {jank_count}").unwrap();
         writeln!(buf, "  percent:        {jank_pct:.2}%").unwrap();
         writeln!(buf).unwrap();
@@ -319,6 +354,7 @@ impl PerfMonitor {
         } else {
             0.0
         };
+
         writeln!(buf, "CPU & MEMORY").unwrap();
         writeln!(buf, "  avg CPU:        {avg_cpu:.1}%").unwrap();
         writeln!(buf, "  peak CPU:       {:.1}%", self.peak_cpu_percent).unwrap();
@@ -327,10 +363,21 @@ impl PerfMonitor {
         writeln!(buf, "  final VIRT:     {:.0} MB", self.virt_mb).unwrap();
         writeln!(buf).unwrap();
 
-        // ── Histogram ──
-        writeln!(buf, "FRAME TIME HISTOGRAM").unwrap();
+        // ── Memory breakdown (Linux) ──
+        let smaps = read_smaps_rollup();
+        if !smaps.is_empty() {
+            writeln!(buf, "MEMORY BREAKDOWN (from /proc/self/smaps_rollup)").unwrap();
+            for (key, kb) in &smaps {
+                writeln!(buf, "  {:<18}{:.1} MB", format!("{key}:"), *kb as f32 / 1024.0).unwrap();
+            }
+            writeln!(buf).unwrap();
+        }
+
+        // ── Histogram (CPU frame time) ──
+        writeln!(buf, "CPU FRAME TIME HISTOGRAM").unwrap();
         let buckets: &[(f64, &str)] = &[
-            (1.0,   "  < 1ms   "),
+            (0.5,   "  < 0.5ms "),
+            (1.0,   "  0.5-1ms "),
             (2.0,   "  1-2ms   "),
             (4.0,   "  2-4ms   "),
             (8.0,   "  4-8ms   "),
@@ -339,7 +386,7 @@ impl PerfMonitor {
             (f64::MAX, "  33ms+   "),
         ];
         let mut bucket_counts = vec![0u64; buckets.len()];
-        for &t in &self.all_frame_times {
+        for &t in &self.all_cpu_times {
             for (i, &(upper, _)) in buckets.iter().enumerate() {
                 let lower = if i == 0 { 0.0 } else { buckets[i - 1].0 };
                 if t >= lower && t < upper {
@@ -366,12 +413,12 @@ impl PerfMonitor {
         if !self.snapshots.is_empty() {
             writeln!(buf, "TIME SERIES (sampled every {:.0}ms)", self.sample_interval.as_millis()).unwrap();
             writeln!(buf, "  {:>8}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}  {:>5}  {:>5}",
-                "time(s)", "FPS", "avg(ms)", "p99(ms)", "RSS(MB)", "CPU%", "inst", "batch").unwrap();
+                "time(s)", "FPS", "cpu(ms)", "p99(ms)", "RSS(MB)", "CPU%", "inst", "batch").unwrap();
             writeln!(buf, "  {:─>8}  {:─>6}  {:─>8}  {:─>8}  {:─>8}  {:─>6}  {:─>5}  {:─>5}",
                 "", "", "", "", "", "", "", "").unwrap();
             for s in &self.snapshots {
                 writeln!(buf, "  {:>8.1}  {:>6.0}  {:>8.3}  {:>8.3}  {:>8.1}  {:>6.1}  {:>5}  {:>5}",
-                    s.elapsed_s, s.fps, s.frame_time_avg_ms, s.frame_time_p99_ms,
+                    s.elapsed_s, s.fps, s.cpu_time_avg_ms, s.cpu_time_p99_ms,
                     s.rss_mb, s.cpu_percent, s.instance_count, s.batch_count).unwrap();
             }
         }
@@ -409,6 +456,35 @@ fn read_memory_kb() -> (u64, u64) {
         }
     }
     (rss, virt)
+}
+
+/// Read key fields from /proc/self/smaps_rollup for memory breakdown.
+#[cfg(target_os = "linux")]
+fn read_smaps_rollup() -> Vec<(String, u64)> {
+    let Ok(smaps) = std::fs::read_to_string("/proc/self/smaps_rollup") else {
+        return Vec::new();
+    };
+    let keys = [
+        "Rss", "Pss", "Shared_Clean", "Shared_Dirty",
+        "Private_Clean", "Private_Dirty", "Swap",
+    ];
+    let mut result = Vec::new();
+    for line in smaps.lines() {
+        for &key in &keys {
+            if let Some(rest) = line.strip_prefix(key) {
+                if let Some(rest) = rest.strip_prefix(':') {
+                    let kb = parse_kb(rest);
+                    result.push((key.to_string(), kb));
+                }
+            }
+        }
+    }
+    result
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_smaps_rollup() -> Vec<(String, u64)> {
+    Vec::new()
 }
 
 #[cfg(target_os = "linux")]

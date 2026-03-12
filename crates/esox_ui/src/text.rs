@@ -152,7 +152,10 @@ pub struct TextRenderer {
 
 impl TextRenderer {
     /// Initialize the text renderer, loading a UI font.
-    pub fn new(gpu: &GpuContext) -> Self {
+    ///
+    /// Returns an error if no suitable sans-serif font is found on the system
+    /// or the font data cannot be parsed.
+    pub fn new(gpu: &GpuContext) -> Result<Self, String> {
         let db = SystemFontDb::new();
 
         let font_data = db
@@ -160,17 +163,17 @@ impl TextRenderer {
             .or_else(|| db.query_family("Noto Sans", FontStyle::Regular))
             .or_else(|| db.query_family("DejaVu Sans", FontStyle::Regular))
             .or_else(|| db.query_family("Liberation Sans", FontStyle::Regular))
-            .expect("no sans-serif font found on system");
+            .ok_or_else(|| "no sans-serif font found on system".to_string())?;
 
         tracing::info!(family = %font_data.family, "loaded UI font");
 
-        let face =
-            FontFace::from_bytes(FontId(0), font_data.data).expect("failed to load font face");
+        let face = FontFace::from_bytes(FontId(0), font_data.data)
+            .map_err(|e| format!("failed to load font face: {e}"))?;
 
         let allocator = ShelfAllocator::new(AtlasId(0), ATLAS_SIZE, ATLAS_SIZE);
         let atlas = AtlasTexture::new(&gpu.device, ATLAS_SIZE, ATLAS_SIZE, "ui_glyph_atlas");
 
-        Self {
+        Ok(Self {
             face,
             shaper: TextShaper::new(),
             rasterizer: GlyphRasterizer::new(),
@@ -179,7 +182,7 @@ impl TextRenderer {
             atlas,
             atlas_bound: false,
             shape_cache: ShapeCache::new(),
-        }
+        })
     }
 
     // ── Public API ──────────────────────────────────────────────────────
@@ -515,7 +518,7 @@ impl TextRenderer {
             }
         }
 
-        if !uploads.is_empty() || !self.atlas_bound {
+        if !self.atlas_bound {
             resources.bind_textures(
                 &gpu.device,
                 self.atlas.view(),

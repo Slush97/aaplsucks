@@ -22,7 +22,10 @@ impl<'f> Ui<'f> {
 
         let content_height = state.item_count as f32 * item_height;
         let max_scroll = (content_height - visible_height).max(0.0);
-        let mut offset = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+        let mut offset = match self.state.scroll_offsets.get_mut(&id) {
+            Some((off, age)) => { *age = 0; *off }
+            None => 0.0,
+        };
 
         // Handle scroll_to.
         if let Some(target) = state.scroll_to.take() {
@@ -64,7 +67,7 @@ impl<'f> Ui<'f> {
         }
 
         offset = offset.clamp(0.0, max_scroll);
-        self.state.scroll_offsets.insert(id, offset);
+        self.state.scroll_offsets.insert(id, (offset, 0));
 
         // Compute visible range.
         let first_visible = (offset / item_height).floor() as usize;
@@ -128,7 +131,7 @@ impl<'f> Ui<'f> {
                 &mut offset,
             );
             // Re-store the potentially updated offset.
-            self.state.scroll_offsets.insert(id, offset.clamp(0.0, max_scroll));
+            self.state.scroll_offsets.insert(id, (offset.clamp(0.0, max_scroll), 0));
         }
 
         let hovered = container.contains(self.state.mouse.x, self.state.mouse.y);

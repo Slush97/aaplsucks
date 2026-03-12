@@ -74,7 +74,10 @@ impl DemoApp {
 
 impl AppDelegate for DemoApp {
     fn on_init(&mut self, gpu: &GpuContext, _resources: &mut RenderResources) {
-        self.text = Some(TextRenderer::new(gpu));
+        match TextRenderer::new(gpu) {
+            Ok(tr) => self.text = Some(tr),
+            Err(e) => eprintln!("failed to initialize text renderer: {e}"),
+        }
     }
 
     fn on_redraw(

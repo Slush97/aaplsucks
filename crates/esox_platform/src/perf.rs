@@ -606,7 +606,13 @@ fn read_cpu_jiffies() -> u64 {
 #[cfg(target_os = "linux")]
 fn clock_ticks_per_sec() -> u64 {
     // SAFETY: sysconf is a standard POSIX call.
-    unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 }
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if ticks <= 0 {
+        tracing::warn!("sysconf(_SC_CLK_TCK) failed, defaulting to 100");
+        100
+    } else {
+        ticks as u64
+    }
 }
 
 // ── Non-Linux stubs ──

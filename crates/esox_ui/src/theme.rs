@@ -221,6 +221,69 @@ impl Theme {
         }
     }
 
+    /// High-contrast theme for accessibility — pure black/white, large borders, no transparency.
+    pub fn high_contrast() -> Self {
+        let black = Color::new(0.0, 0.0, 0.0, 1.0);
+        let white = Color::new(1.0, 1.0, 1.0, 1.0);
+        let yellow = Color::new(1.0, 1.0, 0.0, 1.0);
+        let cyan = Color::new(0.0, 1.0, 1.0, 1.0);
+        let green = Color::new(0.0, 1.0, 0.0, 1.0);
+        let red = Color::new(1.0, 0.0, 0.0, 1.0);
+
+        Self {
+            bg_base:    black,
+            bg_surface: black,
+            bg_raised:  Color::new(0.15, 0.15, 0.15, 1.0),
+            bg_input:   black,
+
+            fg:       white,
+            fg_muted: white,
+            fg_dim:   Color::new(0.8, 0.8, 0.8, 1.0),
+            fg_label: white,
+
+            accent:       yellow,
+            accent_dim:   Color::new(1.0, 1.0, 0.0, 0.3),
+            accent_hover: cyan,
+
+            green,
+            amber: yellow,
+            red,
+
+            border:          white,
+            green_button_bg: green,
+
+            shadow: Color::new(0.0, 0.0, 0.0, 1.0),
+            toast_error_bg:   Color::new(0.4, 0.0, 0.0, 1.0),
+            toast_success_bg: Color::new(0.0, 0.3, 0.0, 1.0),
+
+            disabled_fg:     Color::new(0.5, 0.5, 0.5, 1.0),
+            disabled_border: Color::new(0.5, 0.5, 0.5, 1.0),
+            disabled_bg:     Color::new(0.1, 0.1, 0.1, 1.0),
+
+            tooltip_bg: white,
+            tooltip_fg: black,
+
+            table_zebra_bg: Color::new(0.1, 0.1, 0.1, 1.0),
+
+            modal_backdrop: Color::new(0.0, 0.0, 0.0, 0.85),
+
+            toast_info_bg:    Color::new(0.0, 0.0, 0.4, 1.0),
+            toast_warning_bg: Color::new(0.4, 0.3, 0.0, 1.0),
+
+            // Larger sizes for readability.
+            font_size: 16.0,
+            heading_font_size: 24.0,
+            header_font_size: 13.0,
+            button_height: 40.0,
+            item_height: 36.0,
+            corner_radius: 2.0,
+            focus_ring_expand: 3.0,
+            cursor_width: 2.5,
+
+            ..Self::layout_defaults()
+        }
+    }
+
     /// Start a builder from the dark theme.
     pub fn builder() -> ThemeBuilder {
         ThemeBuilder { base: Self::dark() }

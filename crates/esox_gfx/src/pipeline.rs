@@ -53,6 +53,14 @@ impl GpuContext {
             .await
             .map_err(|_| Error::NoAdapter)?;
 
+        let info = adapter.get_info();
+        tracing::info!(
+            backend = ?info.backend,
+            device = %info.name,
+            driver = %info.driver,
+            "GPU adapter selected"
+        );
+
         let (raw_device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("esox_gfx device"),

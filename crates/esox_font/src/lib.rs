@@ -29,7 +29,7 @@ pub enum Error {
     #[error("rasterization failed for glyph {glyph_id}: {reason}")]
     Rasterize {
         /// The glyph that failed.
-        glyph_id: u16,
+        glyph_id: u32,
         /// Why it failed.
         reason: String,
     },
@@ -72,7 +72,7 @@ pub struct ShapedRun {
 #[derive(Debug, Clone, Copy)]
 pub struct ShapedGlyph {
     /// Glyph ID in the font.
-    pub glyph_id: u16,
+    pub glyph_id: u32,
     /// X offset from the pen position.
     pub x_offset: f32,
     /// Y offset from the pen position.
@@ -86,7 +86,7 @@ pub struct ShapedGlyph {
 /// A rasterized glyph bitmap ready for atlas upload.
 pub struct RasterizedGlyph {
     /// Glyph ID.
-    pub glyph_id: u16,
+    pub glyph_id: u32,
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
@@ -108,7 +108,7 @@ pub struct GlyphKey {
     /// Which font face.
     pub font_id: FontId,
     /// Glyph ID in the font.
-    pub glyph_id: u16,
+    pub glyph_id: u32,
     /// Font size in tenths of a pixel (for integer hashing).
     pub size_tenths: u32,
     /// Style bits: bit 0 = bold, bit 1 = italic, bit 2 = color request.

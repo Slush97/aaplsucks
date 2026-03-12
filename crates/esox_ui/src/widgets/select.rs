@@ -7,7 +7,7 @@ use crate::id::HOVER_SALT;
 use crate::layout::Rect;
 use crate::paint;
 use crate::response::Response;
-use crate::state::{Overlay, SelectState, WidgetKind};
+use crate::state::{A11yNode, A11yRole, Overlay, SelectState, WidgetKind};
 use crate::Ui;
 
 impl<'f> Ui<'f> {
@@ -23,6 +23,19 @@ impl<'f> Ui<'f> {
 
         let mut response = self.widget_response(id, rect);
         let disabled = response.disabled;
+
+        let is_dropdown_open = matches!(
+            &self.state.overlay,
+            Some(Overlay::Dropdown { id: oid, .. }) if *oid == id
+        );
+        let selected_label = choices.get(select.selected_index).copied().unwrap_or("");
+        self.push_a11y_node(A11yNode {
+            id, role: A11yRole::Select, label: selected_label.to_string(),
+            value: Some(select.selected_index.to_string()), rect,
+            focused: response.focused, disabled,
+            expanded: Some(is_dropdown_open), selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
 
         // Clamp selection.
         if !choices.is_empty() && select.selected_index >= choices.len() {

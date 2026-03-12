@@ -3,12 +3,19 @@
 use esox_gfx::Color;
 
 use crate::rich_text::RichText;
+use crate::state::{A11yNode, A11yRole};
 use crate::Ui;
 
 impl<'f> Ui<'f> {
     /// Draw a label with the standard text color.
     pub fn label(&mut self, text: &str) {
         let rect = self.allocate_rect(self.region.w, self.theme.font_size + self.theme.label_pad_y);
+        self.push_a11y_node(A11yNode {
+            id: crate::id::fnv1a_runtime(text), role: A11yRole::Label,
+            label: text.to_string(), value: None, rect, focused: false,
+            disabled: false, expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
         self.text.draw_ui_text(
             text,
             rect.x,

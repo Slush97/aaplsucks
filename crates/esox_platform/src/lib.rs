@@ -380,6 +380,8 @@ pub struct App {
     last_redraw: std::time::Instant,
     /// Whether a redraw has been requested but not yet serviced.
     redraw_pending: bool,
+    /// Count of consecutive render failures (for device-lost recovery).
+    consecutive_render_failures: u32,
     /// Receiver for pipelines compiled on a background thread.
     pipeline_rx: Option<esox_gfx::PipelineReceiver>,
     /// Event loop proxy for waking the main thread from background compilation.
@@ -416,6 +418,7 @@ impl App {
             monitor_refresh_hz: 60,
             last_redraw: std::time::Instant::now(),
             redraw_pending: false,
+            consecutive_render_failures: 0,
             pipeline_rx: None,
             event_proxy: None,
             perf: crate::perf::PerfMonitor::new(300),
@@ -1241,7 +1244,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                             1.0 / gpu.config.width as f32,
                             1.0 / gpu.config.height as f32,
                         ],
-                        time: [elapsed, delta, self.frame_number as f32, 0.0],
+                        time: [elapsed, delta, (self.frame_number % (1 << 23)) as f32, 0.0],
                     };
 
                     let registry = match self.pipeline_registry.as_ref() {
@@ -1282,7 +1285,15 @@ impl ApplicationHandler<AppUserEvent> for App {
                         self.depth_view.as_ref(),
                     ) {
                         tracing::error!("render error: {e}");
+                        self.consecutive_render_failures += 1;
+                        if self.consecutive_render_failures >= 3 {
+                            tracing::error!("3 consecutive render failures, exiting");
+                            self.write_perf_report();
+                            event_loop.exit();
+                        }
+                        return;
                     }
+                    self.consecutive_render_failures = 0;
 
                     // Read counts after encoding (build_batches runs inside the encoder).
                     let instance_count = self.frame.instance_count() as u32;
@@ -1404,8 +1415,11 @@ fn install_signal_handlers() {
         extern "C" fn handler(_sig: libc::c_int) {
             SIGNAL_EXIT.store(true, Ordering::SeqCst);
         }
-        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
-        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handler as *const () as usize;
+        sa.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
     }
 }
 

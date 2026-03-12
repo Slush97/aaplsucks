@@ -6,7 +6,7 @@ use winit::keyboard::{Key, NamedKey};
 use crate::layout::Rect;
 use crate::paint;
 use crate::response::Response;
-use crate::state::{InputState, WidgetKind};
+use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
 use crate::Ui;
 
 impl<'f> Ui<'f> {
@@ -22,6 +22,13 @@ impl<'f> Ui<'f> {
 
         let mut response = self.widget_response(id, rect);
         let disabled = response.disabled;
+
+        self.push_a11y_node(A11yNode {
+            id, role: A11yRole::TextInput, label: placeholder.to_string(),
+            value: Some(input.text.clone()), rect, focused: response.focused, disabled,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
 
         if disabled {
             // ── Disabled draw ──

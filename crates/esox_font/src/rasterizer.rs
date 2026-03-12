@@ -27,7 +27,7 @@ impl GlyphRasterizer {
     pub fn rasterize(
         &mut self,
         face: &FontFace,
-        glyph_id: u16,
+        glyph_id: u32,
         size_px: f32,
         style: u8,
     ) -> Result<RasterizedGlyph, Error> {
@@ -54,7 +54,7 @@ impl GlyphRasterizer {
             )));
         }
 
-        let image = render.render(&mut scaler, glyph_id);
+        let image = render.render(&mut scaler, glyph_id as u16);
 
         match image {
             Some(img) => {
@@ -130,7 +130,7 @@ impl GlyphRasterizer {
     pub fn rasterize_color(
         &mut self,
         face: &FontFace,
-        glyph_id: u16,
+        glyph_id: u32,
         size_px: f32,
         style: u8,
     ) -> Result<RasterizedGlyph, Error> {
@@ -150,7 +150,7 @@ impl GlyphRasterizer {
         ]);
         render.format(Format::CustomSubpixel([0.0, 0.0, 0.0]));
 
-        if let Some(img) = render.render(&mut scaler, glyph_id) {
+        if let Some(img) = render.render(&mut scaler, glyph_id as u16) {
             let placement = img.placement;
             let width = placement.width;
             let height = placement.height;
@@ -199,7 +199,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map('A');
+        let glyph_id = u32::from(font_ref.charmap().map('A'));
 
         let glyph = rasterizer.rasterize(&face, glyph_id, 16.0, 0).unwrap();
         assert!(glyph.width > 0, "width={}", glyph.width);
@@ -214,7 +214,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map('A');
+        let glyph_id = u32::from(font_ref.charmap().map('A'));
 
         let glyph = rasterizer.rasterize(&face, glyph_id, 16.0, 0).unwrap();
         // A 16px glyph should be roughly 8-20 pixels wide/tall.
@@ -227,7 +227,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map(' ');
+        let glyph_id = u32::from(font_ref.charmap().map(' '));
 
         let glyph = rasterizer.rasterize(&face, glyph_id, 16.0, 0).unwrap();
         assert_eq!(glyph.width, 0);
@@ -240,7 +240,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map('A');
+        let glyph_id = u32::from(font_ref.charmap().map('A'));
 
         let glyph = rasterizer.rasterize(&face, glyph_id, 16.0, 2).unwrap();
         assert!(glyph.width > 0);
@@ -253,7 +253,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map('i');
+        let glyph_id = u32::from(font_ref.charmap().map('i'));
 
         let regular = rasterizer.rasterize(&face, glyph_id, 16.0, 0).unwrap();
         let bold = rasterizer.rasterize(&face, glyph_id, 16.0, 1).unwrap();
@@ -300,7 +300,7 @@ mod tests {
         let face = test_face();
         let mut rasterizer = GlyphRasterizer::new();
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map('A');
+        let glyph_id = u32::from(font_ref.charmap().map('A'));
 
         let color = rasterizer
             .rasterize_color(&face, glyph_id, 16.0, 0)

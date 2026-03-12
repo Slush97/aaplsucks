@@ -1,6 +1,11 @@
-//! System font lookup via `fontdb`.
+//! System font lookup via `fc-match` (fontconfig CLI).
 //!
-//! Scans system font directories and resolves family names to font file data.
+//! Resolves family names to font file paths without loading every system font
+//! into memory at startup. Falls back to probing well-known font directories
+//! if `fc-match` is unavailable.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::Error;
 
@@ -19,6 +24,12 @@ const MONOSPACE_FALLBACKS: &[&str] = &[
     "Courier New",
 ];
 
+/// Directories to probe when fc-match is unavailable.
+const FONT_DIRS: &[&str] = &[
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+];
+
 /// Result of a system font query — the raw font file bytes.
 pub struct FontMatch {
     /// The raw font file data.
@@ -27,67 +38,55 @@ pub struct FontMatch {
     pub family: String,
 }
 
-/// A system font database that resolves family names to font data.
+/// A system font resolver that uses `fc-match` to find fonts.
+///
+/// Unlike the previous fontdb-based approach, this does not scan every font at
+/// startup — it shells out per query, which is near-instant (~2-5ms each).
 pub struct SystemFontDb {
-    db: fontdb::Database,
+    /// Whether fc-match is available on this system.
+    fc_available: bool,
 }
 
 impl SystemFontDb {
-    /// Create a new database loaded with system fonts.
+    /// Create a new font resolver, probing for fc-match availability.
     pub fn new() -> Self {
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-        let count = db.len();
-        tracing::info!(fonts = count, "loaded system font database");
-        Self { db }
+        let fc_available = Command::new("fc-match")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if fc_available {
+            tracing::info!("font resolver: using fc-match");
+        } else {
+            tracing::warn!("fc-match not found, falling back to directory probing");
+        }
+
+        Self { fc_available }
     }
 
     /// Look up a font by family name and style.
-    ///
-    /// Returns the font file data if found.
     pub fn query_family(&self, family: &str, style: FontStyle) -> Option<FontMatch> {
-        let weight = match style {
-            FontStyle::Regular | FontStyle::Italic => fontdb::Weight::NORMAL,
-            FontStyle::Bold | FontStyle::BoldItalic => fontdb::Weight::BOLD,
-        };
-        let font_style = match style {
-            FontStyle::Regular | FontStyle::Bold => fontdb::Style::Normal,
-            FontStyle::Italic | FontStyle::BoldItalic => fontdb::Style::Italic,
+        let style_str = match style {
+            FontStyle::Regular => "Regular",
+            FontStyle::Bold => "Bold",
+            FontStyle::Italic => "Italic",
+            FontStyle::BoldItalic => "Bold Italic",
         };
 
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Name(family)],
-            weight,
-            style: font_style,
-            ..fontdb::Query::default()
-        };
-
-        let id = self.db.query(&query)?;
-        self.load_face_data(id, family)
+        if self.fc_available {
+            self.query_fc_match(family, style_str)
+        } else {
+            self.query_probe(family)
+        }
     }
 
     /// Resolve the generic "monospace" family to a concrete system font.
     pub fn query_monospace(&self, style: FontStyle) -> Option<FontMatch> {
-        // Try fontdb's generic monospace first.
-        let weight = match style {
-            FontStyle::Regular | FontStyle::Italic => fontdb::Weight::NORMAL,
-            FontStyle::Bold | FontStyle::BoldItalic => fontdb::Weight::BOLD,
-        };
-        let font_style = match style {
-            FontStyle::Regular | FontStyle::Bold => fontdb::Style::Normal,
-            FontStyle::Italic | FontStyle::BoldItalic => fontdb::Style::Italic,
-        };
-
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Monospace],
-            weight,
-            style: font_style,
-            ..fontdb::Query::default()
-        };
-
-        if let Some(id) = self.db.query(&query)
-            && let Some(m) = self.load_face_data(id, "monospace")
-        {
+        // Try "monospace" generic first (fc-match handles this natively).
+        if let Some(m) = self.query_family("monospace", style) {
             return Some(m);
         }
 
@@ -121,45 +120,7 @@ impl SystemFontDb {
         self.query_monospace(style)
     }
 
-    /// Load font file data for a given face ID.
-    fn load_face_data(&self, id: fontdb::ID, query_family: &str) -> Option<FontMatch> {
-        let (src, face_index) = self.db.face_source(id)?;
-        if face_index != 0 {
-            // We only support single-face files for now (index 0).
-            // TTC/OTC files would need face index threading.
-            tracing::debug!(face_index, "skipping non-zero face index in collection");
-        }
-
-        let data = match src {
-            fontdb::Source::Binary(arc) => arc.as_ref().as_ref().to_vec(),
-            fontdb::Source::File(path) => match std::fs::read(&path) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), "failed to read font file: {e}");
-                    return None;
-                }
-            },
-            fontdb::Source::SharedFile(_path, data) => data.as_ref().as_ref().to_vec(),
-        };
-
-        // Resolve actual family name from the database.
-        let actual_family = self
-            .db
-            .face(id)
-            .and_then(|info| info.families.first().map(|(name, _)| name.clone()))
-            .unwrap_or_else(|| query_family.to_string());
-
-        Some(FontMatch {
-            data,
-            family: actual_family,
-        })
-    }
-
     /// Find symbol, emoji, CJK, and Nerd Font fallbacks on the system.
-    ///
-    /// Searches for well-known fallback families first, then scans the
-    /// database for any font with "Nerd Font" in its family name so users
-    /// don't have to configure Nerd Font paths explicitly.
     pub fn find_fallback_fonts(&self) -> Vec<FontMatch> {
         let well_known = [
             "Symbols Nerd Font Mono",
@@ -173,7 +134,6 @@ impl SystemFontDb {
         let mut results = Vec::new();
         let mut seen_families = std::collections::HashSet::new();
 
-        // Well-known fallbacks first (highest priority).
         for &family in &well_known {
             if let Some(m) = self.query_family(family, FontStyle::Regular) {
                 tracing::debug!(family = m.family, "found well-known fallback font");
@@ -182,17 +142,32 @@ impl SystemFontDb {
             }
         }
 
-        // Scan for any Nerd Font variant installed on the system.
-        for face_info in self.db.faces() {
-            for (family_name, _) in &face_info.families {
-                if family_name.contains("Nerd Font") && !seen_families.contains(family_name) {
-                    // Prefer Mono variants for terminal use.
-                    if let Some(m) = self.query_family(family_name, FontStyle::Regular) {
-                        tracing::debug!(family = m.family, "found Nerd Font fallback");
-                        seen_families.insert(m.family.clone());
-                        results.push(m);
+        // Scan for Nerd Font variants via fc-list.
+        if self.fc_available {
+            if let Ok(output) = Command::new("fc-list")
+                .args(["--format", "%{family}\n"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    // fc-list may return comma-separated family names.
+                    for family_name in line.split(',') {
+                        let family_name = family_name.trim();
+                        if family_name.contains("Nerd Font")
+                            && !seen_families.contains(family_name)
+                        {
+                            if let Some(m) =
+                                self.query_family(family_name, FontStyle::Regular)
+                            {
+                                tracing::debug!(
+                                    family = m.family,
+                                    "found Nerd Font fallback"
+                                );
+                                seen_families.insert(m.family.clone());
+                                results.push(m);
+                            }
+                        }
                     }
-                    break;
                 }
             }
         }
@@ -202,38 +177,134 @@ impl SystemFontDb {
 
     /// Find a font that contains the given codepoint.
     ///
-    /// Scans all loaded system fonts for one whose cmap includes `c`.
-    /// Returns the font data if found. This enables on-demand fallback
-    /// for codepoints not covered by the static fallback list.
+    /// Uses `fc-match` with charset matching to find a font covering `c`.
     pub fn query_codepoint(&self, c: char) -> Option<FontMatch> {
-        for face_info in self.db.faces() {
-            // Only consider Regular weight, Normal style to avoid duplicates.
-            if face_info.weight != fontdb::Weight::NORMAL
-                || face_info.style != fontdb::Style::Normal
-            {
+        if !self.fc_available {
+            return None;
+        }
+
+        let codepoint = c as u32;
+        // fc-match can match by charset.
+        let pattern = format!("charset={codepoint:04x}");
+        let output = Command::new("fc-match")
+            .args([&pattern, "--format", "%{file}|%{family}\n"])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().next()?;
+        let (path_str, family) = line.split_once('|')?;
+
+        let path = Path::new(path_str.trim());
+        if !path.exists() {
+            return None;
+        }
+
+        let data = std::fs::read(path).ok()?;
+        tracing::debug!(family = %family.trim(), codepoint = ?c, "dynamic fallback found");
+        Some(FontMatch {
+            data,
+            family: family.trim().to_string(),
+        })
+    }
+
+    /// Query fc-match for a font file path.
+    fn query_fc_match(&self, family: &str, style: &str) -> Option<FontMatch> {
+        let pattern = format!("{family}:style={style}");
+        let output = Command::new("fc-match")
+            .args([&pattern, "--format", "%{file}|%{family}\n"])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().next()?;
+        let (path_str, family_out) = line.split_once('|')?;
+
+        let path = Path::new(path_str.trim());
+        if !path.exists() {
+            tracing::warn!(path = %path.display(), "fc-match returned non-existent path");
+            return None;
+        }
+
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), "failed to read font file: {e}");
+                return None;
+            }
+        };
+
+        Some(FontMatch {
+            data,
+            family: family_out.trim().to_string(),
+        })
+    }
+
+    /// Probe well-known font directories for a matching file.
+    fn query_probe(&self, family: &str) -> Option<FontMatch> {
+        // Build candidate filenames from the family name.
+        let normalized = family.replace(' ', "");
+        let candidates = [
+            format!("{normalized}.ttf"),
+            format!("{normalized}-Regular.ttf"),
+            format!("{normalized}.otf"),
+            format!("{normalized}-Regular.otf"),
+        ];
+
+        for dir in FONT_DIRS {
+            let base = Path::new(dir);
+            if !base.exists() {
                 continue;
             }
-            // Check if this font's cmap contains the codepoint by loading it.
-            let (src, _face_index) = self.db.face_source(face_info.id)?;
-            let data = match src {
-                fontdb::Source::Binary(arc) => arc.as_ref().as_ref().to_vec(),
-                fontdb::Source::File(path) => std::fs::read(&path).ok()?,
-                fontdb::Source::SharedFile(_path, data) => data.as_ref().as_ref().to_vec(),
-            };
-            // Use swash to check charmap without fully parsing.
-            if let Some(font_data) = swash::FontDataRef::new(&data)
-                && let Some(font_ref) = font_data.get(0)
-                && font_ref.charmap().map(c) != 0
-            {
-                let family = face_info
-                    .families
-                    .first()
-                    .map(|(n, _)| n.clone())
-                    .unwrap_or_default();
-                tracing::debug!(family = %family, codepoint = ?c, "dynamic fallback found");
-                return Some(FontMatch { data, family });
+            for candidate in &candidates {
+                if let Some(m) = self.probe_recursive(base, candidate, family) {
+                    return Some(m);
+                }
             }
         }
+        None
+    }
+
+    /// Recursively search a directory for a font file matching `filename`.
+    fn probe_recursive(&self, dir: &Path, filename: &str, family: &str) -> Option<FontMatch> {
+        let entries = std::fs::read_dir(dir).ok()?;
+        let mut subdirs: Vec<PathBuf> = Vec::new();
+
+        for entry in entries.flatten() {
+            let ft = entry.file_type().ok()?;
+            if ft.is_file() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.eq_ignore_ascii_case(filename) {
+                        let data = std::fs::read(entry.path()).ok()?;
+                        tracing::info!(
+                            path = %entry.path().display(),
+                            "found font via directory probe"
+                        );
+                        return Some(FontMatch {
+                            data,
+                            family: family.to_string(),
+                        });
+                    }
+                }
+            } else if ft.is_dir() {
+                subdirs.push(entry.path());
+            }
+        }
+
+        for sub in subdirs {
+            if let Some(m) = self.probe_recursive(&sub, filename, family) {
+                return Some(m);
+            }
+        }
+
         None
     }
 }
@@ -276,15 +347,13 @@ mod tests {
     #[test]
     fn system_font_db_loads() {
         let db = SystemFontDb::new();
-        // Should have found at least some fonts on any system with fonts installed.
-        // This test might fail in a bare container, so just check it doesn't panic.
+        // Should construct without panicking.
         let _ = db;
     }
 
     #[test]
     fn monospace_resolves() {
         let db = SystemFontDb::new();
-        // On most systems there's some monospace font. If not, this is expected to return None.
         if let Some(m) = db.query_monospace(FontStyle::Regular) {
             assert!(!m.data.is_empty());
             tracing::info!(family = m.family, "resolved monospace");
@@ -294,9 +363,7 @@ mod tests {
     #[test]
     fn nonexistent_family_falls_back() {
         let db = SystemFontDb::new();
-        // A made-up family should fall back to monospace.
         let result = db.resolve("ZZZNonexistentFontFamily999", FontStyle::Regular);
-        // If monospace exists on the system, we get a fallback.
         if let Some(m) = result {
             assert!(!m.data.is_empty());
         }

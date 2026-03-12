@@ -18,6 +18,8 @@ pub struct PlatformConfig {
     pub msaa: u32,
     /// Security settings.
     pub security: SecurityConfig,
+    /// Accessibility settings.
+    pub accessibility: AccessibilityConfig,
 }
 
 impl Default for PlatformConfig {
@@ -29,6 +31,7 @@ impl Default for PlatformConfig {
             hdr: false,
             msaa: 1,
             security: SecurityConfig::default(),
+            accessibility: AccessibilityConfig::default(),
         }
     }
 }
@@ -72,6 +75,84 @@ pub struct IconData {
     pub width: u32,
     /// Icon height in pixels.
     pub height: u32,
+}
+
+/// Accessibility settings detected from the system or user-configured.
+#[derive(Debug, Clone)]
+pub struct AccessibilityConfig {
+    /// Whether high-contrast mode is active.
+    pub high_contrast: bool,
+    /// Whether accessibility features are enabled.
+    pub enabled: bool,
+}
+
+impl AccessibilityConfig {
+    /// Detect accessibility preferences from the system.
+    ///
+    /// Reads GNOME/GTK settings via `gsettings`. Returns defaults if
+    /// gsettings is unavailable or the keys don't exist.
+    pub fn from_system() -> Self {
+        let high_contrast = Self::read_gsettings_high_contrast();
+        let enabled = high_contrast || Self::read_gsettings_a11y_enabled();
+
+        if high_contrast {
+            tracing::info!("system high-contrast mode detected");
+        }
+        if enabled {
+            tracing::info!("accessibility features enabled");
+        }
+
+        Self {
+            high_contrast,
+            enabled,
+        }
+    }
+
+    fn read_gsettings_high_contrast() -> bool {
+        // Check GTK theme name for "HighContrast".
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+            .output()
+        {
+            let theme = String::from_utf8_lossy(&output.stdout);
+            if theme.contains("HighContrast") || theme.contains("high-contrast") {
+                return true;
+            }
+        }
+
+        // Also check the high-contrast key directly.
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.a11y.interface", "high-contrast"])
+            .output()
+        {
+            let val = String::from_utf8_lossy(&output.stdout);
+            if val.trim() == "true" {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn read_gsettings_a11y_enabled() -> bool {
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "toolkit-accessibility"])
+            .output()
+        {
+            let val = String::from_utf8_lossy(&output.stdout);
+            return val.trim() == "true";
+        }
+        false
+    }
+}
+
+impl Default for AccessibilityConfig {
+    fn default() -> Self {
+        Self {
+            high_contrast: false,
+            enabled: false,
+        }
+    }
 }
 
 /// Security settings relevant to the platform layer.

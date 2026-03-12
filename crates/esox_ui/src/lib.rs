@@ -657,6 +657,16 @@ impl<'f> Ui<'f> {
         )
     }
 
+    /// Push an accessibility node into the frame's a11y tree.
+    ///
+    /// Widgets call this after `register_widget` to emit their a11y representation.
+    /// If a11y is disabled, this is a no-op.
+    pub(crate) fn push_a11y_node(&mut self, node: state::A11yNode) {
+        if self.state.a11y_enabled {
+            self.state.a11y_tree.push(node);
+        }
+    }
+
     // ── Context Menu ──
 
     /// Open a context menu at the current mouse position. Call when `response.right_clicked`.

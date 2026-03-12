@@ -21,7 +21,7 @@ esox_ui = { path = "crates/esox_ui" }
 esox_platform = { path = "crates/esox_platform" }
 
 # GPU / rendering
-wgpu = "28.0"
+wgpu = { version = "28.0", default-features = false, features = ["vulkan", "wgsl"] }
 naga = "28.0"
 bytemuck = { version = "1", features = ["derive"] }
 raw-window-handle = "0.6"
@@ -30,7 +30,6 @@ raw-window-handle = "0.6"
 winit = "0.30"
 
 # Text
-fontdb = "0.22"
 rustybuzz = "0.20"
 swash = "0.2"
 
@@ -45,3 +44,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 overflow-checks = true
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "s"

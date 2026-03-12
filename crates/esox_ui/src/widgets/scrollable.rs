@@ -25,8 +25,11 @@ impl<'f> Ui<'f> {
         let content_width = self.region.w - scrollbar_w;
         let container = self.allocate_rect(self.region.w, visible_height);
 
-        // Read current scroll offset.
-        let scroll_offset = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+        // Read current scroll offset (and mark as accessed).
+        let scroll_offset = match self.state.scroll_offsets.get_mut(&id) {
+            Some((off, age)) => { *age = 0; *off }
+            None => 0.0,
+        };
 
         // --- Save layout state ---
         let saved_cursor = self.cursor;
@@ -111,7 +114,7 @@ impl<'f> Ui<'f> {
 
         // Clamp and store.
         offset = offset.clamp(0.0, max_scroll);
-        self.state.scroll_offsets.insert(id, offset);
+        self.state.scroll_offsets.insert(id, (offset, 0));
 
         // --- Draw scrollbar ---
         let hovered_container = container.contains(self.state.mouse.x, self.state.mouse.y);

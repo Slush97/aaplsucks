@@ -40,7 +40,7 @@ impl TextShaper {
             .chars()
             .enumerate()
             .map(|(i, c)| {
-                let glyph_id = charmap.map(c);
+                let glyph_id = u32::from(charmap.map(c));
                 ShapedGlyph {
                     glyph_id,
                     x_offset: 0.0,
@@ -81,7 +81,7 @@ impl TextShaper {
             .iter()
             .zip(positions.iter())
             .map(|(info, pos)| ShapedGlyph {
-                glyph_id: info.glyph_id as u16,
+                glyph_id: info.glyph_id,
                 x_offset: pos.x_offset as f32 * scale,
                 y_offset: pos.y_offset as f32 * scale,
                 x_advance: pos.x_advance as f32 * scale,
@@ -127,7 +127,7 @@ impl TextShaper {
             .iter()
             .zip(positions.iter())
             .map(|(info, pos)| ShapedGlyph {
-                glyph_id: info.glyph_id as u16,
+                glyph_id: info.glyph_id,
                 x_offset: pos.x_offset as f32 * scale,
                 y_offset: pos.y_offset as f32 * scale,
                 x_advance: pos.x_advance as f32 * scale,

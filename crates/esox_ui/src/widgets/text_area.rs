@@ -100,7 +100,7 @@ impl<'f> Ui<'f> {
 
         // ── Click — place cursor ──
         if response.clicked {
-            let scroll_y = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+            let scroll_y = match self.state.scroll_offsets.get_mut(&id) { Some((off, age)) => { *age = 0; *off } None => 0.0 };
             let click_x = self.state.mouse.x;
             let click_y = self.state.mouse.y;
             input.cursor = xy_to_cursor(input, &mut self.text, rect, click_x, click_y, scroll_y, font_size, pad, lh);
@@ -124,7 +124,7 @@ impl<'f> Ui<'f> {
         }
 
         // ── Scroll ──
-        let scroll_y = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+        let scroll_y = match self.state.scroll_offsets.get_mut(&id) { Some((off, age)) => { *age = 0; *off } None => 0.0 };
         let content_height = line_count(&input.text) as f32 * lh;
         let inner_h = visible_height - pad * 2.0;
         let max_scroll = (content_height - inner_h).max(0.0);
@@ -152,7 +152,7 @@ impl<'f> Ui<'f> {
         }
 
         offset = offset.clamp(0.0, max_scroll);
-        self.state.scroll_offsets.insert(id, offset);
+        self.state.scroll_offsets.insert(id, (offset, 0));
 
         // ── Draw ──
 
@@ -350,7 +350,7 @@ impl<'f> Ui<'f> {
 
         // Click — place cursor.
         if response.clicked {
-            let scroll_y = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+            let scroll_y = match self.state.scroll_offsets.get_mut(&id) { Some((off, age)) => { *age = 0; *off } None => 0.0 };
             let click_x = self.state.mouse.x;
             let click_y = self.state.mouse.y;
             let text_y = rect.y + pad;
@@ -427,7 +427,7 @@ impl<'f> Ui<'f> {
         }
 
         // Scroll.
-        let scroll_y = *self.state.scroll_offsets.get(&id).unwrap_or(&0.0);
+        let scroll_y = match self.state.scroll_offsets.get_mut(&id) { Some((off, age)) => { *age = 0; *off } None => 0.0 };
         let content_height = total_visual as f32 * lh;
         let inner_h = visible_height - pad * 2.0;
         let max_scroll = (content_height - inner_h).max(0.0);
@@ -454,7 +454,7 @@ impl<'f> Ui<'f> {
         }
 
         offset = offset.clamp(0.0, max_scroll);
-        self.state.scroll_offsets.insert(id, offset);
+        self.state.scroll_offsets.insert(id, (offset, 0));
 
         // Draw.
         if response.focused {

@@ -604,8 +604,8 @@ pub struct UiState {
     pub cursor_blink: bool,
     /// When the cursor blink last toggled.
     pub cursor_blink_time: Instant,
-    /// Scroll offsets keyed by widget ID.
-    pub scroll_offsets: HashMap<u64, f32>,
+    /// Scroll offsets keyed by widget ID: (offset, frames_since_last_access).
+    pub scroll_offsets: HashMap<u64, (f32, u32)>,
     /// Overlay (dropdown / context menu) state.
     pub overlay: Option<Overlay>,
     /// Tooltip state.
@@ -951,6 +951,11 @@ impl UiState {
             let elapsed = t.created.elapsed().as_millis() as u64;
             // Keep for duration + fade_out time (300ms).
             elapsed < t.duration_ms + 300
+        });
+        // Prune stale scroll offsets (not accessed for >300 frames ≈ 5s at 60fps).
+        self.scroll_offsets.retain(|_, (_, age)| {
+            *age += 1;
+            *age <= 300
         });
         // Prune settled hover animations when the map grows large.
         // Active widgets call hover_t() each frame, keeping their entries alive.

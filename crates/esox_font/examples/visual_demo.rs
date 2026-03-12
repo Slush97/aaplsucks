@@ -84,7 +84,7 @@ fn main() {
         println!("--- Cell clipping analysis ---");
         for ch in text.chars() {
             let font_ref = face.as_swash_ref();
-            let glyph_id = font_ref.charmap().map(ch);
+            let glyph_id = u32::from(font_ref.charmap().map(ch));
             let rast = rasterizer.rasterize(&face, glyph_id, size, 0).unwrap();
             let glyph_top = metrics.ascent - rast.bearing_y;
             let glyph_bottom = glyph_top + rast.height as f32;

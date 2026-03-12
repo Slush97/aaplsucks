@@ -4,7 +4,7 @@ use esox_gfx::ShapeBuilder;
 
 use crate::paint;
 use crate::response::Response;
-use crate::state::{InputState, WidgetKind};
+use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
 use crate::Ui;
 
 impl<'f> Ui<'f> {
@@ -26,6 +26,13 @@ impl<'f> Ui<'f> {
         // Parse current value, clamped to range.
         let current: f32 = input.text.parse().unwrap_or(min);
         let mut value = current.clamp(min, max);
+
+        self.push_a11y_node(A11yNode {
+            id, role: A11yRole::Slider, label: String::new(),
+            value: Some(input.text.clone()), rect, focused: response.focused, disabled,
+            expanded: None, selected: None, checked: None,
+            value_range: Some((min, max, value)), children: Vec::new(),
+        });
 
         // Handle click — map x to value.
         if response.clicked {

@@ -114,18 +114,19 @@ impl Scene {
 
     /// Remove a node and all its children from the scene.
     pub fn remove(&mut self, id: NodeId) {
-        if let Some(node) = self.nodes[id.0].take() {
-            // Recursively remove children.
-            for child in node.children {
-                self.remove(child);
+        // Iterative depth-first removal to avoid stack overflow on deep trees.
+        let mut stack = vec![id];
+        while let Some(nid) = stack.pop() {
+            if let Some(node) = self.nodes[nid.0].take() {
+                stack.extend(&node.children);
+                // Remove from parent's child list (only for the root of the removal).
+                if let Some(parent_id) = node.parent
+                    && let Some(Some(parent)) = self.nodes.get_mut(parent_id.0)
+                {
+                    parent.children.retain(|c| *c != nid);
+                }
+                self.free_list.push(nid.0);
             }
-            // Remove from parent's child list.
-            if let Some(parent_id) = node.parent
-                && let Some(Some(parent)) = self.nodes.get_mut(parent_id.0)
-            {
-                parent.children.retain(|c| *c != id);
-            }
-            self.free_list.push(id.0);
         }
     }
 
@@ -161,14 +162,84 @@ impl Scene {
     /// cleared and filled with the resolved primitives, then sorted by z-order.
     pub fn collect_primitives_into(&self, out: &mut Vec<ResolvedPrimitive>) {
         out.clear();
-        // Find root nodes (no parent).
+
+        // Iterative depth-first traversal to avoid stack overflow on deep trees.
+        // Each work item carries the inherited absolute offset, clip, opacity, and z_order.
+        let mut stack: Vec<(NodeId, f32, f32, Option<Rect>, f32, i32)> = Vec::new();
+
+        // Seed with root nodes (no parent).
         for (idx, slot) in self.nodes.iter().enumerate() {
             if let Some(node) = slot
                 && node.parent.is_none()
             {
-                self.collect_node(NodeId(idx), (0.0, 0.0), None, 1.0, 0, out);
+                stack.push((NodeId(idx), 0.0, 0.0, None, 1.0, 0));
             }
         }
+
+        while let Some((id, parent_abs_x, parent_abs_y, parent_clip, parent_opacity, parent_z_order)) = stack.pop() {
+            let Some(node) = self.get(id) else { continue };
+
+            let abs_x = parent_abs_x + node.offset.0;
+            let abs_y = parent_abs_y + node.offset.1;
+            let opacity = parent_opacity * node.opacity;
+            let z_order = parent_z_order + node.z_order;
+
+            // Compute effective clip.
+            let clip = match (parent_clip, node.clip) {
+                (None, None) => None,
+                (Some(c), None) => Some(c),
+                (None, Some(local)) => {
+                    Some(Rect {
+                        x: abs_x + local.x,
+                        y: abs_y + local.y,
+                        width: local.width,
+                        height: local.height,
+                    })
+                }
+                (Some(parent), Some(local)) => {
+                    let abs_local = Rect {
+                        x: abs_x + local.x,
+                        y: abs_y + local.y,
+                        width: local.width,
+                        height: local.height,
+                    };
+                    rect_intersect(parent, abs_local)
+                }
+            };
+
+            // Emit primitives from this node.
+            match &node.content {
+                NodeContent::Container => {}
+                NodeContent::Leaf(p) => {
+                    out.push(ResolvedPrimitive {
+                        primitive: offset_primitive(p, abs_x, abs_y),
+                        clip,
+                        opacity,
+                        z_order,
+                    });
+                }
+                NodeContent::Batch(prims) => {
+                    for p in prims {
+                        out.push(ResolvedPrimitive {
+                            primitive: offset_primitive(p, abs_x, abs_y),
+                            clip,
+                            opacity,
+                            z_order,
+                        });
+                    }
+                }
+            }
+
+            // Push children onto the stack (reverse order to preserve left-to-right traversal).
+            let num_children = node.children.len();
+            for ci in (0..num_children).rev() {
+                let child_id = self.nodes[id.0].as_ref().map(|n| n.children[ci]);
+                if let Some(child) = child_id {
+                    stack.push((child, abs_x, abs_y, clip, opacity, z_order));
+                }
+            }
+        }
+
         out.sort_by_key(|rp| rp.z_order);
     }
 
@@ -180,82 +251,6 @@ impl Scene {
         let mut out = Vec::new();
         self.collect_primitives_into(&mut out);
         out
-    }
-
-    fn collect_node(
-        &self,
-        id: NodeId,
-        abs_offset: (f32, f32),
-        parent_clip: Option<Rect>,
-        parent_opacity: f32,
-        parent_z_order: i32,
-        out: &mut Vec<ResolvedPrimitive>,
-    ) {
-        let Some(node) = self.get(id) else { return };
-
-        let abs_x = abs_offset.0 + node.offset.0;
-        let abs_y = abs_offset.1 + node.offset.1;
-        let opacity = parent_opacity * node.opacity;
-        let z_order = parent_z_order + node.z_order;
-
-        // Compute effective clip.
-        let clip = match (parent_clip, node.clip) {
-            (None, None) => None,
-            (Some(c), None) => Some(c),
-            (None, Some(local)) => {
-                // Translate local clip to absolute coordinates.
-                Some(Rect {
-                    x: abs_x + local.x,
-                    y: abs_y + local.y,
-                    width: local.width,
-                    height: local.height,
-                })
-            }
-            (Some(parent), Some(local)) => {
-                // Translate local clip to absolute and intersect with parent.
-                let abs_local = Rect {
-                    x: abs_x + local.x,
-                    y: abs_y + local.y,
-                    width: local.width,
-                    height: local.height,
-                };
-                rect_intersect(parent, abs_local)
-            }
-        };
-
-        // Emit primitives from this node.
-        match &node.content {
-            NodeContent::Container => {}
-            NodeContent::Leaf(p) => {
-                out.push(ResolvedPrimitive {
-                    primitive: offset_primitive(p, abs_x, abs_y),
-                    clip,
-                    opacity,
-                    z_order,
-                });
-            }
-            NodeContent::Batch(prims) => {
-                for p in prims {
-                    out.push(ResolvedPrimitive {
-                        primitive: offset_primitive(p, abs_x, abs_y),
-                        clip,
-                        opacity,
-                        z_order,
-                    });
-                }
-            }
-        }
-
-        // Recurse into children using index-based iteration to avoid cloning
-        // the children Vec (the node count doesn't change during collection).
-        let num_children = node.children.len();
-        for ci in 0..num_children {
-            // Re-borrow each iteration; safe because collect_node only reads.
-            let child_id = self.nodes[id.0].as_ref().map(|n| n.children[ci]);
-            if let Some(child) = child_id {
-                self.collect_node(child, (abs_x, abs_y), clip, opacity, z_order, out);
-            }
-        }
     }
 }
 

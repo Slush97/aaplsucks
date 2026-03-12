@@ -164,7 +164,7 @@ mod tests {
 
     fn glyph_key(face: &FontFace, c: char) -> GlyphKey {
         let font_ref = face.as_swash_ref();
-        let glyph_id = font_ref.charmap().map(c);
+        let glyph_id = u32::from(font_ref.charmap().map(c));
         GlyphKey {
             font_id: face.id(),
             glyph_id,

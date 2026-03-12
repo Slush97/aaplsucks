@@ -3,7 +3,7 @@
 use crate::id::HOVER_SALT;
 use crate::paint;
 use crate::response::Response;
-use crate::state::{InputState, WidgetKind};
+use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
 use crate::Ui;
 
 /// Box size in logical pixels.
@@ -19,6 +19,13 @@ impl<'f> Ui<'f> {
         let mut response = self.widget_response(id, rect);
         let checked = input.text == "true";
         let disabled = response.disabled;
+
+        self.push_a11y_node(A11yNode {
+            id, role: A11yRole::Checkbox, label: label.to_string(),
+            value: None, rect, focused: response.focused, disabled,
+            expanded: None, selected: None, checked: Some(checked),
+            value_range: None, children: Vec::new(),
+        });
 
         if response.clicked {
             input.text = if checked { "false".into() } else { "true".into() };

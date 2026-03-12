@@ -7,7 +7,6 @@ description = "Font shaping, rasterization, and atlas management"
 
 [dependencies]
 esox_gfx = { workspace = true }
-fontdb = { workspace = true }
 rustybuzz = { workspace = true }
 swash = { workspace = true }
 thiserror = { workspace = true }

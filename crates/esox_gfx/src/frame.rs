@@ -172,6 +172,19 @@ impl Frame {
         self.instances.len()
     }
 
+    /// Replace an existing instance at `index` (e.g. to backfill a placeholder).
+    ///
+    /// If an active clip is set, it is stamped onto the instance.
+    /// Out-of-bounds indices are silently ignored.
+    pub fn replace_instance(&mut self, index: usize, mut inst: QuadInstance) {
+        if let Some(clip) = self.active_clip {
+            inst.clip_rect = clip;
+        }
+        if index < self.instances.len() {
+            self.instances[index] = inst;
+        }
+    }
+
     /// Append a slice of pre-built instances (e.g. from a cache).
     ///
     /// If an active clip is set, each instance's `clip_rect` is overwritten.
@@ -385,6 +398,22 @@ impl Default for Frame {
     }
 }
 
+/// A pre-acquired surface texture and view, for sharing between render passes.
+pub struct SurfaceFrame {
+    /// The surface texture (must be presented after all passes complete).
+    pub texture: wgpu::SurfaceTexture,
+    /// View into the surface texture.
+    pub view: wgpu::TextureView,
+}
+
+/// Controls whether the 2D render pass clears or loads the color target.
+pub enum ColorLoadOp {
+    /// Clear the target to the given color (normal 2D-only path).
+    Clear(wgpu::Color),
+    /// Load existing content (preserves 3D content rendered earlier).
+    Load,
+}
+
 /// Optional offscreen rendering configuration for post-processing.
 pub struct PostProcessPass<'a> {
     /// The offscreen target to render the scene into.
@@ -441,6 +470,38 @@ impl FrameEncoder {
             uniforms,
             bg_color,
             registry,
+            post_process,
+            msaa_view,
+            depth_view,
+        )
+    }
+
+    /// Encode and submit using a pre-acquired surface with a custom load op.
+    ///
+    /// When `color_load_op` is `ColorLoadOp::Load`, existing surface content
+    /// (e.g. from a prior 3D pass) is preserved. MSAA is skipped for `Load`
+    /// to avoid clobbering the 3D content during resolve.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_and_submit_with_surface(
+        gpu: &GpuContext,
+        resources: &mut RenderResources,
+        frame: &mut Frame,
+        uniforms: &FrameUniforms,
+        registry: &PipelineRegistry,
+        surface: SurfaceFrame,
+        color_load_op: ColorLoadOp,
+        post_process: Option<PostProcessPass<'_>>,
+        msaa_view: Option<&wgpu::TextureView>,
+        depth_view: Option<&wgpu::TextureView>,
+    ) -> Result<(), crate::error::Error> {
+        Self::encode_and_submit_surface_inner(
+            gpu,
+            resources,
+            frame,
+            uniforms,
+            registry,
+            surface,
+            color_load_op,
             post_process,
             msaa_view,
             depth_view,
@@ -669,6 +730,226 @@ impl FrameEncoder {
 
         gpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        Ok(())
+    }
+
+    /// Internal implementation for pre-acquired surface rendering.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_and_submit_surface_inner(
+        gpu: &GpuContext,
+        resources: &mut RenderResources,
+        frame: &mut Frame,
+        uniforms: &FrameUniforms,
+        registry: &PipelineRegistry,
+        surface: SurfaceFrame,
+        color_load_op: ColorLoadOp,
+        post_process: Option<PostProcessPass<'_>>,
+        msaa_view: Option<&wgpu::TextureView>,
+        depth_view: Option<&wgpu::TextureView>,
+    ) -> Result<(), crate::error::Error> {
+        let instance_count = frame.instance_count();
+
+        // Upload uniforms.
+        gpu.queue
+            .write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+
+        let instance_count = if instance_count > MAX_INSTANCES {
+            tracing::warn!(
+                count = instance_count,
+                max = MAX_INSTANCES,
+                "instance count exceeds maximum, clamping"
+            );
+            MAX_INSTANCES
+        } else {
+            instance_count
+        };
+
+        // Double-buffered ping-pong.
+        resources.flip_instance_buffer();
+
+        // Resize instance buffer if needed.
+        let cur_cap = resources.current_instance_capacity();
+        if instance_count > cur_cap {
+            let new_cap = instance_count.saturating_mul(2).clamp(256, MAX_INSTANCES);
+            resources.resize_current_buffer(&gpu.device, new_cap);
+            resources.underutilization_frames = 0;
+        } else if instance_count < cur_cap / 4 && cur_cap > 256 {
+            resources.underutilization_frames += 1;
+            if resources.underutilization_frames >= 60 {
+                let new_cap = (cur_cap / 2).max(256);
+                resources.resize_current_buffer(&gpu.device, new_cap);
+                resources.underutilization_frames = 0;
+            }
+        } else {
+            resources.underutilization_frames = 0;
+        }
+
+        let surface_view = &surface.view;
+
+        // Determine render target.
+        let scene_target = match &post_process {
+            Some(pp) => &pp.offscreen.render_view,
+            None => surface_view,
+        };
+
+        // Upload instance data.
+        if instance_count > 0 {
+            let data = bytemuck::cast_slice(frame.instance_data());
+            gpu.queue
+                .write_buffer(resources.current_instance_buffer(), 0, data);
+        }
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame_encoder_surface"),
+            });
+
+        // ── Pass 1: Scene rendering ──
+        {
+            // When ColorLoadOp::Load, skip MSAA to avoid clobbering 3D content
+            // during resolve. Render 2D directly at sample_count=1.
+            let use_msaa = matches!(color_load_op, ColorLoadOp::Clear(_)) && msaa_view.is_some();
+            let (view, resolve) = if use_msaa {
+                (msaa_view.unwrap(), Some(scene_target))
+            } else {
+                (scene_target, None)
+            };
+
+            let load_op = match color_load_op {
+                ColorLoadOp::Clear(c) => wgpu::LoadOp::Clear(c),
+                ColorLoadOp::Load => wgpu::LoadOp::Load,
+            };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("quad_render_pass_surface"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: load_op,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: depth_view.map(|view| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                    }
+                }),
+                ..Default::default()
+            });
+
+            if instance_count > 0 {
+                frame.build_batches();
+
+                pass.set_bind_group(0, Some(&resources.bind_group), &[]);
+                pass.set_vertex_buffer(0, resources.quad_vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, resources.current_instance_buffer().slice(..));
+
+                let vp_w = gpu.config.width;
+                let vp_h = gpu.config.height;
+                let mut current_pipeline_id: Option<u32> = None;
+
+                for batch in frame.batches() {
+                    let pip_id = if batch.phase == RenderPhase::OpaqueBackground
+                        && batch.pipeline_id == crate::primitive::PIPELINE_SDF_2D.0
+                    {
+                        crate::primitive::PIPELINE_SDF_2D_OPAQUE.0
+                    } else {
+                        batch.pipeline_id
+                    };
+                    if current_pipeline_id != Some(pip_id) {
+                        let sid = crate::primitive::ShaderId(pip_id);
+                        let pipeline = match registry.get(sid) {
+                            Some(handle) => &handle.pipeline,
+                            None => {
+                                tracing::warn!(
+                                    pipeline_id = pip_id,
+                                    "skipping batch: pipeline not found"
+                                );
+                                continue;
+                            }
+                        };
+                        pass.set_pipeline(pipeline);
+                        current_pipeline_id = Some(pip_id);
+                    }
+
+                    if batch.clip_key.is_full_viewport() {
+                        pass.set_scissor_rect(0, 0, vp_w, vp_h);
+                    } else {
+                        let x = batch.clip_key.x.min(vp_w);
+                        let y = batch.clip_key.y.min(vp_h);
+                        let w = batch.clip_key.w.min(vp_w.saturating_sub(x));
+                        let h = batch.clip_key.h.min(vp_h.saturating_sub(y));
+                        if w == 0 || h == 0 {
+                            continue;
+                        }
+                        pass.set_scissor_rect(x, y, w, h);
+                    }
+
+                    let end = batch.first_instance + batch.instance_count;
+                    pass.draw(0..4, batch.first_instance..end);
+                }
+            }
+        }
+
+        // ── Pass 1.5: Bloom ──
+        if let Some(pp) = &post_process
+            && let Some(bloom) = pp.bloom
+        {
+            let down_id = crate::bloom::PIPELINE_BLOOM_DOWNSAMPLE;
+            let up_id = crate::bloom::PIPELINE_BLOOM_UPSAMPLE;
+            if let (Some(down), Some(up)) = (registry.get(down_id), registry.get(up_id)) {
+                bloom.encode(&mut encoder, &gpu.queue, &down.pipeline, &up.pipeline);
+            }
+        }
+
+        // ── Pass 2: Post-process ──
+        if let Some(pp) = &post_process {
+            let pp_pipeline = match registry.get(pp.pipeline_id) {
+                Some(handle) => &handle.pipeline,
+                None => {
+                    tracing::warn!(
+                        pipeline_id = pp.pipeline_id.0,
+                        "post-process pipeline not found, skipping"
+                    );
+                    gpu.queue.submit(std::iter::once(encoder.finish()));
+                    surface.texture.present();
+                    return Ok(());
+                }
+            };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("post_process_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+
+            pass.set_pipeline(pp_pipeline);
+            pass.set_bind_group(0, Some(&pp.offscreen.sample_bind_group), &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+        surface.texture.present();
         Ok(())
     }
 }

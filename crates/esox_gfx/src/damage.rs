@@ -71,7 +71,8 @@ impl DamageTracker {
     pub fn new() -> Self {
         Self {
             regions: Vec::new(),
-            full_invalidation: false,
+            // Start with full invalidation so the first frame always renders.
+            full_invalidation: true,
         }
     }
 
@@ -217,8 +218,15 @@ mod tests {
     // ── DamageTracker ──
 
     #[test]
-    fn tracker_starts_empty() {
+    fn tracker_starts_with_full_invalidation() {
         let t = DamageTracker::new();
+        assert!(t.is_full_invalidation());
+    }
+
+    #[test]
+    fn tracker_empty_after_reset() {
+        let mut t = DamageTracker::new();
+        t.reset();
         assert!(!t.is_full_invalidation());
         assert_eq!(t.regions().unwrap().len(), 0);
     }
@@ -226,6 +234,7 @@ mod tests {
     #[test]
     fn tracker_add_regions() {
         let mut t = DamageTracker::new();
+        t.reset(); // clear initial full invalidation
         t.add(DamageRect::new(0.0, 0.0, 10.0, 10.0));
         t.add(DamageRect::new(5.0, 5.0, 10.0, 10.0));
         assert_eq!(t.regions().unwrap().len(), 2);

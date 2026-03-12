@@ -27,6 +27,8 @@ pub struct GpuContext {
     pub hdr_active: bool,
     /// Depth/stencil texture format used by all scene-pass pipelines.
     pub depth_format: wgpu::TextureFormat,
+    /// Whether the GPU supports `MULTI_DRAW_INDIRECT`.
+    pub multi_draw_indirect: bool,
 }
 
 impl GpuContext {
@@ -61,9 +63,22 @@ impl GpuContext {
             "GPU adapter selected"
         );
 
+        // Request optional features if the adapter supports them.
+        // INDIRECT_FIRST_INSTANCE is required for multi_draw_indexed_indirect
+        // with per-draw instance offsets (first_instance must be 0 without it).
+        let desired_features = wgpu::Features::MULTI_DRAW_INDIRECT_COUNT
+            | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        let enabled_features = adapter.features() & desired_features;
+        let multi_draw_indirect =
+            enabled_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        if multi_draw_indirect {
+            tracing::info!("INDIRECT_FIRST_INSTANCE supported — multi-draw-indirect enabled");
+        }
+
         let (raw_device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("esox_gfx device"),
+                required_features: enabled_features,
                 ..Default::default()
             })
             .await?;
@@ -119,6 +134,7 @@ impl GpuContext {
             sample_count: 1,
             hdr_active,
             depth_format: wgpu::TextureFormat::Depth24PlusStencil8,
+            multi_draw_indirect,
         })
     }
 
@@ -129,6 +145,18 @@ impl GpuContext {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
         }
+    }
+
+    /// Acquire the current surface texture for rendering.
+    ///
+    /// Returns a [`SurfaceFrame`] that can be passed to both 3D and 2D
+    /// render passes before presenting.
+    pub fn acquire_surface(&self) -> Result<crate::frame::SurfaceFrame, wgpu::SurfaceError> {
+        let texture = self.surface.get_current_texture()?;
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        Ok(crate::frame::SurfaceFrame { texture, view })
     }
 }
 

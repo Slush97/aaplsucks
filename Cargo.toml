@@ -5,9 +5,11 @@ members = [
     "crates/esox_font",
     "crates/esox_ui",
     "crates/esox_platform",
+    "crates/esox_engine",
     "examples/demo",
     "examples/demo3d",
     "examples/bench3d",
+    "examples/engine_demo",
     "apps/dwnldr-gui",
 ]
 
@@ -22,6 +24,7 @@ esox_gfx = { path = "crates/esox_gfx" }
 esox_font = { path = "crates/esox_font" }
 esox_ui = { path = "crates/esox_ui" }
 esox_platform = { path = "crates/esox_platform" }
+esox_engine = { path = "crates/esox_engine" }
 
 # GPU / rendering
 wgpu = { version = "28.0", default-features = false, features = ["vulkan", "wgsl"] }

@@ -1,0 +1,28 @@
+[package]
+name = "esox_engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+audio = ["dep:kira"]
+gamepad = ["dep:gilrs"]
+hot-reload = ["dep:notify"]
+ui = ["dep:esox_ui", "dep:esox_font"]
+
+[dependencies]
+esox_gfx = { workspace = true, features = ["mesh3d"] }
+esox_platform = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+hecs = "0.10"
+glam = "0.29"
+tracing = { workspace = true }
+
+# Optional
+kira = { version = "0.12", optional = true, default-features = false, features = ["cpal"] }
+gilrs = { version = "0.11", optional = true }
+notify = { version = "7", optional = true }
+esox_ui = { workspace = true, optional = true }
+esox_font = { workspace = true, optional = true }

@@ -5,6 +5,7 @@ pub mod perf;
 pub mod sandbox;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -1269,9 +1270,6 @@ impl ApplicationHandler<AppUserEvent> for App {
                         None
                     };
 
-                    let instance_count = self.frame.instance_count() as u32;
-                    let batch_count = self.frame.batch_count() as u32;
-
                     if let Err(e) = esox_gfx::FrameEncoder::encode_and_submit_with_post_process(
                         gpu,
                         resources,
@@ -1286,6 +1284,9 @@ impl ApplicationHandler<AppUserEvent> for App {
                         tracing::error!("render error: {e}");
                     }
 
+                    // Read counts after encoding (build_batches runs inside the encoder).
+                    let instance_count = self.frame.instance_count() as u32;
+                    let batch_count = self.frame.batch_count() as u32;
                     self.perf.end_frame(instance_count, batch_count);
                     self.frame_number += 1;
                 }
@@ -1350,6 +1351,16 @@ impl ApplicationHandler<AppUserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Check for signal-triggered exit (SIGTERM/SIGINT).
+        if SIGNAL_EXIT.load(Ordering::SeqCst) {
+            self.write_perf_report();
+            if let Some(w) = self.window.as_ref() {
+                self.delegate.on_close(w);
+            }
+            event_loop.exit();
+            // Exit cleanly to avoid winit teardown issues from signal context.
+            std::process::exit(0);
+        }
         if self.redraw_pending {
             return;
         }
@@ -1382,7 +1393,24 @@ impl ApplicationHandler<AppUserEvent> for App {
 ///
 /// This creates a winit event loop, builds an [`App`] from the given config
 /// and delegate, and blocks until the window is closed.
+/// Global flag set by signal handlers to request graceful shutdown.
+static SIGNAL_EXIT: AtomicBool = AtomicBool::new(false);
+
+/// Install signal handlers so SIGTERM/SIGINT trigger a graceful exit
+/// (allowing perf report to be written).
+fn install_signal_handlers() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        extern "C" fn handler(_sig: libc::c_int) {
+            SIGNAL_EXIT.store(true, Ordering::SeqCst);
+        }
+        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
+    }
+}
+
 pub fn run(config: crate::config::PlatformConfig, delegate: Box<dyn AppDelegate>) -> Result<(), Error> {
+    install_signal_handlers();
     let event_loop = winit::event_loop::EventLoop::<AppUserEvent>::with_user_event()
         .build()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -1393,6 +1421,8 @@ pub fn run(config: crate::config::PlatformConfig, delegate: Box<dyn AppDelegate>
     event_loop
         .run_app(&mut app)
         .map_err(|e| Error::EventLoop(e.to_string()))?;
+    // Write report after event loop exits (covers normal close).
+    app.write_perf_report();
     Ok(())
 }
 

@@ -3,6 +3,7 @@
 pub mod button;
 pub mod checkbox;
 pub mod drop_zone;
+pub mod image;
 pub mod label;
 pub mod modal;
 pub mod select;

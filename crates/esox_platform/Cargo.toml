@@ -19,6 +19,19 @@ libc = "0.2"
 seccompiler = { version = "0.4", optional = true }
 landlock = { version = "0.4", optional = true }
 
+[dependencies.zbus]
+workspace = true
+optional = true
+
+[dependencies.tokio]
+workspace = true
+optional = true
+
+[dependencies.esox_ui]
+workspace = true
+optional = true
+
 [features]
 default = []
 sandbox = ["seccompiler", "landlock"]
+a11y = ["zbus", "tokio", "esox_ui"]

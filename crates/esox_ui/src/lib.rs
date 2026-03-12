@@ -20,12 +20,13 @@ pub use paint::lerp_color;
 pub use response::Response;
 pub use rich_text::{RichText, Span};
 pub use state::{
-    A11yRole, A11yTree, DragPayload, DropZoneState, Easing, InputState, ModalAction, SelectState,
-    SortDirection, TabState, TableState, ToastKind, ToastQueue, TooltipState, TreeState, UiState,
-    VirtualScrollState, WidgetKind,
+    A11yRole, A11yTree, ClipboardProvider, DragPayload, DropZoneState, Easing, ImeState,
+    InputState, ModalAction, SelectState, SortDirection, TabState, TableState, ToastKind,
+    ToastQueue, TooltipState, TreeState, UiState, VirtualScrollState, WidgetKind,
 };
 pub use text::TextRenderer;
 pub use theme::{Theme, ThemeBuilder, ThemeTransition};
+pub use widgets::image::{ImageCache, ImageHandle};
 pub use widgets::table::{ColumnWidth, TableColumn};
 pub use widgets::tree::TreeNodeResponse;
 
@@ -307,6 +308,74 @@ impl<'f> Ui<'f> {
         f(self);
 
         self.cursor.x = saved_cursor_x;
+        self.region = saved_region;
+    }
+
+    /// Animated tree indent — draws children with a clip-rect height animation.
+    ///
+    /// `anim_id` should be a unique ID for this tree node (used for the animation).
+    /// `expanded` is the current expand state. Children are always drawn (for
+    /// measurement), but clipped during the animation.
+    pub fn animated_tree_indent(
+        &mut self,
+        anim_id: u64,
+        expanded: bool,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let indent = self.theme.tree_indent;
+        let duration = self.theme.tree_expand_duration_ms;
+        let target = if expanded { 1.0 } else { 0.0 };
+        let t = self.state.anim_t(anim_id, target, duration, state::Easing::EaseOutCubic);
+
+        // If fully collapsed and animation settled, skip drawing entirely.
+        if t < 0.001 && !expanded {
+            return;
+        }
+
+        let saved_cursor_x = self.cursor.x;
+        let saved_cursor_y = self.cursor.y;
+        let saved_region = self.region;
+        let saved_clip = self.frame.active_clip();
+
+        self.cursor.x += indent;
+        self.region = Rect::new(
+            self.cursor.x,
+            self.region.y,
+            self.region.w - indent,
+            self.region.h,
+        );
+
+        let start_y = self.cursor.y;
+
+        // Set clip rect if animating (0 < t < 1).
+        let cached_h = self.state.tree_children_heights.get(&anim_id).copied().unwrap_or(0.0);
+        if t < 0.999 {
+            let clip_h = cached_h * t;
+            self.frame.set_active_clip(Some([
+                saved_cursor_x,
+                start_y,
+                saved_region.w,
+                clip_h,
+            ]));
+        }
+
+        f(self);
+
+        let children_h = self.cursor.y - start_y;
+        self.state.tree_children_heights.insert(anim_id, children_h);
+
+        // Restore clip.
+        self.frame.set_active_clip(saved_clip);
+
+        // Advance cursor by animated height.
+        let visible_h = if t >= 0.999 {
+            children_h
+        } else {
+            cached_h * t
+        };
+
+        self.cursor.x = saved_cursor_x;
+        self.cursor.y = saved_cursor_y + visible_h;
         self.region = saved_region;
     }
 

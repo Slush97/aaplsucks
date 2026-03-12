@@ -2,15 +2,29 @@ use std::collections::HashMap;
 
 use esox_gfx::{Frame, GpuContext, RenderResources};
 use esox_platform::config::{PlatformConfig, WindowConfig};
-use esox_platform::{AppDelegate, MouseInputEvent};
+use esox_platform::{AppDelegate, Clipboard, MouseInputEvent};
 use esox_ui::{
-    fnv1a_mix, id, ColumnWidth, InputState, Rect, RichText, SelectState, TabState, TableColumn,
-    TableState, TextRenderer, Theme, TreeState, UiState, VirtualScrollState,
+    fnv1a_mix, id, ClipboardProvider, ColumnWidth, InputState, Rect, RichText, SelectState,
+    TabState, TableColumn, TableState, TextRenderer, Theme, TreeState, UiState, VirtualScrollState,
 };
+
+/// Clipboard provider backed by the platform clipboard.
+struct PlatformClipboard;
+
+impl ClipboardProvider for PlatformClipboard {
+    fn read_text(&self) -> Option<String> {
+        Clipboard::read(0).ok()
+    }
+
+    fn write_text(&self, text: &str) {
+        let _ = Clipboard::write(text);
+    }
+}
 
 struct DemoApp {
     ui_state: UiState,
     text: Option<TextRenderer>,
+    base_theme: Theme,
     theme: Theme,
     viewport: (u32, u32),
     checkbox_states: HashMap<u64, InputState>,
@@ -34,9 +48,12 @@ impl DemoApp {
         let mut slider = InputState::new();
         slider.text = "50".into();
 
+        let mut ui_state = UiState::new();
+        ui_state.clipboard = Some(Box::new(PlatformClipboard));
         Self {
-            ui_state: UiState::new(),
+            ui_state,
             text: None,
+            base_theme: Theme::dark(),
             theme: Theme::dark(),
             viewport: (650, 1200),
             checkbox_states: HashMap::new(),
@@ -217,20 +234,16 @@ impl AppDelegate for DemoApp {
                 // ── Tree ──
                 ui.header_label("TREE");
                 let r = ui.tree_node(id!("tree_root"), &mut self.tree_state, "Root", true);
-                if r.expanded {
-                    ui.tree_indent(|ui| {
-                        ui.tree_node(id!("tree_file1"), &mut self.tree_state, "file1.rs", false);
-                        ui.tree_node(id!("tree_file2"), &mut self.tree_state, "file2.rs", false);
-                        let r2 = ui.tree_node(id!("tree_src"), &mut self.tree_state, "src/", true);
-                        if r2.expanded {
-                            ui.tree_indent(|ui| {
-                                ui.tree_node(id!("tree_main"), &mut self.tree_state, "main.rs", false);
-                                ui.tree_node(id!("tree_lib"), &mut self.tree_state, "lib.rs", false);
-                            });
-                        }
-                        ui.tree_node(id!("tree_cargo"), &mut self.tree_state, "Cargo.toml", false);
+                ui.animated_tree_indent(id!("tree_root_anim"), r.expanded, |ui| {
+                    ui.tree_node(id!("tree_file1"), &mut self.tree_state, "file1.rs", false);
+                    ui.tree_node(id!("tree_file2"), &mut self.tree_state, "file2.rs", false);
+                    let r2 = ui.tree_node(id!("tree_src"), &mut self.tree_state, "src/", true);
+                    ui.animated_tree_indent(id!("tree_src_anim"), r2.expanded, |ui| {
+                        ui.tree_node(id!("tree_main"), &mut self.tree_state, "main.rs", false);
+                        ui.tree_node(id!("tree_lib"), &mut self.tree_state, "lib.rs", false);
                     });
-                }
+                    ui.tree_node(id!("tree_cargo"), &mut self.tree_state, "Cargo.toml", false);
+                });
                 ui.add_space(16.0);
 
                 // ── Drag & Drop ──
@@ -420,7 +433,15 @@ impl AppDelegate for DemoApp {
     }
 
     fn on_paste(&mut self, _text: &str) {}
-    fn on_ime_commit(&mut self, _text: &str) {}
+    fn on_ime_commit(&mut self, text: &str) {
+        self.ui_state.on_ime_commit(text.to_string());
+    }
+    fn on_ime_preedit(&mut self, text: String, cursor: Option<(usize, usize)>) {
+        self.ui_state.on_ime_preedit(text, cursor);
+    }
+    fn on_ime_enabled(&mut self, enabled: bool) {
+        self.ui_state.on_ime_enabled(enabled);
+    }
     fn on_copy(&mut self) -> Option<String> { None }
 
     fn needs_continuous_redraw(&self) -> bool {
@@ -431,7 +452,11 @@ impl AppDelegate for DemoApp {
         self.ui_state.cursor_icon(x as f32, y as f32)
     }
 
-    fn on_scale_changed(&mut self, _scale_factor: f64, _gpu: &GpuContext) {}
+    fn on_scale_changed(&mut self, scale_factor: f64, _gpu: &GpuContext) {
+        let factor = scale_factor as f32;
+        self.ui_state.scale_factor = factor;
+        self.theme = self.base_theme.scaled(factor);
+    }
 }
 
 fn main() {

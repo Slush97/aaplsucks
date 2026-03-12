@@ -107,6 +107,16 @@ impl<'f> Ui<'f> {
             input.selection = None;
         }
 
+        // Consume IME committed text.
+        if response.focused {
+            if let Some(committed) = self.state.ime.committed.take() {
+                input.save_undo();
+                input.insert_str(&committed);
+                response.changed = true;
+                self.state.reset_blink();
+            }
+        }
+
         // ── Key processing ──
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
@@ -115,7 +125,45 @@ impl<'f> Ui<'f> {
                     continue;
                 }
                 let ctrl = modifiers.control_key();
-                let changed = process_text_area_key(input, &event.logical_key, ctrl, &mut self.text, font_size);
+                let shift = modifiers.shift_key();
+                // Handle clipboard shortcuts.
+                if ctrl {
+                    if let Key::Character(ch) = &event.logical_key {
+                        match ch.as_str() {
+                            "c" => {
+                                if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
+                                    clip.write_text(sel_text);
+                                }
+                                continue;
+                            }
+                            "x" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(sel_text) = input.selected_text() {
+                                        clip.write_text(sel_text);
+                                    }
+                                    input.save_undo();
+                                    input.delete_selection();
+                                    response.changed = true;
+                                    self.state.reset_blink();
+                                }
+                                continue;
+                            }
+                            "v" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(text) = clip.read_text() {
+                                        input.save_undo();
+                                        input.insert_str(&text);
+                                        response.changed = true;
+                                        self.state.reset_blink();
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let changed = process_text_area_key(input, &event.logical_key, ctrl, shift, &mut self.text, font_size);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -218,18 +266,38 @@ impl<'f> Ui<'f> {
             self.text.draw_ui_text(line, text_x, ly, self.theme.fg, self.frame, self.gpu, self.resources);
         }
 
-        // Cursor.
-        if response.focused && self.state.cursor_blink {
+        // IME preedit + Cursor.
+        if response.focused {
             let cursor_line = line_of_offset(&input.text, input.cursor);
             let cursor_ls = line_start(&input.text, input.cursor);
             let cursor_x_in_line = self.text.measure_text(&input.text[cursor_ls..input.cursor], font_size);
             let cy = text_y + cursor_line as f32 * lh - offset;
-            let cx = text_x + cursor_x_in_line;
-            self.frame.push(
-                ShapeBuilder::rect(cx, cy, self.theme.cursor_width, lh)
-                    .color(self.theme.fg)
-                    .build(),
-            );
+            let mut cx = text_x + cursor_x_in_line;
+
+            // IME preedit rendering.
+            if !self.state.ime.preedit.is_empty() {
+                let preedit_w = self.text.measure_text(&self.state.ime.preedit, font_size);
+                // Underline.
+                self.frame.push(
+                    ShapeBuilder::rect(cx, cy + lh - 1.0, preedit_w, 1.0)
+                        .color(self.theme.fg_dim)
+                        .build(),
+                );
+                // Preedit text.
+                self.text.draw_ui_text(
+                    &self.state.ime.preedit, cx, cy, self.theme.fg_dim,
+                    self.frame, self.gpu, self.resources,
+                );
+                cx += preedit_w;
+            }
+
+            if self.state.cursor_blink {
+                self.frame.push(
+                    ShapeBuilder::rect(cx, cy, self.theme.cursor_width, lh)
+                        .color(self.theme.fg)
+                        .build(),
+                );
+            }
         }
 
         // Restore clip.
@@ -364,6 +432,16 @@ impl<'f> Ui<'f> {
             input.selection = None;
         }
 
+        // Consume IME committed text.
+        if response.focused {
+            if let Some(committed) = self.state.ime.committed.take() {
+                input.save_undo();
+                input.insert_str(&committed);
+                response.changed = true;
+                self.state.reset_blink();
+            }
+        }
+
         // Key processing.
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
@@ -372,53 +450,91 @@ impl<'f> Ui<'f> {
                     continue;
                 }
                 let ctrl = modifiers.control_key();
-                // Handle Up/Down specially for visual lines.
+                let shift = modifiers.shift_key();
+                // Handle clipboard shortcuts.
+                if ctrl {
+                    if let Key::Character(ch) = &event.logical_key {
+                        match ch.as_str() {
+                            "c" => {
+                                if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
+                                    clip.write_text(sel_text);
+                                }
+                                continue;
+                            }
+                            "x" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(sel_text) = input.selected_text() {
+                                        clip.write_text(sel_text);
+                                    }
+                                    input.save_undo();
+                                    input.delete_selection();
+                                    response.changed = true;
+                                    self.state.reset_blink();
+                                }
+                                continue;
+                            }
+                            "v" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(text) = clip.read_text() {
+                                        input.save_undo();
+                                        input.insert_str(&text);
+                                        response.changed = true;
+                                        self.state.reset_blink();
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // Handle Up/Down/Home/End specially for visual lines.
                 match &event.logical_key {
                     Key::Named(NamedKey::ArrowUp) => {
                         let cur_vl = visual_line_of_offset(&visual_lines, input.cursor);
-                        if cur_vl == 0 {
-                            input.cursor = 0;
+                        let new_pos = if cur_vl == 0 {
+                            0
                         } else {
                             let vl = &visual_lines[cur_vl];
                             let visual_x = self.text.measure_text(&input.text[vl.text_start..input.cursor], font_size);
                             let target = &visual_lines[cur_vl - 1];
-                            input.cursor = find_offset_for_x(&input.text, target.text_start, target.text_end, visual_x, &mut self.text, font_size);
-                        }
-                        input.selection = None;
+                            find_offset_for_x(&input.text, target.text_start, target.text_end, visual_x, &mut self.text, font_size)
+                        };
+                        if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
                         self.state.reset_blink();
                         continue;
                     }
                     Key::Named(NamedKey::ArrowDown) => {
                         let cur_vl = visual_line_of_offset(&visual_lines, input.cursor);
-                        if cur_vl >= total_visual - 1 {
-                            input.cursor = input.text.len();
+                        let new_pos = if cur_vl >= total_visual - 1 {
+                            input.text.len()
                         } else {
                             let vl = &visual_lines[cur_vl];
                             let visual_x = self.text.measure_text(&input.text[vl.text_start..input.cursor], font_size);
                             let target = &visual_lines[cur_vl + 1];
-                            input.cursor = find_offset_for_x(&input.text, target.text_start, target.text_end, visual_x, &mut self.text, font_size);
-                        }
-                        input.selection = None;
+                            find_offset_for_x(&input.text, target.text_start, target.text_end, visual_x, &mut self.text, font_size)
+                        };
+                        if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
                         self.state.reset_blink();
                         continue;
                     }
                     Key::Named(NamedKey::Home) => {
                         let cur_vl = visual_line_of_offset(&visual_lines, input.cursor);
-                        input.cursor = visual_lines[cur_vl].text_start;
-                        input.selection = None;
+                        let new_pos = visual_lines[cur_vl].text_start;
+                        if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
                         self.state.reset_blink();
                         continue;
                     }
                     Key::Named(NamedKey::End) => {
                         let cur_vl = visual_line_of_offset(&visual_lines, input.cursor);
-                        input.cursor = visual_lines[cur_vl].text_end;
-                        input.selection = None;
+                        let new_pos = visual_lines[cur_vl].text_end;
+                        if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
                         self.state.reset_blink();
                         continue;
                     }
                     _ => {}
                 }
-                let changed = process_text_area_key(input, &event.logical_key, ctrl, &mut self.text, font_size);
+                let changed = process_text_area_key(input, &event.logical_key, ctrl, shift, &mut self.text, font_size);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -512,18 +628,36 @@ impl<'f> Ui<'f> {
             self.text.draw_ui_text(line, text_x, ly, self.theme.fg, self.frame, self.gpu, self.resources);
         }
 
-        // Cursor.
-        if response.focused && self.state.cursor_blink {
+        // IME preedit + Cursor.
+        if response.focused {
             let cursor_vl_idx = visual_line_of_offset(&visual_lines, input.cursor);
             let vl = &visual_lines[cursor_vl_idx];
             let cursor_x_in_line = self.text.measure_text(&input.text[vl.text_start..input.cursor], font_size);
             let cy = text_y + cursor_vl_idx as f32 * lh - offset;
-            let cx = text_x + cursor_x_in_line;
-            self.frame.push(
-                ShapeBuilder::rect(cx, cy, self.theme.cursor_width, lh)
-                    .color(self.theme.fg)
-                    .build(),
-            );
+            let mut cx = text_x + cursor_x_in_line;
+
+            // IME preedit rendering.
+            if !self.state.ime.preedit.is_empty() {
+                let preedit_w = self.text.measure_text(&self.state.ime.preedit, font_size);
+                self.frame.push(
+                    ShapeBuilder::rect(cx, cy + lh - 1.0, preedit_w, 1.0)
+                        .color(self.theme.fg_dim)
+                        .build(),
+                );
+                self.text.draw_ui_text(
+                    &self.state.ime.preedit, cx, cy, self.theme.fg_dim,
+                    self.frame, self.gpu, self.resources,
+                );
+                cx += preedit_w;
+            }
+
+            if self.state.cursor_blink {
+                self.frame.push(
+                    ShapeBuilder::rect(cx, cy, self.theme.cursor_width, lh)
+                        .color(self.theme.fg)
+                        .build(),
+                );
+            }
         }
 
         self.frame.set_active_clip(saved_clip);
@@ -536,78 +670,80 @@ fn process_text_area_key(
     input: &mut InputState,
     key: &Key,
     ctrl: bool,
+    shift: bool,
     text_renderer: &mut crate::text::TextRenderer,
     font_size: f32,
 ) -> bool {
     match key {
         Key::Named(NamedKey::Enter) => {
+            input.save_undo();
             input.insert_char('\n');
             true
         }
         Key::Named(NamedKey::Tab) => {
+            input.save_undo();
             input.insert_str("    ");
             true
         }
         Key::Named(NamedKey::Backspace) => {
+            input.save_undo();
             input.delete_back();
             true
         }
         Key::Named(NamedKey::Delete) => {
+            input.save_undo();
             input.delete_forward();
             true
         }
         Key::Named(NamedKey::ArrowLeft) => {
-            input.move_left();
+            if shift { input.move_left_extend(); } else { input.move_left(); }
             true
         }
         Key::Named(NamedKey::ArrowRight) => {
-            input.move_right();
+            if shift { input.move_right_extend(); } else { input.move_right(); }
             true
         }
         Key::Named(NamedKey::ArrowUp) => {
             let cur_line = line_of_offset(&input.text, input.cursor);
-            if cur_line == 0 {
-                input.home();
+            let new_pos = if cur_line == 0 {
+                0
             } else {
                 let cur_ls = line_start(&input.text, input.cursor);
                 let visual_x = text_renderer.measure_text(&input.text[cur_ls..input.cursor], font_size);
                 let target_ls = line_start_of_nth(&input.text, cur_line - 1);
                 let target_le = line_end(&input.text, target_ls);
-                input.cursor = find_offset_for_x(&input.text, target_ls, target_le, visual_x, text_renderer, font_size);
-            }
-            input.selection = None;
+                find_offset_for_x(&input.text, target_ls, target_le, visual_x, text_renderer, font_size)
+            };
+            if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
             true
         }
         Key::Named(NamedKey::ArrowDown) => {
             let cur_line = line_of_offset(&input.text, input.cursor);
             let total = line_count(&input.text);
-            if cur_line >= total - 1 {
-                input.end();
+            let new_pos = if cur_line >= total - 1 {
+                input.text.len()
             } else {
                 let cur_ls = line_start(&input.text, input.cursor);
                 let visual_x = text_renderer.measure_text(&input.text[cur_ls..input.cursor], font_size);
                 let target_ls = line_start_of_nth(&input.text, cur_line + 1);
                 let target_le = line_end(&input.text, target_ls);
-                input.cursor = find_offset_for_x(&input.text, target_ls, target_le, visual_x, text_renderer, font_size);
-            }
-            input.selection = None;
+                find_offset_for_x(&input.text, target_ls, target_le, visual_x, text_renderer, font_size)
+            };
+            if shift { input.move_to_extend(new_pos); } else { input.move_to(new_pos); }
             true
         }
         Key::Named(NamedKey::Home) => {
-            // Line-local home.
             let ls = line_start(&input.text, input.cursor);
-            input.cursor = ls;
-            input.selection = None;
+            if shift { input.move_to_extend(ls); } else { input.move_to(ls); }
             true
         }
         Key::Named(NamedKey::End) => {
-            // Line-local end.
             let le = line_end(&input.text, input.cursor);
-            input.cursor = le;
-            input.selection = None;
+            if shift { input.move_to_extend(le); } else { input.move_to(le); }
             true
         }
         Key::Named(NamedKey::Space) => {
+            input.save_undo();
             input.insert_char(' ');
             true
         }
@@ -615,8 +751,17 @@ fn process_text_area_key(
             input.select_all();
             true
         }
+        Key::Character(ch) if ctrl && ch.as_str() == "z" => {
+            if shift { input.redo(); } else { input.undo(); }
+            true
+        }
+        Key::Character(ch) if ctrl && ch.as_str() == "Z" => {
+            input.redo();
+            true
+        }
         Key::Character(_) if ctrl => false,
         Key::Character(ch) => {
+            input.save_undo();
             for c in ch.chars() {
                 if !c.is_control() {
                     input.insert_char(c);

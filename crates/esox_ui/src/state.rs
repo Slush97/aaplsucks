@@ -9,6 +9,68 @@ use winit::keyboard::ModifiersState;
 
 use crate::layout::Rect;
 
+/// Trait for clipboard access. Implemented by platform layer.
+pub trait ClipboardProvider {
+    fn read_text(&self) -> Option<String>;
+    fn write_text(&self, text: &str);
+}
+
+/// A snapshot of text state for undo/redo.
+#[derive(Debug, Clone)]
+struct UndoEntry {
+    text: String,
+    cursor: usize,
+}
+
+/// Undo/redo history for text input.
+#[derive(Debug, Clone)]
+pub struct UndoHistory {
+    entries: Vec<UndoEntry>,
+    index: usize,
+}
+
+impl UndoHistory {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            index: 0,
+        }
+    }
+
+    fn push(&mut self, text: &str, cursor: usize) {
+        // Truncate redo history.
+        self.entries.truncate(self.index);
+        self.entries.push(UndoEntry {
+            text: text.to_string(),
+            cursor,
+        });
+        // Cap at 100 entries.
+        if self.entries.len() > 100 {
+            self.entries.remove(0);
+        }
+        self.index = self.entries.len();
+    }
+
+    fn undo(&mut self) -> Option<&UndoEntry> {
+        if self.index > 0 {
+            self.index -= 1;
+            Some(&self.entries[self.index])
+        } else {
+            None
+        }
+    }
+
+    fn redo(&mut self) -> Option<&UndoEntry> {
+        if self.index < self.entries.len() {
+            let entry = &self.entries[self.index];
+            self.index += 1;
+            Some(entry)
+        } else {
+            None
+        }
+    }
+}
+
 /// Text input state: buffer, cursor, selection.
 #[derive(Debug, Clone)]
 pub struct InputState {
@@ -20,6 +82,11 @@ pub struct InputState {
     pub selection: Option<(usize, usize)>,
     /// Horizontal scroll offset in pixels for long text.
     pub scroll_offset: f32,
+    /// Anchor for shift+arrow selection expansion. When shift is held, cursor moves
+    /// but anchor stays fixed; selection = (anchor.min(cursor), anchor.max(cursor)).
+    pub selection_anchor: Option<usize>,
+    /// Undo/redo history.
+    undo_history: UndoHistory,
 }
 
 impl InputState {
@@ -29,6 +96,8 @@ impl InputState {
             cursor: 0,
             selection: None,
             scroll_offset: 0.0,
+            selection_anchor: None,
+            undo_history: UndoHistory::new(),
         }
     }
 
@@ -92,6 +161,7 @@ impl InputState {
     /// Move cursor one character left.
     pub fn move_left(&mut self) {
         self.selection = None;
+        self.selection_anchor = None;
         if self.cursor > 0 {
             self.cursor = self.text[..self.cursor]
                 .char_indices()
@@ -104,6 +174,7 @@ impl InputState {
     /// Move cursor one character right.
     pub fn move_right(&mut self) {
         self.selection = None;
+        self.selection_anchor = None;
         if self.cursor < self.text.len() {
             self.cursor += self.text[self.cursor..]
                 .chars()
@@ -116,20 +187,129 @@ impl InputState {
     /// Move cursor to the beginning of text.
     pub fn home(&mut self) {
         self.selection = None;
+        self.selection_anchor = None;
         self.cursor = 0;
     }
 
     /// Move cursor to the end of text.
     pub fn end(&mut self) {
         self.selection = None;
+        self.selection_anchor = None;
         self.cursor = self.text.len();
+    }
+
+    // ── Shift+extend selection methods ──
+
+    /// Set anchor if not already set, then update selection from anchor to cursor.
+    fn update_selection_from_anchor(&mut self) {
+        let anchor = self.selection_anchor.unwrap_or(self.cursor);
+        self.selection_anchor = Some(anchor);
+        if anchor == self.cursor {
+            self.selection = None;
+        } else {
+            self.selection = Some((anchor.min(self.cursor), anchor.max(self.cursor)));
+        }
+    }
+
+    /// Move cursor left, extending selection (Shift+Left).
+    pub fn move_left_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        if self.cursor > 0 {
+            self.cursor = self.text[..self.cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor right, extending selection (Shift+Right).
+    pub fn move_right_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        if self.cursor < self.text.len() {
+            self.cursor += self.text[self.cursor..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+        }
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor to start, extending selection (Shift+Home).
+    pub fn home_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = 0;
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor to end, extending selection (Shift+End).
+    pub fn end_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = self.text.len();
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor to an arbitrary position, extending selection.
+    pub fn move_to_extend(&mut self, pos: usize) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = pos;
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor to an arbitrary position, clearing selection.
+    pub fn move_to(&mut self, pos: usize) {
+        self.selection = None;
+        self.selection_anchor = None;
+        self.cursor = pos;
     }
 
     /// Select all text.
     pub fn select_all(&mut self) {
         if !self.text.is_empty() {
             self.selection = Some((0, self.text.len()));
+            self.selection_anchor = Some(0);
             self.cursor = self.text.len();
+        }
+    }
+
+    /// Save current state to undo history. Call before mutations.
+    pub fn save_undo(&mut self) {
+        // Only push if text differs from last entry.
+        let dominated = self.undo_history.entries.last().is_some_and(|e| e.text == self.text);
+        if !dominated {
+            self.undo_history.push(&self.text, self.cursor);
+        }
+    }
+
+    /// Undo the last text change.
+    pub fn undo(&mut self) {
+        if let Some(entry) = self.undo_history.undo() {
+            self.text = entry.text.clone();
+            self.cursor = entry.cursor.min(self.text.len());
+            self.selection = None;
+            self.selection_anchor = None;
+        }
+    }
+
+    /// Redo the last undone change.
+    pub fn redo(&mut self) {
+        if let Some(entry) = self.undo_history.redo() {
+            self.text = entry.text.clone();
+            self.cursor = entry.cursor.min(self.text.len());
+            self.selection = None;
+            self.selection_anchor = None;
         }
     }
 
@@ -318,6 +498,11 @@ pub enum WidgetKind {
     TableRow,
     TreeNode,
     ColumnResize,
+    ResizeNS,
+    ResizeEW,
+    Grab,
+    Grabbing,
+    NotAllowed,
 }
 
 /// Overlay state (dropdown menus drawn on top of everything).
@@ -636,6 +821,26 @@ pub struct UiState {
     pub(crate) a11y_pending_label: Option<String>,
     /// Pending accessibility role for next widget.
     pub(crate) a11y_pending_role: Option<A11yRole>,
+    /// Cached children heights for tree expand/collapse animations.
+    pub tree_children_heights: HashMap<u64, f32>,
+    /// Clipboard provider for Ctrl+C/X/V in text widgets.
+    pub clipboard: Option<Box<dyn ClipboardProvider>>,
+    /// HiDPI scale factor (default 1.0).
+    pub scale_factor: f32,
+    /// IME composition state.
+    pub ime: ImeState,
+}
+
+/// IME (Input Method Editor) composition state.
+pub struct ImeState {
+    /// Preedit text being composed (not yet committed).
+    pub preedit: String,
+    /// Cursor range within the preedit text.
+    pub preedit_cursor: Option<(usize, usize)>,
+    /// Whether IME is currently active.
+    pub active: bool,
+    /// Committed text to be consumed by the focused text widget.
+    pub committed: Option<String>,
 }
 
 impl UiState {
@@ -665,6 +870,15 @@ impl UiState {
             a11y_enabled: false,
             a11y_pending_label: None,
             a11y_pending_role: None,
+            tree_children_heights: HashMap::new(),
+            clipboard: None,
+            scale_factor: 1.0,
+            ime: ImeState {
+                preedit: String::new(),
+                preedit_cursor: None,
+                active: false,
+                committed: None,
+            },
         }
     }
 
@@ -677,6 +891,28 @@ impl UiState {
     /// Update modifier keys state.
     pub fn process_modifiers(&mut self, modifiers: ModifiersState) {
         self.modifiers = modifiers;
+    }
+
+    /// Process IME preedit event.
+    pub fn on_ime_preedit(&mut self, text: String, cursor: Option<(usize, usize)>) {
+        self.ime.preedit = text;
+        self.ime.preedit_cursor = cursor;
+    }
+
+    /// Process IME commit event — buffer the text for the focused widget.
+    pub fn on_ime_commit(&mut self, text: String) {
+        self.ime.preedit.clear();
+        self.ime.preedit_cursor = None;
+        self.ime.committed = Some(text);
+    }
+
+    /// Process IME enabled/disabled event.
+    pub fn on_ime_enabled(&mut self, enabled: bool) {
+        self.ime.active = enabled;
+        if !enabled {
+            self.ime.preedit.clear();
+            self.ime.preedit_cursor = None;
+        }
     }
 
     /// Update mouse position. `item_height` and `dropdown_gap` are used for
@@ -782,12 +1018,20 @@ impl UiState {
 
     /// Get the cursor icon for the given position based on registered widgets.
     pub fn cursor_icon(&self, x: f32, y: f32) -> winit::window::CursorIcon {
+        // Active drag overrides everything.
+        if self.drag.is_some() {
+            return winit::window::CursorIcon::Grabbing;
+        }
         // Iterate in reverse so the topmost (last-registered) widget wins.
         for (rect, _id, kind) in self.hit_rects.iter().rev() {
             if rect.contains(x, y) {
                 return match kind {
                     WidgetKind::TextInput => winit::window::CursorIcon::Text,
-                    WidgetKind::ColumnResize => winit::window::CursorIcon::ColResize,
+                    WidgetKind::ColumnResize | WidgetKind::ResizeEW => winit::window::CursorIcon::ColResize,
+                    WidgetKind::ResizeNS => winit::window::CursorIcon::RowResize,
+                    WidgetKind::Grab => winit::window::CursorIcon::Grab,
+                    WidgetKind::Grabbing => winit::window::CursorIcon::Grabbing,
+                    WidgetKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
                     WidgetKind::Button
                     | WidgetKind::DropZone
                     | WidgetKind::Select

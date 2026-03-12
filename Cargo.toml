@@ -37,6 +37,13 @@ swash = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 pollster = "0.4"
 
+# Accessibility
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+
+# Image
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 # Utilities
 thiserror = "2"
 tracing = "0.1"

@@ -4,6 +4,9 @@ pub mod config;
 pub mod perf;
 pub mod sandbox;
 
+#[cfg(feature = "a11y")]
+pub mod atspi;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -137,6 +140,12 @@ pub trait AppDelegate {
 
     /// Called when the IME commits text (NOT a paste — no bracketed paste wrapping).
     fn on_ime_commit(&mut self, text: &str);
+
+    /// Called when the IME preedit (composition) text changes.
+    fn on_ime_preedit(&mut self, _text: String, _cursor: Option<(usize, usize)>) {}
+
+    /// Called when the IME is enabled or disabled.
+    fn on_ime_enabled(&mut self, _enabled: bool) {}
 
     /// Copy selected text to clipboard.
     fn on_copy(&mut self) -> Option<String>;
@@ -884,10 +893,17 @@ impl ApplicationHandler<AppUserEvent> for App {
                             window.request_redraw();
                         }
                     }
-                    winit::event::Ime::Preedit(_, _)
-                    | winit::event::Ime::Enabled
-                    | winit::event::Ime::Disabled => {
-                        // Preedit rendering could be added later.
+                    winit::event::Ime::Preedit(text, cursor) => {
+                        self.delegate.on_ime_preedit(text, cursor);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
+                    winit::event::Ime::Enabled => {
+                        self.delegate.on_ime_enabled(true);
+                    }
+                    winit::event::Ime::Disabled => {
+                        self.delegate.on_ime_enabled(false);
                     }
                 }
             }

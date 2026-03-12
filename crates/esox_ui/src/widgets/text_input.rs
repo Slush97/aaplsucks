@@ -82,6 +82,16 @@ impl<'f> Ui<'f> {
             input.selection = None;
         }
 
+        // Consume IME committed text.
+        if response.focused {
+            if let Some(committed) = self.state.ime.committed.take() {
+                input.save_undo();
+                input.insert_str(&committed);
+                response.changed = true;
+                self.state.reset_blink();
+            }
+        }
+
         // Process buffered keys when focused.
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
@@ -90,7 +100,45 @@ impl<'f> Ui<'f> {
                     continue;
                 }
                 let ctrl = modifiers.control_key();
-                let changed = process_text_key(input, &event.logical_key, ctrl);
+                let shift = modifiers.shift_key();
+                // Handle clipboard shortcuts.
+                if ctrl {
+                    if let Key::Character(ch) = &event.logical_key {
+                        match ch.as_str() {
+                            "c" => {
+                                if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
+                                    clip.write_text(sel_text);
+                                }
+                                continue;
+                            }
+                            "x" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(sel_text) = input.selected_text() {
+                                        clip.write_text(sel_text);
+                                    }
+                                    input.save_undo();
+                                    input.delete_selection();
+                                    response.changed = true;
+                                    self.state.reset_blink();
+                                }
+                                continue;
+                            }
+                            "v" => {
+                                if let Some(clip) = &self.state.clipboard {
+                                    if let Some(text) = clip.read_text() {
+                                        input.save_undo();
+                                        input.insert_str(&text);
+                                        response.changed = true;
+                                        self.state.reset_blink();
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let changed = process_text_key(input, &event.logical_key, ctrl, shift);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -184,11 +232,47 @@ impl<'f> Ui<'f> {
             );
         }
 
+        // IME preedit rendering.
+        if response.focused && !self.state.ime.preedit.is_empty() {
+            let cursor_x_in_text =
+                self.text.measure_text(&input.text[..input.cursor], self.theme.font_size);
+            let preedit_x = text_x + cursor_x_in_text - scroll;
+            let preedit_w = self.text.measure_text(&self.state.ime.preedit, self.theme.font_size);
+            // Underline.
+            self.frame.push(
+                ShapeBuilder::rect(
+                    preedit_x,
+                    rect.y + rect.h - self.theme.label_pad_y - 1.0,
+                    preedit_w,
+                    1.0,
+                )
+                .color(self.theme.fg_dim)
+                .build(),
+            );
+            // Preedit text.
+            self.text.draw_ui_text(
+                &self.state.ime.preedit,
+                preedit_x,
+                text_y,
+                self.theme.fg_dim,
+                self.frame,
+                self.gpu,
+                self.resources,
+            );
+        }
+
         // Cursor.
         if response.focused && self.state.cursor_blink {
             let cursor_x_in_text =
                 self.text.measure_text(&input.text[..input.cursor], self.theme.font_size);
             let cx = text_x + cursor_x_in_text - scroll;
+            // Offset cursor past preedit if active.
+            let preedit_offset = if !self.state.ime.preedit.is_empty() {
+                self.text.measure_text(&self.state.ime.preedit, self.theme.font_size)
+            } else {
+                0.0
+            };
+            let cx = cx + preedit_offset;
             if cx >= text_x - 1.0 && cx <= text_x + inner_w + 1.0 {
                 self.frame.push(
                     ShapeBuilder::rect(
@@ -208,33 +292,36 @@ impl<'f> Ui<'f> {
 }
 
 /// Process a key event for text input. Returns true if the input was modified.
-fn process_text_key(input: &mut InputState, key: &Key, ctrl: bool) -> bool {
+fn process_text_key(input: &mut InputState, key: &Key, ctrl: bool, shift: bool) -> bool {
     match key {
         Key::Named(NamedKey::Backspace) => {
+            input.save_undo();
             input.delete_back();
             true
         }
         Key::Named(NamedKey::Delete) => {
+            input.save_undo();
             input.delete_forward();
             true
         }
         Key::Named(NamedKey::ArrowLeft) => {
-            input.move_left();
+            if shift { input.move_left_extend(); } else { input.move_left(); }
             true
         }
         Key::Named(NamedKey::ArrowRight) => {
-            input.move_right();
+            if shift { input.move_right_extend(); } else { input.move_right(); }
             true
         }
         Key::Named(NamedKey::Home) => {
-            input.home();
+            if shift { input.home_extend(); } else { input.home(); }
             true
         }
         Key::Named(NamedKey::End) => {
-            input.end();
+            if shift { input.end_extend(); } else { input.end(); }
             true
         }
         Key::Named(NamedKey::Space) => {
+            input.save_undo();
             input.insert_char(' ');
             true
         }
@@ -242,15 +329,20 @@ fn process_text_key(input: &mut InputState, key: &Key, ctrl: bool) -> bool {
             input.select_all();
             true
         }
-        Key::Character(ch) if ctrl && ch.as_str() == "v" => {
-            // Clipboard paste — handled at app level, not here.
-            false
+        Key::Character(ch) if ctrl && ch.as_str() == "z" => {
+            if shift { input.redo(); } else { input.undo(); }
+            true
         }
-        Key::Character(_ch) if ctrl => {
-            // Other ctrl combos (Ctrl+C, etc.) — skip.
+        Key::Character(ch) if ctrl && ch.as_str() == "Z" => {
+            input.redo();
+            true
+        }
+        Key::Character(_) if ctrl => {
+            // Ctrl+C, Ctrl+V, etc. — handled by clipboard layer.
             false
         }
         Key::Character(ch) => {
+            input.save_undo();
             for c in ch.chars() {
                 if !c.is_control() {
                     input.insert_char(c);

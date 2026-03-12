@@ -284,6 +284,53 @@ impl Theme {
         }
     }
 
+    /// Return a copy with all dimensional fields multiplied by `factor`.
+    /// Colors are unchanged. Useful for HiDPI scaling.
+    pub fn scaled(&self, factor: f32) -> Self {
+        let mut t = self.clone();
+        t.corner_radius *= factor;
+        t.padding *= factor;
+        t.input_padding *= factor;
+        t.item_height *= factor;
+        t.font_size *= factor;
+        t.header_font_size *= factor;
+        t.cursor_width *= factor;
+        t.button_height *= factor;
+        t.small_button_height *= factor;
+        t.small_button_min_w *= factor;
+        t.focus_ring_expand *= factor;
+        t.dropdown_gap *= factor;
+        t.label_pad_y *= factor;
+        t.heading_font_size *= factor;
+        t.heading_height *= factor;
+        t.drop_zone_height *= factor;
+        t.drop_zone_dash *= factor;
+        t.drop_zone_dash_gap *= factor;
+        t.drop_zone_dash_thickness *= factor;
+        t.progress_bar_height *= factor;
+        t.status_dot_radius *= factor;
+        t.toast_w *= factor;
+        t.toast_h *= factor;
+        t.tooltip_font_size *= factor;
+        t.tooltip_padding *= factor;
+        t.context_menu_min_w *= factor;
+        t.scrollbar_width *= factor;
+        t.scrollbar_min_thumb *= factor;
+        t.scroll_speed *= factor;
+        t.tab_indicator_height *= factor;
+        t.table_header_height *= factor;
+        t.column_resize_handle_width *= factor;
+        t.column_resize_min_width *= factor;
+        t.tree_indent *= factor;
+        t.modal_corner_radius *= factor;
+        t.modal_title_height *= factor;
+        t.modal_padding *= factor;
+        t.modal_min_width *= factor;
+        t.modal_max_width *= factor;
+        t.toast_margin *= factor;
+        t
+    }
+
     /// Start a builder from the dark theme.
     pub fn builder() -> ThemeBuilder {
         ThemeBuilder { base: Self::dark() }

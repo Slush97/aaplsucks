@@ -1,0 +1,12 @@
+[package]
+name = "demo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_gfx = { workspace = true }
+esox_font = { workspace = true }
+esox_ui = { workspace = true }
+esox_platform = { workspace = true }
+tracing-subscriber = { workspace = true }
+winit = { workspace = true }

@@ -1,0 +1,14 @@
+[package]
+name = "esox_font"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Font shaping, rasterization, and atlas management"
+
+[dependencies]
+esox_gfx = { workspace = true }
+fontdb = { workspace = true }
+rustybuzz = { workspace = true }
+swash = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "esox_gfx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU rendering engine with arena scene graph and instanced quad pipeline"
+
+[dependencies]
+bytemuck = { workspace = true }
+naga = { workspace = true }
+raw-window-handle = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }

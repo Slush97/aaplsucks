@@ -1,0 +1,515 @@
+//! Theme — all colors and sizes in one struct, plus builder and transition helpers.
+
+use std::time::Instant;
+
+use esox_gfx::Color;
+
+use crate::paint::lerp_color;
+
+/// Complete UI theme — all visual properties in one place.
+#[derive(Debug, Clone)]
+pub struct Theme {
+    // Backgrounds (increasing brightness for depth).
+    pub bg_base: Color,
+    pub bg_surface: Color,
+    pub bg_raised: Color,
+    pub bg_input: Color,
+
+    // Text colors.
+    pub fg: Color,
+    pub fg_muted: Color,
+    pub fg_dim: Color,
+    /// Form field labels — between fg and fg_muted.
+    pub fg_label: Color,
+
+    // Accent.
+    pub accent: Color,
+    pub accent_dim: Color,
+    pub accent_hover: Color,
+
+    // Status.
+    pub green: Color,
+    pub amber: Color,
+    pub red: Color,
+
+    // Border.
+    pub border: Color,
+
+    // Button backgrounds.
+    pub green_button_bg: Color,
+
+    // Overlay / toast colors.
+    pub shadow: Color,
+    pub toast_error_bg: Color,
+    pub toast_success_bg: Color,
+
+    // Layout constants.
+    pub corner_radius: f32,
+    pub padding: f32,
+    pub input_padding: f32,
+    pub item_height: f32,
+    pub font_size: f32,
+    pub header_font_size: f32,
+    pub cursor_width: f32,
+    pub cursor_blink_ms: u64,
+
+    // Derived layout constants (moved from widget hardcodes).
+    pub button_height: f32,
+    pub small_button_height: f32,
+    pub small_button_min_w: f32,
+    pub focus_ring_expand: f32,
+    pub dropdown_gap: f32,
+    pub label_pad_y: f32,
+    pub heading_font_size: f32,
+    pub heading_height: f32,
+    pub drop_zone_height: f32,
+    pub drop_zone_dash: f32,
+    pub drop_zone_dash_gap: f32,
+    pub drop_zone_dash_thickness: f32,
+    pub progress_bar_height: f32,
+    pub status_dot_radius: f32,
+    pub toast_w: f32,
+    pub toast_h: f32,
+
+    // Disabled.
+    pub disabled_fg: Color,
+    pub disabled_border: Color,
+    pub disabled_bg: Color,
+
+    // Tooltip.
+    pub tooltip_delay_ms: u64,
+    pub tooltip_font_size: f32,
+    pub tooltip_padding: f32,
+    pub tooltip_bg: Color,
+    pub tooltip_fg: Color,
+
+    // Context menu.
+    pub context_menu_min_w: f32,
+
+    // Scrollbar.
+    pub scrollbar_width: f32,
+    pub scrollbar_min_thumb: f32,
+    pub scroll_speed: f32,
+
+    // Tabs.
+    pub tab_indicator_height: f32,
+    pub tab_fade_duration_ms: f32,
+
+    // Table.
+    pub table_header_height: f32,
+    pub table_zebra_bg: Color,
+    pub column_resize_handle_width: f32,
+    pub column_resize_min_width: f32,
+
+    // Tree.
+    pub tree_indent: f32,
+    pub tree_expand_duration_ms: f32,
+
+    // Animation durations.
+    pub modal_fade_duration_ms: f32,
+    pub toast_fade_in_ms: f32,
+    pub toast_fade_out_ms: f32,
+
+    // Modal.
+    pub modal_backdrop: Color,
+    pub modal_corner_radius: f32,
+    pub modal_title_height: f32,
+    pub modal_padding: f32,
+    pub modal_min_width: f32,
+    pub modal_max_width: f32,
+
+    // Toast.
+    pub toast_info_bg: Color,
+    pub toast_warning_bg: Color,
+    pub toast_duration_ms: u64,
+    pub toast_max_visible: usize,
+    pub toast_margin: f32,
+}
+
+impl Theme {
+    /// Default dark theme.
+    pub fn dark() -> Self {
+        Self {
+            // Neutral charcoal steps — no color tint so the accent pops cleanly.
+            bg_base:    Color::new(0.047, 0.047, 0.050, 1.0), // #0c0c0d
+            bg_surface: Color::new(0.082, 0.082, 0.086, 1.0), // #151516 sidebar/panels
+            bg_raised:  Color::new(0.122, 0.122, 0.127, 1.0), // #1f1f20 cards/hover
+            bg_input:   Color::new(0.165, 0.165, 0.170, 1.0), // #2a2a2b input fields
+
+            fg:       Color::new(0.900, 0.900, 0.900, 1.0), // #e6e6e6
+            fg_muted: Color::new(0.530, 0.530, 0.530, 1.0), // #878787 secondary text
+            fg_dim:   Color::new(0.360, 0.360, 0.360, 1.0), // #5c5c5c muted labels
+            fg_label: Color::new(0.720, 0.720, 0.720, 1.0), // #b8b8b8 form labels
+
+            // Blue accent — clean, not purple-shifted.
+            accent:       Color::new(0.306, 0.533, 0.957, 1.0), // #4e88f4
+            accent_dim:   Color::new(0.306, 0.533, 0.957, 0.18),
+            accent_hover: Color::new(0.431, 0.627, 0.973, 1.0), // #6ea0f8
+
+            green: Color::new(0.243, 0.812, 0.416, 1.0), // #3ecf6a
+            amber: Color::new(0.961, 0.737, 0.133, 1.0), // #f5bc22
+            red:   Color::new(0.941, 0.376, 0.376, 1.0), // #f06060
+
+            border:          Color::new(0.200, 0.200, 0.205, 1.0), // #333334
+            green_button_bg: Color::new(0.082, 0.380, 0.196, 1.0), // #156132
+
+            shadow: Color::new(0.0, 0.0, 0.0, 0.50),
+            toast_error_bg:   Color::new(0.337, 0.078, 0.078, 1.0), // #561414
+            toast_success_bg: Color::new(0.063, 0.255, 0.122, 1.0), // #10411f
+
+            disabled_fg:     Color::new(0.30, 0.30, 0.30, 1.0),
+            disabled_border: Color::new(0.16, 0.16, 0.165, 1.0),
+            disabled_bg:     Color::new(0.10, 0.10, 0.105, 1.0),
+
+            tooltip_bg: Color::new(0.85, 0.85, 0.85, 0.95),
+            tooltip_fg: Color::new(0.10, 0.10, 0.10, 1.0),
+
+            table_zebra_bg: Color::new(0.060, 0.060, 0.064, 1.0),
+
+            modal_backdrop: Color::new(0.0, 0.0, 0.0, 0.5),
+
+            toast_info_bg:    Color::new(0.106, 0.165, 0.310, 1.0), // dark blue
+            toast_warning_bg: Color::new(0.310, 0.240, 0.078, 1.0), // dark amber
+
+            ..Self::layout_defaults()
+        }
+    }
+
+    /// Light theme.
+    pub fn light() -> Self {
+        Self {
+            bg_base:    Color::new(0.980, 0.980, 0.980, 1.0), // #fafafa
+            bg_surface: Color::new(0.941, 0.941, 0.945, 1.0), // #f0f0f1 sidebar/panels
+            bg_raised:  Color::new(0.894, 0.894, 0.902, 1.0), // #e4e4e6 hover
+            bg_input:   Color::new(1.000, 1.000, 1.000, 1.0), // #ffffff inputs
+
+            fg:       Color::new(0.067, 0.067, 0.094, 1.0), // #111118
+            fg_muted: Color::new(0.376, 0.376, 0.420, 1.0), // #60606b
+            fg_dim:   Color::new(0.565, 0.565, 0.627, 1.0), // #9090a0
+            fg_label: Color::new(0.220, 0.220, 0.271, 1.0), // #383845
+
+            accent:       Color::new(0.200, 0.471, 0.941, 1.0), // #3378f0
+            accent_dim:   Color::new(0.200, 0.471, 0.941, 0.15),
+            accent_hover: Color::new(0.376, 0.557, 0.961, 1.0), // #608ef5
+
+            green: Color::new(0.094, 0.631, 0.247, 1.0), // #18a13f
+            amber: Color::new(0.737, 0.482, 0.020, 1.0), // #bc7b05
+            red:   Color::new(0.780, 0.141, 0.141, 1.0), // #c72424
+
+            border:          Color::new(0.800, 0.800, 0.820, 1.0), // #ccccd1
+            green_button_bg: Color::new(0.820, 0.945, 0.839, 1.0), // #d1f1d6
+
+            shadow: Color::new(0.0, 0.0, 0.0, 0.12),
+            toast_error_bg:   Color::new(0.996, 0.886, 0.886, 1.0), // #fee2e2
+            toast_success_bg: Color::new(0.863, 0.961, 0.882, 1.0), // #dcf5e1
+
+            disabled_fg:     Color::new(0.70, 0.70, 0.72, 1.0),
+            disabled_border: Color::new(0.82, 0.82, 0.84, 1.0),
+            disabled_bg:     Color::new(0.92, 0.92, 0.93, 1.0),
+
+            tooltip_bg: Color::new(0.15, 0.15, 0.18, 0.95),
+            tooltip_fg: Color::new(0.92, 0.92, 0.92, 1.0),
+
+            table_zebra_bg: Color::new(0.960, 0.960, 0.965, 1.0),
+
+            modal_backdrop: Color::new(0.0, 0.0, 0.0, 0.3),
+
+            toast_info_bg:    Color::new(0.886, 0.918, 0.996, 1.0), // light blue
+            toast_warning_bg: Color::new(0.996, 0.957, 0.886, 1.0), // light amber
+
+            ..Self::layout_defaults()
+        }
+    }
+
+    /// Start a builder from the dark theme.
+    pub fn builder() -> ThemeBuilder {
+        ThemeBuilder { base: Self::dark() }
+    }
+
+    /// Interpolate between two themes. Colors lerp; layout f32 snaps at t >= 0.5.
+    pub fn lerp(a: &Theme, b: &Theme, t: f32) -> Theme {
+        let t = t.clamp(0.0, 1.0);
+        let snap = if t >= 0.5 { b } else { a };
+
+        Theme {
+            bg_base:      lerp_color(a.bg_base, b.bg_base, t),
+            bg_surface:   lerp_color(a.bg_surface, b.bg_surface, t),
+            bg_raised:    lerp_color(a.bg_raised, b.bg_raised, t),
+            bg_input:     lerp_color(a.bg_input, b.bg_input, t),
+            fg:           lerp_color(a.fg, b.fg, t),
+            fg_muted:     lerp_color(a.fg_muted, b.fg_muted, t),
+            fg_dim:       lerp_color(a.fg_dim, b.fg_dim, t),
+            fg_label:     lerp_color(a.fg_label, b.fg_label, t),
+            accent:       lerp_color(a.accent, b.accent, t),
+            accent_dim:   lerp_color(a.accent_dim, b.accent_dim, t),
+            accent_hover: lerp_color(a.accent_hover, b.accent_hover, t),
+            green:        lerp_color(a.green, b.green, t),
+            amber:        lerp_color(a.amber, b.amber, t),
+            red:          lerp_color(a.red, b.red, t),
+            border:       lerp_color(a.border, b.border, t),
+            green_button_bg: lerp_color(a.green_button_bg, b.green_button_bg, t),
+            shadow:       lerp_color(a.shadow, b.shadow, t),
+            toast_error_bg:   lerp_color(a.toast_error_bg, b.toast_error_bg, t),
+            toast_success_bg: lerp_color(a.toast_success_bg, b.toast_success_bg, t),
+            disabled_fg:     lerp_color(a.disabled_fg, b.disabled_fg, t),
+            disabled_border: lerp_color(a.disabled_border, b.disabled_border, t),
+            disabled_bg:     lerp_color(a.disabled_bg, b.disabled_bg, t),
+            tooltip_bg:      lerp_color(a.tooltip_bg, b.tooltip_bg, t),
+            tooltip_fg:      lerp_color(a.tooltip_fg, b.tooltip_fg, t),
+            table_zebra_bg:  lerp_color(a.table_zebra_bg, b.table_zebra_bg, t),
+            modal_backdrop:  lerp_color(a.modal_backdrop, b.modal_backdrop, t),
+            toast_info_bg:    lerp_color(a.toast_info_bg, b.toast_info_bg, t),
+            toast_warning_bg: lerp_color(a.toast_warning_bg, b.toast_warning_bg, t),
+
+            // Layout constants snap.
+            corner_radius: snap.corner_radius,
+            padding: snap.padding,
+            input_padding: snap.input_padding,
+            item_height: snap.item_height,
+            font_size: snap.font_size,
+            header_font_size: snap.header_font_size,
+            cursor_width: snap.cursor_width,
+            cursor_blink_ms: snap.cursor_blink_ms,
+            button_height: snap.button_height,
+            small_button_height: snap.small_button_height,
+            small_button_min_w: snap.small_button_min_w,
+            focus_ring_expand: snap.focus_ring_expand,
+            dropdown_gap: snap.dropdown_gap,
+            label_pad_y: snap.label_pad_y,
+            heading_font_size: snap.heading_font_size,
+            heading_height: snap.heading_height,
+            drop_zone_height: snap.drop_zone_height,
+            drop_zone_dash: snap.drop_zone_dash,
+            drop_zone_dash_gap: snap.drop_zone_dash_gap,
+            drop_zone_dash_thickness: snap.drop_zone_dash_thickness,
+            progress_bar_height: snap.progress_bar_height,
+            status_dot_radius: snap.status_dot_radius,
+            toast_w: snap.toast_w,
+            toast_h: snap.toast_h,
+            tooltip_delay_ms: snap.tooltip_delay_ms,
+            tooltip_font_size: snap.tooltip_font_size,
+            tooltip_padding: snap.tooltip_padding,
+            context_menu_min_w: snap.context_menu_min_w,
+            scrollbar_width: snap.scrollbar_width,
+            scrollbar_min_thumb: snap.scrollbar_min_thumb,
+            scroll_speed: snap.scroll_speed,
+            tab_indicator_height: snap.tab_indicator_height,
+            tab_fade_duration_ms: snap.tab_fade_duration_ms,
+            table_header_height: snap.table_header_height,
+            column_resize_handle_width: snap.column_resize_handle_width,
+            column_resize_min_width: snap.column_resize_min_width,
+            tree_indent: snap.tree_indent,
+            tree_expand_duration_ms: snap.tree_expand_duration_ms,
+            modal_fade_duration_ms: snap.modal_fade_duration_ms,
+            toast_fade_in_ms: snap.toast_fade_in_ms,
+            toast_fade_out_ms: snap.toast_fade_out_ms,
+            modal_corner_radius: snap.modal_corner_radius,
+            modal_title_height: snap.modal_title_height,
+            modal_padding: snap.modal_padding,
+            modal_min_width: snap.modal_min_width,
+            modal_max_width: snap.modal_max_width,
+            toast_duration_ms: snap.toast_duration_ms,
+            toast_max_visible: snap.toast_max_visible,
+            toast_margin: snap.toast_margin,
+        }
+    }
+
+    fn layout_defaults() -> Self {
+        Self {
+            bg_base: Color::new(0.0, 0.0, 0.0, 1.0),
+            bg_surface: Color::new(0.0, 0.0, 0.0, 1.0),
+            bg_raised: Color::new(0.0, 0.0, 0.0, 1.0),
+            bg_input: Color::new(0.0, 0.0, 0.0, 1.0),
+            fg: Color::new(0.0, 0.0, 0.0, 1.0),
+            fg_muted: Color::new(0.0, 0.0, 0.0, 1.0),
+            fg_dim: Color::new(0.0, 0.0, 0.0, 1.0),
+            fg_label: Color::new(0.0, 0.0, 0.0, 1.0),
+            accent: Color::new(0.0, 0.0, 0.0, 1.0),
+            accent_dim: Color::new(0.0, 0.0, 0.0, 0.0),
+            accent_hover: Color::new(0.0, 0.0, 0.0, 1.0),
+            green: Color::new(0.0, 0.0, 0.0, 1.0),
+            amber: Color::new(0.0, 0.0, 0.0, 1.0),
+            red: Color::new(0.0, 0.0, 0.0, 1.0),
+            border: Color::new(0.0, 0.0, 0.0, 1.0),
+            green_button_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            shadow: Color::new(0.0, 0.0, 0.0, 0.0),
+            toast_error_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            toast_success_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+
+            corner_radius: 6.0,
+            padding: 12.0,
+            input_padding: 8.0,
+            item_height: 32.0,
+            font_size: 14.0,
+            header_font_size: 11.0,
+            cursor_width: 1.5,
+            cursor_blink_ms: 530,
+
+            button_height: 36.0,
+            small_button_height: 28.0,
+            small_button_min_w: 80.0,
+            focus_ring_expand: 2.0,
+            dropdown_gap: 2.0,
+            label_pad_y: 4.0,
+            heading_font_size: 20.0,
+            heading_height: 28.0,
+            drop_zone_height: 120.0,
+            drop_zone_dash: 8.0,
+            drop_zone_dash_gap: 6.0,
+            drop_zone_dash_thickness: 1.5,
+            progress_bar_height: 3.0,
+            status_dot_radius: 4.0,
+            toast_w: 300.0,
+            toast_h: 36.0,
+
+            disabled_fg: Color::new(0.0, 0.0, 0.0, 1.0),
+            disabled_border: Color::new(0.0, 0.0, 0.0, 1.0),
+            disabled_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+
+            tooltip_delay_ms: 500,
+            tooltip_font_size: 12.0,
+            tooltip_padding: 6.0,
+            tooltip_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            tooltip_fg: Color::new(0.0, 0.0, 0.0, 1.0),
+
+            context_menu_min_w: 160.0,
+
+            scrollbar_width: 8.0,
+            scrollbar_min_thumb: 20.0,
+            scroll_speed: 40.0,
+
+            tab_indicator_height: 2.0,
+            tab_fade_duration_ms: 150.0,
+
+            table_header_height: 32.0,
+            table_zebra_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            column_resize_handle_width: 6.0,
+            column_resize_min_width: 40.0,
+
+            tree_indent: 20.0,
+            tree_expand_duration_ms: 200.0,
+
+            modal_fade_duration_ms: 200.0,
+            toast_fade_in_ms: 150.0,
+            toast_fade_out_ms: 300.0,
+
+            modal_backdrop: Color::new(0.0, 0.0, 0.0, 0.5),
+            modal_corner_radius: 8.0,
+            modal_title_height: 40.0,
+            modal_padding: 16.0,
+            modal_min_width: 300.0,
+            modal_max_width: 600.0,
+
+            toast_info_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            toast_warning_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            toast_duration_ms: 3000,
+            toast_max_visible: 5,
+            toast_margin: 12.0,
+        }
+    }
+}
+
+/// Builder for constructing custom themes.
+pub struct ThemeBuilder {
+    base: Theme,
+}
+
+impl ThemeBuilder {
+    pub fn from(base: Theme) -> Self {
+        Self { base }
+    }
+
+    pub fn from_dark() -> Self {
+        Self { base: Theme::dark() }
+    }
+
+    pub fn from_light() -> Self {
+        Self { base: Theme::light() }
+    }
+
+    pub fn bg_base(mut self, c: Color) -> Self { self.base.bg_base = c; self }
+    pub fn bg_surface(mut self, c: Color) -> Self { self.base.bg_surface = c; self }
+    pub fn bg_raised(mut self, c: Color) -> Self { self.base.bg_raised = c; self }
+    pub fn bg_input(mut self, c: Color) -> Self { self.base.bg_input = c; self }
+    pub fn fg(mut self, c: Color) -> Self { self.base.fg = c; self }
+    pub fn fg_muted(mut self, c: Color) -> Self { self.base.fg_muted = c; self }
+    pub fn fg_dim(mut self, c: Color) -> Self { self.base.fg_dim = c; self }
+    pub fn fg_label(mut self, c: Color) -> Self { self.base.fg_label = c; self }
+    pub fn accent(mut self, c: Color) -> Self { self.base.accent = c; self }
+    pub fn accent_dim(mut self, c: Color) -> Self { self.base.accent_dim = c; self }
+    pub fn accent_hover(mut self, c: Color) -> Self { self.base.accent_hover = c; self }
+    pub fn green(mut self, c: Color) -> Self { self.base.green = c; self }
+    pub fn amber(mut self, c: Color) -> Self { self.base.amber = c; self }
+    pub fn red(mut self, c: Color) -> Self { self.base.red = c; self }
+    pub fn border(mut self, c: Color) -> Self { self.base.border = c; self }
+    pub fn font_size(mut self, s: f32) -> Self { self.base.font_size = s; self }
+    pub fn corner_radius(mut self, r: f32) -> Self { self.base.corner_radius = r; self }
+    pub fn padding(mut self, p: f32) -> Self { self.base.padding = p; self }
+
+    /// Derive accent, accent_dim, and accent_hover from an HSL hue (0-360 degrees).
+    pub fn accent_from_hue(mut self, hue_deg: f32) -> Self {
+        let (r, g, b) = hsl_to_rgb(hue_deg, 0.7, 0.63);
+        self.base.accent = Color::new(r, g, b, 1.0);
+        self.base.accent_dim = Color::new(r, g, b, 0.18);
+        let (rh, gh, bh) = hsl_to_rgb(hue_deg, 0.75, 0.72);
+        self.base.accent_hover = Color::new(rh, gh, bh, 1.0);
+        self
+    }
+
+    pub fn build(self) -> Theme {
+        self.base
+    }
+}
+
+/// Theme transition helper for smooth switching between themes.
+pub struct ThemeTransition {
+    pub from: Theme,
+    pub to: Theme,
+    pub start: Instant,
+    pub duration_ms: f32,
+}
+
+impl ThemeTransition {
+    pub fn new(from: Theme, to: Theme, duration_ms: f32) -> Self {
+        Self {
+            from,
+            to,
+            start: Instant::now(),
+            duration_ms,
+        }
+    }
+
+    /// Get the interpolated theme at the current time.
+    pub fn current(&self) -> Theme {
+        let elapsed = self.start.elapsed().as_millis() as f32;
+        let t = (elapsed / self.duration_ms).clamp(0.0, 1.0);
+        Theme::lerp(&self.from, &self.to, t)
+    }
+
+    /// Whether the transition has completed.
+    pub fn is_done(&self) -> bool {
+        self.start.elapsed().as_millis() as f32 >= self.duration_ms
+    }
+}
+
+/// Convert HSL to linear RGB (h in degrees, s/l in 0-1).
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = if h_prime < 1.0 {
+        (c, x, 0.0)
+    } else if h_prime < 2.0 {
+        (x, c, 0.0)
+    } else if h_prime < 3.0 {
+        (0.0, c, x)
+    } else if h_prime < 4.0 {
+        (0.0, x, c)
+    } else if h_prime < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let m = l - c / 2.0;
+    (r1 + m, g1 + m, b1 + m)
+}

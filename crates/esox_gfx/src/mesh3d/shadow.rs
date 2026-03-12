@@ -374,8 +374,8 @@ impl ShadowPass {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.0,
+                    constant: 4,
+                    slope_scale: 3.0,
                     clamp: 0.0,
                 },
             }),

@@ -2651,7 +2651,7 @@ fn shadow_factor(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -> f3
         let split_far = shadow.splits_count[cascade];
         // Blend zone: last 10% of current cascade's range.
         let split_near = select(0.0, shadow.splits_count[cascade - 1], cascade > 0);
-        let blend_start = mix(split_near, split_far, 0.9);
+        let blend_start = mix(split_near, split_far, 0.75);
         if view_depth > blend_start {
             let t = (view_depth - blend_start) / max(split_far - blend_start, 0.001);
             let sf_next = shadow_sample_cascade(biased_pos, next);
@@ -2737,7 +2737,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sf = shadow_factor(in.world_position, n, in.view_depth);
 
     // Directional light (with shadows).
-    let light_dir = normalize(lights.directional_dir_intensity.xyz);
+    // Negate: stored direction is light travel; shading needs surface-to-light.
+    let light_dir = -normalize(lights.directional_dir_intensity.xyz);
     let dir_intensity = lights.directional_dir_intensity.w;
     let dir_color = lights.directional_color_count.xyz;
     let ndotl = max(dot(n, light_dir), 0.0);
@@ -2887,7 +2888,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sf = shadow_factor(in.world_position, n, in.view_depth);
 
     // Directional light (with shadows).
-    let light_dir = normalize(lights.directional_dir_intensity.xyz);
+    // Negate: stored direction is light travel; BRDF expects surface-to-light.
+    let light_dir = -normalize(lights.directional_dir_intensity.xyz);
     let dir_intensity = lights.directional_dir_intensity.w;
     let dir_color = lights.directional_color_count.xyz;
     var lo = dir_color * dir_intensity * sf * cook_torrance_brdf(n, v, light_dir, albedo, metallic, roughness);

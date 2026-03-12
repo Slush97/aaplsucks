@@ -373,6 +373,18 @@ impl PerfMonitor {
             writeln!(buf).unwrap();
         }
 
+        // ── Top memory mappings ──
+        let top_maps = read_top_mappings(20);
+        if !top_maps.is_empty() {
+            writeln!(buf, "TOP MEMORY MAPPINGS BY RSS").unwrap();
+            writeln!(buf, "  {:>8}  {:>8}  {}", "RSS(kB)", "PSS(kB)", "mapping").unwrap();
+            writeln!(buf, "  {:─>8}  {:─>8}  {:─>40}", "", "", "").unwrap();
+            for (rss, pss, name) in &top_maps {
+                writeln!(buf, "  {:>8}  {:>8}  {}", rss, pss, name).unwrap();
+            }
+            writeln!(buf).unwrap();
+        }
+
         // ── Histogram (CPU frame time) ──
         writeln!(buf, "CPU FRAME TIME HISTOGRAM").unwrap();
         let buckets: &[(f64, &str)] = &[
@@ -484,6 +496,89 @@ fn read_smaps_rollup() -> Vec<(String, u64)> {
 
 #[cfg(not(target_os = "linux"))]
 fn read_smaps_rollup() -> Vec<(String, u64)> {
+    Vec::new()
+}
+
+/// Parse /proc/self/smaps and return the top N mappings by RSS.
+/// Returns (rss_kb, pss_kb, mapping_name).
+#[cfg(target_os = "linux")]
+fn read_top_mappings(n: usize) -> Vec<(u64, u64, String)> {
+    let Ok(smaps) = std::fs::read_to_string("/proc/self/smaps") else {
+        return Vec::new();
+    };
+
+    struct Mapping {
+        name: String,
+        rss: u64,
+        pss: u64,
+    }
+
+    let mut mappings: Vec<Mapping> = Vec::new();
+    let mut current_name = String::new();
+    let mut current_rss = 0u64;
+    let mut current_pss = 0u64;
+    let mut in_mapping = false;
+
+    for line in smaps.lines() {
+        if line.starts_with(|c: char| c.is_ascii_hexdigit()) {
+            // New mapping header — flush previous.
+            if in_mapping && current_rss > 0 {
+                mappings.push(Mapping {
+                    name: current_name.clone(),
+                    rss: current_rss,
+                    pss: current_pss,
+                });
+            }
+            // Parse mapping name from the end of the header line.
+            // Format: addr perms offset dev inode pathname
+            let parts: Vec<&str> = line.splitn(6, ' ').collect();
+            current_name = if parts.len() >= 6 {
+                parts[5].trim().to_string()
+            } else {
+                "[anon]".to_string()
+            };
+            if current_name.is_empty() {
+                current_name = "[anon]".to_string();
+            }
+            current_rss = 0;
+            current_pss = 0;
+            in_mapping = true;
+        } else if in_mapping {
+            if let Some(rest) = line.strip_prefix("Rss:") {
+                current_rss = parse_kb(rest);
+            } else if let Some(rest) = line.strip_prefix("Pss:") {
+                current_pss = parse_kb(rest);
+            }
+        }
+    }
+    // Flush last mapping.
+    if in_mapping && current_rss > 0 {
+        mappings.push(Mapping {
+            name: current_name,
+            rss: current_rss,
+            pss: current_pss,
+        });
+    }
+
+    // Merge by name (aggregate RSS/PSS for same library).
+    let mut merged: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    for m in mappings {
+        let entry = merged.entry(m.name).or_insert((0, 0));
+        entry.0 += m.rss;
+        entry.1 += m.pss;
+    }
+
+    let mut sorted: Vec<(u64, u64, String)> = merged
+        .into_iter()
+        .map(|(name, (rss, pss))| (rss, pss, name))
+        .collect();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    sorted.truncate(n);
+    sorted
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_top_mappings(_n: usize) -> Vec<(u64, u64, String)> {
     Vec::new()
 }
 

@@ -1730,7 +1730,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let tex_color = textureSample(atlas_texture, linear_sampler, in.uv, atlas_layer);
-    let a = tex_color.a;
+    // R8 atlas: coverage is in the red channel.
+    let a = tex_color.r;
     if a < 0.001 { discard; }
     // Color emoji: use texture RGBA directly, modulate by opacity only.
     let is_color = in.flags.y > 0.5;

@@ -15,8 +15,8 @@ use esox_gfx::{
     RenderResources, ShapeType, ShelfAllocator, UvRect,
 };
 
-/// Atlas dimensions in texels.
-const ATLAS_SIZE: u32 = 1024;
+/// Initial atlas dimensions in texels. Grows on demand when full.
+const ATLAS_SIZE: u32 = 256;
 
 // ── Shaped-run cache ────────────────────────────────────────────────────────
 

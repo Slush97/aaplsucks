@@ -280,7 +280,7 @@ impl AtlasTexture {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -296,7 +296,7 @@ impl AtlasTexture {
         }
     }
 
-    /// Upload RGBA8 pixel data to a sub-region of the atlas.
+    /// Upload R8 pixel data to a sub-region of the atlas.
     pub fn upload_region(
         &self,
         queue: &wgpu::Queue,
@@ -316,7 +316,7 @@ impl AtlasTexture {
             data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * width),
+                bytes_per_row: Some(width), // R8 = 1 byte per pixel
                 rows_per_image: None,
             },
             wgpu::Extent3d {

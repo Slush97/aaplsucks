@@ -83,8 +83,6 @@ impl GlyphRasterizer {
                             dilated[(row * new_width + col) as usize] = orig.max(left);
                         }
                     }
-                    let rgba_data: Vec<u8> =
-                        dilated.iter().flat_map(|&a| [255, 255, 255, a]).collect();
 
                     Ok(RasterizedGlyph {
                         glyph_id,
@@ -92,24 +90,18 @@ impl GlyphRasterizer {
                         height,
                         bearing_x: placement.left as f32,
                         bearing_y: placement.top as f32,
-                        data: rgba_data,
+                        data: dilated,
                         is_color: false,
                     })
                 } else {
-                    // Regular (non-bold) path: convert alpha mask to RGBA8.
-                    let rgba_data: Vec<u8> = img
-                        .data
-                        .iter()
-                        .flat_map(|&alpha| [255, 255, 255, alpha])
-                        .collect();
-
+                    // Alpha mask — single channel (R8), no RGBA expansion.
                     Ok(RasterizedGlyph {
                         glyph_id,
                         width,
                         height,
                         bearing_x: placement.left as f32,
                         bearing_y: placement.top as f32,
-                        data: rgba_data,
+                        data: img.data,
                         is_color: false,
                     })
                 }

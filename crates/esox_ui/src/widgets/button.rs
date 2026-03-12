@@ -1,4 +1,20 @@
 //! Button widget.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! if ui.button(id!("save"), "Save").clicked {
+//!     save_document();
+//! }
+//!
+//! // Ghost (outline) button
+//! if ui.ghost_button(id!("cancel"), "Cancel").clicked {
+//!     cancel();
+//! }
+//!
+//! // Small button with max width
+//! ui.small_button(id!("ok"), "OK");
+//! ```
 
 use esox_gfx::Color;
 
@@ -140,6 +156,81 @@ impl<'f> Ui<'f> {
             rect.x + (rect.w - label_w) / 2.0,
             rect.y + (rect.h - self.theme.font_size) / 2.0,
             text_color,
+            self.frame,
+            self.gpu,
+            self.resources,
+        );
+
+        response
+    }
+
+    /// Draw a secondary button — `bg_raised` background, used for less prominent actions.
+    pub fn secondary_button(&mut self, id: u64, label: &str) -> Response {
+        let btn_w = self.region.w;
+        let bg_normal = self.theme.secondary_button_bg;
+        let bg_hover = self.theme.secondary_button_hover;
+        self.button_variant(id, label, btn_w, bg_normal, bg_hover, self.theme.fg)
+    }
+
+    /// Draw a danger button — red background for destructive actions.
+    pub fn danger_button(&mut self, id: u64, label: &str) -> Response {
+        let btn_w = self.region.w;
+        let bg_normal = self.theme.danger_button_bg;
+        let bg_hover = self.theme.danger_button_hover;
+        self.button_variant(id, label, btn_w, bg_normal, bg_hover, self.theme.fg)
+    }
+
+    fn button_variant(
+        &mut self,
+        id: u64,
+        label: &str,
+        btn_w: f32,
+        bg_normal: esox_gfx::Color,
+        bg_hover: esox_gfx::Color,
+        text_color: esox_gfx::Color,
+    ) -> Response {
+        let rect = self.allocate_rect(btn_w, self.theme.button_height);
+        self.register_widget(id, rect, WidgetKind::Button);
+
+        let response = self.widget_response(id, rect);
+        let disabled = response.disabled;
+
+        self.push_a11y_node(A11yNode {
+            id, role: A11yRole::Button, label: label.to_string(),
+            value: None, rect, focused: response.focused, disabled,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
+
+        if response.focused && !disabled {
+            paint::draw_focus_ring(
+                self.frame, rect, self.theme.accent_dim,
+                self.theme.corner_radius, self.theme.focus_ring_expand,
+            );
+        }
+
+        let bg = if disabled {
+            self.theme.disabled_bg
+        } else {
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            paint::lerp_color(bg_normal, bg_hover, t)
+        };
+        paint::draw_rounded_rect(self.frame, rect, bg, self.theme.corner_radius);
+
+        if disabled {
+            paint::draw_dashed_border(
+                self.frame, rect, self.theme.disabled_border,
+                6.0, 4.0, 1.0,
+            );
+        }
+
+        let tc = if disabled { self.theme.disabled_fg } else { text_color };
+        let label_w = self.text.measure_text(label, self.theme.font_size);
+        self.text.draw_ui_text(
+            label,
+            rect.x + (rect.w - label_w) / 2.0,
+            rect.y + (rect.h - self.theme.font_size) / 2.0,
+            tc,
             self.frame,
             self.gpu,
             self.resources,

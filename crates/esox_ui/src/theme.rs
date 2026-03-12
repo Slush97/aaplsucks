@@ -37,6 +37,10 @@ pub struct Theme {
 
     // Button backgrounds.
     pub green_button_bg: Color,
+    pub secondary_button_bg: Color,
+    pub secondary_button_hover: Color,
+    pub danger_button_bg: Color,
+    pub danger_button_hover: Color,
 
     // Overlay / toast colors.
     pub shadow: Color,
@@ -105,6 +109,15 @@ pub struct Theme {
     pub tree_indent: f32,
     pub tree_expand_duration_ms: f32,
 
+    // Toggle switch.
+    pub toggle_width: f32,
+    pub toggle_height: f32,
+    pub toggle_knob_inset: f32,
+
+    // Spinner.
+    pub spinner_size: f32,
+    pub spinner_speed: f32,
+
     // Animation durations.
     pub modal_fade_duration_ms: f32,
     pub toast_fade_in_ms: f32,
@@ -117,6 +130,11 @@ pub struct Theme {
     pub modal_padding: f32,
     pub modal_min_width: f32,
     pub modal_max_width: f32,
+
+    // Form field helpers.
+    pub form_label_gap: f32,
+    pub form_helper_gap: f32,
+    pub form_helper_font_size: f32,
 
     // Toast.
     pub toast_info_bg: Color,
@@ -152,6 +170,10 @@ impl Theme {
 
             border:          Color::new(0.200, 0.200, 0.205, 1.0), // #333334
             green_button_bg: Color::new(0.082, 0.380, 0.196, 1.0), // #156132
+            secondary_button_bg:    Color::new(0.160, 0.160, 0.165, 1.0), // #292929
+            secondary_button_hover: Color::new(0.200, 0.200, 0.205, 1.0), // #333334
+            danger_button_bg:       Color::new(0.400, 0.100, 0.100, 1.0), // #661a1a
+            danger_button_hover:    Color::new(0.500, 0.130, 0.130, 1.0), // #802121
 
             shadow: Color::new(0.0, 0.0, 0.0, 0.50),
             toast_error_bg:   Color::new(0.337, 0.078, 0.078, 1.0), // #561414
@@ -198,6 +220,10 @@ impl Theme {
 
             border:          Color::new(0.800, 0.800, 0.820, 1.0), // #ccccd1
             green_button_bg: Color::new(0.820, 0.945, 0.839, 1.0), // #d1f1d6
+            secondary_button_bg:    Color::new(0.900, 0.900, 0.910, 1.0), // #e6e6e8
+            secondary_button_hover: Color::new(0.850, 0.850, 0.865, 1.0), // #d9d9dd
+            danger_button_bg:       Color::new(0.880, 0.200, 0.200, 1.0), // #e13333
+            danger_button_hover:    Color::new(0.800, 0.160, 0.160, 1.0), // #cc2929
 
             shadow: Color::new(0.0, 0.0, 0.0, 0.12),
             toast_error_bg:   Color::new(0.996, 0.886, 0.886, 1.0), // #fee2e2
@@ -251,6 +277,10 @@ impl Theme {
 
             border:          white,
             green_button_bg: green,
+            secondary_button_bg:    Color::new(0.25, 0.25, 0.25, 1.0),
+            secondary_button_hover: Color::new(0.35, 0.35, 0.35, 1.0),
+            danger_button_bg:       red,
+            danger_button_hover:    Color::new(0.8, 0.0, 0.0, 1.0),
 
             shadow: Color::new(0.0, 0.0, 0.0, 1.0),
             toast_error_bg:   Color::new(0.4, 0.0, 0.0, 1.0),
@@ -322,12 +352,19 @@ impl Theme {
         t.column_resize_handle_width *= factor;
         t.column_resize_min_width *= factor;
         t.tree_indent *= factor;
+        t.toggle_width *= factor;
+        t.toggle_height *= factor;
+        t.toggle_knob_inset *= factor;
+        t.spinner_size *= factor;
         t.modal_corner_radius *= factor;
         t.modal_title_height *= factor;
         t.modal_padding *= factor;
         t.modal_min_width *= factor;
         t.modal_max_width *= factor;
         t.toast_margin *= factor;
+        t.form_label_gap *= factor;
+        t.form_helper_gap *= factor;
+        t.form_helper_font_size *= factor;
         t
     }
 
@@ -358,6 +395,10 @@ impl Theme {
             red:          lerp_color(a.red, b.red, t),
             border:       lerp_color(a.border, b.border, t),
             green_button_bg: lerp_color(a.green_button_bg, b.green_button_bg, t),
+            secondary_button_bg: lerp_color(a.secondary_button_bg, b.secondary_button_bg, t),
+            secondary_button_hover: lerp_color(a.secondary_button_hover, b.secondary_button_hover, t),
+            danger_button_bg: lerp_color(a.danger_button_bg, b.danger_button_bg, t),
+            danger_button_hover: lerp_color(a.danger_button_hover, b.danger_button_hover, t),
             shadow:       lerp_color(a.shadow, b.shadow, t),
             toast_error_bg:   lerp_color(a.toast_error_bg, b.toast_error_bg, t),
             toast_success_bg: lerp_color(a.toast_success_bg, b.toast_success_bg, t),
@@ -410,6 +451,11 @@ impl Theme {
             column_resize_min_width: snap.column_resize_min_width,
             tree_indent: snap.tree_indent,
             tree_expand_duration_ms: snap.tree_expand_duration_ms,
+            toggle_width: snap.toggle_width,
+            toggle_height: snap.toggle_height,
+            toggle_knob_inset: snap.toggle_knob_inset,
+            spinner_size: snap.spinner_size,
+            spinner_speed: snap.spinner_speed,
             modal_fade_duration_ms: snap.modal_fade_duration_ms,
             toast_fade_in_ms: snap.toast_fade_in_ms,
             toast_fade_out_ms: snap.toast_fade_out_ms,
@@ -418,6 +464,9 @@ impl Theme {
             modal_padding: snap.modal_padding,
             modal_min_width: snap.modal_min_width,
             modal_max_width: snap.modal_max_width,
+            form_label_gap: snap.form_label_gap,
+            form_helper_gap: snap.form_helper_gap,
+            form_helper_font_size: snap.form_helper_font_size,
             toast_duration_ms: snap.toast_duration_ms,
             toast_max_visible: snap.toast_max_visible,
             toast_margin: snap.toast_margin,
@@ -442,6 +491,10 @@ impl Theme {
             red: Color::new(0.0, 0.0, 0.0, 1.0),
             border: Color::new(0.0, 0.0, 0.0, 1.0),
             green_button_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            secondary_button_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            secondary_button_hover: Color::new(0.0, 0.0, 0.0, 1.0),
+            danger_button_bg: Color::new(0.0, 0.0, 0.0, 1.0),
+            danger_button_hover: Color::new(0.0, 0.0, 0.0, 1.0),
             shadow: Color::new(0.0, 0.0, 0.0, 0.0),
             toast_error_bg: Color::new(0.0, 0.0, 0.0, 1.0),
             toast_success_bg: Color::new(0.0, 0.0, 0.0, 1.0),
@@ -499,6 +552,13 @@ impl Theme {
             tree_indent: 20.0,
             tree_expand_duration_ms: 200.0,
 
+            toggle_width: 36.0,
+            toggle_height: 20.0,
+            toggle_knob_inset: 2.0,
+
+            spinner_size: 24.0,
+            spinner_speed: 0.8,
+
             modal_fade_duration_ms: 200.0,
             toast_fade_in_ms: 150.0,
             toast_fade_out_ms: 300.0,
@@ -509,6 +569,10 @@ impl Theme {
             modal_padding: 16.0,
             modal_min_width: 300.0,
             modal_max_width: 600.0,
+
+            form_label_gap: 4.0,
+            form_helper_gap: 2.0,
+            form_helper_font_size: 12.0,
 
             toast_info_bg: Color::new(0.0, 0.0, 0.0, 1.0),
             toast_warning_bg: Color::new(0.0, 0.0, 0.0, 1.0),
@@ -599,6 +663,55 @@ impl ThemeTransition {
     /// Whether the transition has completed.
     pub fn is_done(&self) -> bool {
         self.start.elapsed().as_millis() as f32 >= self.duration_ms
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_and_light_have_distinct_bg_base() {
+        let dark = Theme::dark();
+        let light = Theme::light();
+        assert_ne!(dark.bg_base, light.bg_base);
+    }
+
+    #[test]
+    fn scaled_doubles_dimensional_fields() {
+        let base = Theme::dark();
+        let scaled = base.scaled(2.0);
+        assert!((scaled.corner_radius - base.corner_radius * 2.0).abs() < 1e-6);
+        assert!((scaled.padding - base.padding * 2.0).abs() < 1e-6);
+        assert!((scaled.font_size - base.font_size * 2.0).abs() < 1e-6);
+        assert!((scaled.button_height - base.button_height * 2.0).abs() < 1e-6);
+        assert!((scaled.toast_w - base.toast_w * 2.0).abs() < 1e-6);
+        assert!((scaled.scrollbar_width - base.scrollbar_width * 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scaled_preserves_colors() {
+        let base = Theme::dark();
+        let scaled = base.scaled(2.0);
+        assert_eq!(scaled.bg_base, base.bg_base);
+        assert_eq!(scaled.fg, base.fg);
+        assert_eq!(scaled.accent, base.accent);
+        assert_eq!(scaled.red, base.red);
+        assert_eq!(scaled.border, base.border);
+    }
+
+    #[test]
+    fn high_contrast_has_pure_black_bg_base() {
+        let hc = Theme::high_contrast();
+        assert_eq!(hc.bg_base, Color::new(0.0, 0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn high_contrast_exists_and_differs_from_dark() {
+        let hc = Theme::high_contrast();
+        let dark = Theme::dark();
+        assert_ne!(hc.fg, dark.fg);
+        assert_ne!(hc.accent, dark.accent);
     }
 }
 

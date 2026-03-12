@@ -1,4 +1,13 @@
 //! Modal dialog widget — overlay with backdrop, focus trap, and animations.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! let resp = ui.modal(id!("confirm"), &mut open, "Confirm Delete", 400.0, |ui| {
+//!     ui.label("Are you sure you want to delete this item?");
+//! });
+//! // resp.clicked when Confirm is pressed, resp.right_clicked reserved
+//! ```
 
 use winit::keyboard::{Key, NamedKey};
 
@@ -34,6 +43,13 @@ impl<'f> Ui<'f> {
                 saved_focus: self.state.focused,
             });
         }
+
+        self.push_a11y_node(crate::state::A11yNode {
+            id, role: crate::state::A11yRole::Dialog, label: title.to_string(),
+            value: None, rect: self.region, focused: false, disabled: false,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
 
         let anim_id = fnv1a_mix(id, MODAL_ANIM_SALT);
         let duration = self.theme.modal_fade_duration_ms;

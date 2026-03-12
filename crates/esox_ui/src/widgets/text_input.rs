@@ -1,4 +1,13 @@
 //! Text input widget — single-line with cursor, selection, scroll.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! let response = ui.text_input(id!("name"), &mut name_state, "Enter name…");
+//! if response.changed {
+//!     validate_name(&name_state.text);
+//! }
+//! ```
 
 use esox_gfx::ShapeBuilder;
 use winit::keyboard::{Key, NamedKey};
@@ -7,6 +16,7 @@ use crate::layout::Rect;
 use crate::paint;
 use crate::response::Response;
 use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
+use crate::widgets::form::FieldStatus;
 use crate::Ui;
 
 impl<'f> Ui<'f> {
@@ -16,6 +26,27 @@ impl<'f> Ui<'f> {
         id: u64,
         input: &mut InputState,
         placeholder: &str,
+    ) -> Response {
+        self.text_input_inner(id, input, placeholder, None)
+    }
+
+    /// Draw a text input with a validation border color.
+    pub fn text_input_validated(
+        &mut self,
+        id: u64,
+        input: &mut InputState,
+        placeholder: &str,
+        status: FieldStatus,
+    ) -> Response {
+        self.text_input_inner(id, input, placeholder, Some(status))
+    }
+
+    fn text_input_inner(
+        &mut self,
+        id: u64,
+        input: &mut InputState,
+        placeholder: &str,
+        status: Option<FieldStatus>,
     ) -> Response {
         let rect = self.allocate_rect(self.region.w, self.theme.button_height);
         self.register_widget(id, rect, WidgetKind::TextInput);
@@ -171,11 +202,16 @@ impl<'f> Ui<'f> {
             self.theme.corner_radius,
         );
 
-        // Border.
+        // Border — respects validation status.
         let border_color = if response.focused {
             self.theme.accent
         } else {
-            self.theme.border
+            match status {
+                Some(FieldStatus::Error) => self.theme.red,
+                Some(FieldStatus::Success) => self.theme.green,
+                Some(FieldStatus::Warning) => self.theme.amber,
+                _ => self.theme.border,
+            }
         };
         paint::draw_border(self.frame, rect, border_color);
 

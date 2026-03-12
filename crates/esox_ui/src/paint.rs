@@ -85,3 +85,49 @@ pub fn draw_dashed_border(
         dy += dash + gap;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lerp_color_at_zero_returns_a() {
+        let a = Color::new(0.2, 0.4, 0.6, 1.0);
+        let b = Color::new(0.8, 0.1, 0.3, 0.5);
+        let result = lerp_color(a, b, 0.0);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn lerp_color_at_one_returns_b() {
+        let a = Color::new(0.2, 0.4, 0.6, 1.0);
+        let b = Color::new(0.8, 0.1, 0.3, 0.5);
+        let result = lerp_color(a, b, 1.0);
+        assert!((result.r - b.r).abs() < 1e-6);
+        assert!((result.g - b.g).abs() < 1e-6);
+        assert!((result.b - b.b).abs() < 1e-6);
+        assert!((result.a - b.a).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lerp_color_at_half_returns_midpoint() {
+        let a = Color::new(0.0, 0.0, 0.0, 0.0);
+        let b = Color::new(1.0, 1.0, 1.0, 1.0);
+        let result = lerp_color(a, b, 0.5);
+        assert!((result.r - 0.5).abs() < 1e-6);
+        assert!((result.g - 0.5).abs() < 1e-6);
+        assert!((result.b - 0.5).abs() < 1e-6);
+        assert!((result.a - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lerp_color_midpoint_non_trivial() {
+        let a = Color::new(0.2, 0.4, 0.6, 0.8);
+        let b = Color::new(0.8, 0.2, 0.4, 0.4);
+        let result = lerp_color(a, b, 0.5);
+        assert!((result.r - 0.5).abs() < 1e-6);
+        assert!((result.g - 0.3).abs() < 1e-6);
+        assert!((result.b - 0.5).abs() < 1e-6);
+        assert!((result.a - 0.6).abs() < 1e-6);
+    }
+}

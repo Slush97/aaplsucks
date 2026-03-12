@@ -1,5 +1,19 @@
 //! Table widget — columnar data with headers, virtual scrolling, row selection,
 //! resizable columns, sorting, and multi-select.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! let columns = &[
+//!     TableColumn::new("Name", ColumnWidth::Weight(2.0)),
+//!     TableColumn::new("Size", ColumnWidth::Fixed(80.0)),
+//! ];
+//! ui.table(id!("files"), &mut table_state, columns, &mut vs, 32.0, 400.0,
+//!     |ui, row, col| {
+//!         ui.label(&data[row][col]);
+//!     },
+//! );
+//! ```
 
 use esox_gfx::ShapeBuilder;
 use winit::keyboard::{Key, NamedKey};

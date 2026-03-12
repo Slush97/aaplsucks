@@ -1,4 +1,13 @@
 //! Virtual scroll widget — only renders visible items for large lists.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! let mut vs = VirtualScrollState::new(items.len());
+//! ui.virtual_scroll(id!("list"), &mut vs, 32.0, 400.0, |ui, i| {
+//!     ui.label(&items[i]);
+//! });
+//! ```
 
 use crate::layout::{Rect, Vec2};
 use crate::paint;
@@ -58,10 +67,10 @@ impl<'f> Ui<'f> {
             }
         }
 
-        // Mouse wheel.
+        // Mouse wheel — apply directly, no inertia.
         if let Some((sx, sy, delta)) = self.state.pending_scroll {
             if container.contains(sx, sy) {
-                offset -= delta * self.theme.scroll_speed;
+                offset += delta * self.theme.scroll_speed;
                 self.state.pending_scroll = None;
             }
         }
@@ -197,11 +206,24 @@ pub(crate) fn draw_scrollbar(
         .hit_rects
         .push((thumb_rect, scrollbar_id, WidgetKind::Scrollbar));
 
-    // Click on thumb to initiate drag.
+    // Click on track or thumb to initiate drag.
     if let Some((cx, cy, ref mut consumed)) = state.mouse.pending_click {
-        if !*consumed && thumb_rect.contains(cx, cy) {
+        if !*consumed && track_rect.contains(cx, cy) {
             *consumed = true;
-            state.scrollbar_drag = Some((id, cy - thumb_y));
+            if thumb_rect.contains(cx, cy) {
+                // Grab thumb at click position.
+                state.scrollbar_drag = Some((id, cy - thumb_y));
+            } else {
+                // Click on track: jump thumb center to click position, then drag.
+                let half_thumb = thumb_h / 2.0;
+                let new_thumb_top = (cy - track_y - half_thumb).clamp(0.0, scrollable_range);
+                *offset = if scrollable_range > 0.0 {
+                    (new_thumb_top / scrollable_range) * max_scroll
+                } else {
+                    0.0
+                };
+                state.scrollbar_drag = Some((id, half_thumb));
+            }
         }
     }
 }

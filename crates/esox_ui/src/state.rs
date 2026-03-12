@@ -497,12 +497,17 @@ pub enum WidgetKind {
     Tab,
     TableRow,
     TreeNode,
+    Toggle,
+    Hyperlink,
     ColumnResize,
     ResizeNS,
     ResizeEW,
     Grab,
     Grabbing,
     NotAllowed,
+    SplitDividerH,
+    SplitDividerV,
+    Combobox,
 }
 
 /// Overlay state (dropdown menus drawn on top of everything).
@@ -519,6 +524,18 @@ pub enum Overlay {
         position: Rect,
         items: Vec<String>,
         hovered: Option<usize>,
+    },
+    ComboboxDropdown {
+        id: u64,
+        anchor: Rect,
+        /// Full list of options (unfiltered).
+        all_choices: Vec<String>,
+        /// Indices into `all_choices` that match the current filter.
+        filtered_indices: Vec<usize>,
+        /// Which item in the *filtered* list is highlighted (keyboard nav).
+        highlighted: Option<usize>,
+        /// Scroll offset for long filtered lists (in pixels).
+        scroll_offset: f32,
     },
 }
 
@@ -722,6 +739,10 @@ pub enum A11yRole {
     Separator,
     ScrollView,
     Group,
+    ToggleButton,
+    Link,
+    SpinButton,
+    Combobox,
 }
 
 /// A single accessibility node.
@@ -791,6 +812,14 @@ pub struct UiState {
     pub cursor_blink_time: Instant,
     /// Scroll offsets keyed by widget ID: (offset, frames_since_last_access).
     pub scroll_offsets: HashMap<u64, (f32, u32)>,
+    /// Timestamp of last frame start for dt calculation.
+    pub(crate) last_frame_time: Instant,
+    /// Damage tracker for frame-skip optimization.
+    pub damage: esox_gfx::DamageTracker,
+    /// Previous frame's hovered widget (for damage on hover change).
+    prev_hovered: Option<u64>,
+    /// Previous frame's focused widget (for damage on focus change).
+    prev_focused: Option<u64>,
     /// Overlay (dropdown / context menu) state.
     pub overlay: Option<Overlay>,
     /// Tooltip state.
@@ -829,6 +858,20 @@ pub struct UiState {
     pub scale_factor: f32,
     /// IME composition state.
     pub ime: ImeState,
+    /// Whether a spinner was drawn this frame (needs continuous redraw).
+    pub(crate) spinner_active: bool,
+    /// Collapsing header open/closed state keyed by widget ID.
+    pub collapsing_open: HashSet<u64>,
+    /// Split pane ratios keyed by widget ID.
+    pub split_ratios: HashMap<u64, f32>,
+    /// Active split-pane divider drag: (split_id, is_horizontal).
+    pub split_drag: Option<(u64, bool)>,
+    /// Which menu bar dropdown is currently open (index into the menus slice).
+    pub menu_bar_open: Option<usize>,
+    /// Inline edit buffers for number_input widgets, keyed by widget ID.
+    pub number_edit_buffers: HashMap<u64, InputState>,
+    /// Per-combobox filter input state, keyed by widget ID.
+    pub combobox_inputs: HashMap<u64, InputState>,
 }
 
 /// IME (Input Method Editor) composition state.
@@ -855,6 +898,10 @@ impl UiState {
             cursor_blink: true,
             cursor_blink_time: Instant::now(),
             scroll_offsets: HashMap::new(),
+            last_frame_time: Instant::now(),
+            damage: esox_gfx::DamageTracker::new(),
+            prev_hovered: None,
+            prev_focused: None,
             overlay: None,
             tooltip: None,
             hover_anims: HashMap::new(),
@@ -879,6 +926,13 @@ impl UiState {
                 active: false,
                 committed: None,
             },
+            spinner_active: false,
+            collapsing_open: HashSet::new(),
+            split_ratios: HashMap::new(),
+            split_drag: None,
+            menu_bar_open: None,
+            number_edit_buffers: HashMap::new(),
+            combobox_inputs: HashMap::new(),
         }
     }
 
@@ -886,6 +940,7 @@ impl UiState {
     pub fn process_key(&mut self, event: KeyEvent, modifiers: ModifiersState) {
         self.modifiers = modifiers;
         self.keys.push((event, modifiers));
+        self.damage.invalidate_all();
     }
 
     /// Update modifier keys state.
@@ -897,6 +952,7 @@ impl UiState {
     pub fn on_ime_preedit(&mut self, text: String, cursor: Option<(usize, usize)>) {
         self.ime.preedit = text;
         self.ime.preedit_cursor = cursor;
+        self.damage.invalidate_all();
     }
 
     /// Process IME commit event — buffer the text for the focused widget.
@@ -904,6 +960,7 @@ impl UiState {
         self.ime.preedit.clear();
         self.ime.preedit_cursor = None;
         self.ime.committed = Some(text);
+        self.damage.invalidate_all();
     }
 
     /// Process IME enabled/disabled event.
@@ -924,6 +981,10 @@ impl UiState {
         item_height: f32,
         dropdown_gap: f32,
     ) {
+        // Mark damage if mouse actually moved (hover may change).
+        if (self.mouse.x - x).abs() > 0.5 || (self.mouse.y - y).abs() > 0.5 {
+            self.damage.invalidate_all();
+        }
         self.mouse.x = x;
         self.mouse.y = y;
 
@@ -973,6 +1034,32 @@ impl UiState {
                     *hovered = None;
                 }
             }
+            Some(Overlay::ComboboxDropdown {
+                ref anchor,
+                ref filtered_indices,
+                ref mut highlighted,
+                ref scroll_offset,
+                ..
+            }) => {
+                let max_visible = 8;
+                let visible_count = filtered_indices.len().min(max_visible);
+                let dd_y = anchor.y + anchor.h + dropdown_gap;
+                let dd_h = visible_count as f32 * item_height;
+                if x >= anchor.x
+                    && x < anchor.x + anchor.w
+                    && y >= dd_y
+                    && y < dd_y + dd_h
+                {
+                    let idx = ((y - dd_y + *scroll_offset) / item_height) as usize;
+                    if idx < filtered_indices.len() {
+                        *highlighted = Some(idx);
+                    } else {
+                        *highlighted = None;
+                    }
+                } else {
+                    *highlighted = None;
+                }
+            }
             None => {}
         }
     }
@@ -981,17 +1068,20 @@ impl UiState {
     pub fn process_mouse_click(&mut self, x: f32, y: f32) {
         self.mouse.pending_click = Some((x, y, false));
         self.mouse_pressed = true;
+        self.damage.invalidate_all();
     }
 
     /// Record a right-click (button 2).
     pub fn process_right_click(&mut self, x: f32, y: f32) {
         self.mouse.pending_right_click = Some((x, y, false));
+        self.damage.invalidate_all();
     }
 
     /// Record a mouse button release.
     pub fn process_mouse_release(&mut self) {
         self.mouse_pressed = false;
         self.scrollbar_drag = None;
+        self.split_drag = None;
         // Drag ends on release — drag payload stays until end_frame so accept_drop can read it.
         self.drag_start = None;
     }
@@ -999,6 +1089,7 @@ impl UiState {
     /// Buffer a scroll (mouse wheel) event for processing during the frame.
     pub fn process_scroll(&mut self, x: f32, y: f32, delta_y: f32) {
         self.pending_scroll = Some((x, y, delta_y));
+        self.damage.invalidate_all();
     }
 
     /// Update cursor blink. Call once per frame.
@@ -1022,6 +1113,14 @@ impl UiState {
         if self.drag.is_some() {
             return winit::window::CursorIcon::Grabbing;
         }
+        // Active split-pane divider drag overrides cursor.
+        if let Some((_, is_horizontal)) = self.split_drag {
+            return if is_horizontal {
+                winit::window::CursorIcon::ColResize
+            } else {
+                winit::window::CursorIcon::RowResize
+            };
+        }
         // Iterate in reverse so the topmost (last-registered) widget wins.
         for (rect, _id, kind) in self.hit_rects.iter().rev() {
             if rect.contains(x, y) {
@@ -1039,8 +1138,13 @@ impl UiState {
                     | WidgetKind::Radio
                     | WidgetKind::Tab
                     | WidgetKind::TableRow
-                    | WidgetKind::TreeNode => winit::window::CursorIcon::Pointer,
+                    | WidgetKind::TreeNode
+                    | WidgetKind::Toggle => winit::window::CursorIcon::Pointer,
+                    WidgetKind::Hyperlink => winit::window::CursorIcon::Pointer,
                     WidgetKind::Slider | WidgetKind::Scrollbar => winit::window::CursorIcon::Default,
+                    WidgetKind::SplitDividerH => winit::window::CursorIcon::ColResize,
+                    WidgetKind::SplitDividerV => winit::window::CursorIcon::RowResize,
+                    WidgetKind::Combobox => winit::window::CursorIcon::Text,
                 };
             }
         }
@@ -1054,10 +1158,21 @@ impl UiState {
             || self.hover_anims.values().any(|a| !a.is_settled())
             || self.anims.values().any(|a| !a.is_settled())
             || self.scrollbar_drag.is_some()
+            || self.split_drag.is_some()
             || self.drag.is_some()
             || self.tooltip.as_ref().is_some_and(|t| !t.visible)
             || !self.modal_stack.is_empty()
             || !self.toasts.toasts.is_empty()
+            || self.spinner_active
+    }
+
+    /// Whether the damage tracker indicates a redraw is needed.
+    ///
+    /// This is a frame-skip check: returns `false` when nothing changed
+    /// since the last frame, allowing the platform to skip GPU submission.
+    pub fn needs_redraw(&self) -> bool {
+        self.damage.is_full_invalidation()
+            || self.damage.regions().map_or(false, |r| !r.is_empty())
     }
 
     /// Get or update a hover animation, returning the current interpolation value.
@@ -1146,8 +1261,42 @@ impl UiState {
 
     /// Clear per-frame state. Called at the start of each frame.
     pub(crate) fn begin_frame(&mut self) {
+        self.last_frame_time = Instant::now();
+
+        // Damage detection: hover/focus changes, active animations, scroll velocity.
+        let current_hovered = self.hit_rects.iter().rev()
+            .find(|(r, _, _)| r.contains(self.mouse.x, self.mouse.y))
+            .map(|(_, id, _)| *id);
+        if current_hovered != self.prev_hovered {
+            // Add damage for old and new hovered widget rects.
+            if let Some(old_id) = self.prev_hovered {
+                if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == old_id) {
+                    self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                }
+            }
+            if let Some(new_id) = current_hovered {
+                if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == new_id) {
+                    self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                }
+            }
+        }
+        if self.focused != self.prev_focused {
+            self.damage.invalidate_all();
+        }
+        if self.hover_anims.values().any(|a| !a.is_settled())
+            || self.anims.values().any(|a| !a.is_settled())
+        {
+            self.damage.invalidate_all();
+        }
+        if self.overlay.is_some() || !self.modal_stack.is_empty() || !self.toasts.toasts.is_empty()
+            || self.menu_bar_open.is_some()
+        {
+            self.damage.invalidate_all();
+        }
+
         self.focus_chain.clear();
         self.hit_rects.clear();
+        self.spinner_active = false;
         if self.a11y_enabled {
             self.a11y_tree.clear();
         }
@@ -1207,6 +1356,13 @@ impl UiState {
         if self.hover_anims.len() > 256 {
             self.hover_anims.retain(|_, anim| !anim.is_settled());
         }
+        // Save hover/focus state for next frame's damage detection.
+        self.prev_hovered = self.hit_rects.iter().rev()
+            .find(|(r, _, _)| r.contains(self.mouse.x, self.mouse.y))
+            .map(|(_, id, _)| *id);
+        self.prev_focused = self.focused;
+        // Reset damage tracker for next frame.
+        self.damage.reset();
     }
 
     fn is_text_widget(&self, id: u64) -> bool {
@@ -1220,5 +1376,412 @@ impl UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ══════════════════════════════════════════════════════════════
+    // InputState — cursor ops
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn insert_char_at_cursor() {
+        let mut s = InputState::new();
+        s.insert_char('A');
+        assert_eq!(s.text, "A");
+        assert_eq!(s.cursor, 1);
+        s.insert_char('B');
+        assert_eq!(s.text, "AB");
+        assert_eq!(s.cursor, 2);
+    }
+
+    #[test]
+    fn insert_char_mid_string() {
+        let mut s = InputState::new();
+        s.text = "ac".into();
+        s.cursor = 1;
+        s.insert_char('b');
+        assert_eq!(s.text, "abc");
+        assert_eq!(s.cursor, 2);
+    }
+
+    #[test]
+    fn insert_str_at_cursor() {
+        let mut s = InputState::new();
+        s.insert_str("hello");
+        assert_eq!(s.text, "hello");
+        assert_eq!(s.cursor, 5);
+        s.insert_str(" world");
+        assert_eq!(s.text, "hello world");
+        assert_eq!(s.cursor, 11);
+    }
+
+    #[test]
+    fn delete_back_ascii() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 3;
+        s.delete_back();
+        assert_eq!(s.text, "ab");
+        assert_eq!(s.cursor, 2);
+    }
+
+    #[test]
+    fn delete_back_multibyte_utf8() {
+        let mut s = InputState::new();
+        s.text = "aé".into(); // 'é' is 2 bytes
+        s.cursor = s.text.len();
+        s.delete_back();
+        assert_eq!(s.text, "a");
+        assert_eq!(s.cursor, 1);
+    }
+
+    #[test]
+    fn delete_back_at_start_is_noop() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 0;
+        s.delete_back();
+        assert_eq!(s.text, "abc");
+        assert_eq!(s.cursor, 0);
+    }
+
+    #[test]
+    fn delete_forward_ascii() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 1;
+        s.delete_forward();
+        assert_eq!(s.text, "ac");
+        assert_eq!(s.cursor, 1);
+    }
+
+    #[test]
+    fn delete_forward_at_end_is_noop() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 3;
+        s.delete_forward();
+        assert_eq!(s.text, "abc");
+    }
+
+    #[test]
+    fn move_left_and_right() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 2;
+        s.move_left();
+        assert_eq!(s.cursor, 1);
+        s.move_right();
+        assert_eq!(s.cursor, 2);
+    }
+
+    #[test]
+    fn move_left_at_start_stays() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 0;
+        s.move_left();
+        assert_eq!(s.cursor, 0);
+    }
+
+    #[test]
+    fn move_right_at_end_stays() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 3;
+        s.move_right();
+        assert_eq!(s.cursor, 3);
+    }
+
+    #[test]
+    fn home_and_end() {
+        let mut s = InputState::new();
+        s.text = "hello world".into();
+        s.cursor = 5;
+        s.home();
+        assert_eq!(s.cursor, 0);
+        s.end();
+        assert_eq!(s.cursor, 11);
+    }
+
+    #[test]
+    fn select_all_sets_selection() {
+        let mut s = InputState::new();
+        s.text = "hello".into();
+        s.cursor = 2;
+        s.select_all();
+        assert_eq!(s.selection, Some((0, 5)));
+        assert_eq!(s.cursor, 5);
+    }
+
+    #[test]
+    fn select_all_empty_string_is_noop() {
+        let mut s = InputState::new();
+        s.select_all();
+        assert!(s.selection.is_none());
+    }
+
+    #[test]
+    fn delete_selection_removes_range() {
+        let mut s = InputState::new();
+        s.text = "hello world".into();
+        s.selection = Some((5, 11));
+        s.cursor = 11;
+        assert!(s.delete_selection());
+        assert_eq!(s.text, "hello");
+        assert_eq!(s.cursor, 5);
+        assert!(s.selection.is_none());
+    }
+
+    #[test]
+    fn delete_selection_no_selection_returns_false() {
+        let mut s = InputState::new();
+        s.text = "hello".into();
+        assert!(!s.delete_selection());
+    }
+
+    #[test]
+    fn move_left_extend_creates_selection() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 2;
+        s.move_left_extend();
+        assert_eq!(s.cursor, 1);
+        assert_eq!(s.selection, Some((1, 2)));
+    }
+
+    #[test]
+    fn move_right_extend_creates_selection() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 1;
+        s.move_right_extend();
+        assert_eq!(s.cursor, 2);
+        assert_eq!(s.selection, Some((1, 2)));
+    }
+
+    #[test]
+    fn home_extend_selects_to_start() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 3;
+        s.home_extend();
+        assert_eq!(s.cursor, 0);
+        assert_eq!(s.selection, Some((0, 3)));
+    }
+
+    #[test]
+    fn end_extend_selects_to_end() {
+        let mut s = InputState::new();
+        s.text = "abc".into();
+        s.cursor = 0;
+        s.end_extend();
+        assert_eq!(s.cursor, 3);
+        assert_eq!(s.selection, Some((0, 3)));
+    }
+
+    #[test]
+    fn selected_text_returns_correct_slice() {
+        let mut s = InputState::new();
+        s.text = "hello world".into();
+        s.selection = Some((6, 11));
+        assert_eq!(s.selected_text(), Some("world"));
+    }
+
+    #[test]
+    fn selected_text_none_when_no_selection() {
+        let s = InputState::new();
+        assert_eq!(s.selected_text(), None);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // Easing::apply
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn easing_linear_boundaries() {
+        assert!((Easing::Linear.apply(0.0)).abs() < 1e-6);
+        assert!((Easing::Linear.apply(1.0) - 1.0).abs() < 1e-6);
+        assert!((Easing::Linear.apply(0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn easing_ease_out_cubic_boundaries() {
+        assert!((Easing::EaseOutCubic.apply(0.0)).abs() < 1e-6);
+        assert!((Easing::EaseOutCubic.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn easing_ease_in_out_cubic_boundaries_and_symmetry() {
+        assert!((Easing::EaseInOutCubic.apply(0.0)).abs() < 1e-6);
+        assert!((Easing::EaseInOutCubic.apply(1.0) - 1.0).abs() < 1e-6);
+        let sum = Easing::EaseInOutCubic.apply(0.25) + Easing::EaseInOutCubic.apply(0.75);
+        assert!((sum - 1.0).abs() < 1e-6, "sum was {sum}");
+    }
+
+    #[test]
+    fn easing_ease_out_expo_boundaries() {
+        assert!((Easing::EaseOutExpo.apply(0.0)).abs() < 1e-3);
+        assert!((Easing::EaseOutExpo.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // UndoHistory
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn undo_redo_cycle() {
+        let mut h = UndoHistory::new();
+        h.push("a", 1);
+        h.push("b", 2);
+        let entry = h.undo().unwrap();
+        assert_eq!(entry.text, "b");
+        let entry = h.undo().unwrap();
+        assert_eq!(entry.text, "a");
+        let entry = h.redo().unwrap();
+        assert_eq!(entry.text, "a");
+        let entry = h.redo().unwrap();
+        assert_eq!(entry.text, "b");
+    }
+
+    #[test]
+    fn undo_past_beginning_returns_none() {
+        let mut h = UndoHistory::new();
+        h.push("a", 1);
+        h.undo();
+        assert!(h.undo().is_none());
+    }
+
+    #[test]
+    fn redo_past_end_returns_none() {
+        let mut h = UndoHistory::new();
+        h.push("a", 1);
+        assert!(h.redo().is_none());
+    }
+
+    #[test]
+    fn push_after_undo_truncates_redo() {
+        let mut h = UndoHistory::new();
+        h.push("a", 1);
+        h.push("b", 2);
+        h.push("c", 3);
+        h.undo(); // index=2
+        h.undo(); // index=1
+        h.push("d", 4);
+        assert!(h.redo().is_none());
+        let entry = h.undo().unwrap();
+        assert_eq!(entry.text, "d");
+        let entry = h.undo().unwrap();
+        assert_eq!(entry.text, "a");
+    }
+
+    #[test]
+    fn undo_history_caps_at_100() {
+        let mut h = UndoHistory::new();
+        for i in 0..110 {
+            h.push(&format!("entry_{i}"), i);
+        }
+        assert_eq!(h.entries.len(), 100);
+        assert_eq!(h.entries[0].text, "entry_10");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // ToastQueue
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn toast_push_returns_incrementing_ids() {
+        let mut q = ToastQueue::new();
+        let id1 = q.push(ToastKind::Info, "a".into(), 3000);
+        let id2 = q.push(ToastKind::Error, "b".into(), 3000);
+        let id3 = q.push(ToastKind::Success, "c".into(), 3000);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+        assert_eq!(q.toasts.len(), 3);
+    }
+
+    #[test]
+    fn toast_dismiss_marks_dismissed() {
+        let mut q = ToastQueue::new();
+        let id = q.push(ToastKind::Warning, "warn".into(), 3000);
+        assert!(!q.toasts[0].dismissed);
+        q.dismiss(id);
+        assert!(q.toasts[0].dismissed);
+    }
+
+    #[test]
+    fn toast_dismiss_nonexistent_is_noop() {
+        let mut q = ToastQueue::new();
+        q.push(ToastKind::Info, "a".into(), 3000);
+        q.dismiss(999);
+        assert!(!q.toasts[0].dismissed);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // A11yTree
+    // ══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn a11y_tree_push_adds_node_and_root_child() {
+        let mut tree = A11yTree::new();
+        tree.push(A11yNode {
+            id: 42,
+            role: A11yRole::Button,
+            label: "OK".into(),
+            value: None,
+            rect: Rect::new(0.0, 0.0, 80.0, 30.0),
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            checked: None,
+            value_range: None,
+            children: vec![],
+        });
+        assert_eq!(tree.nodes.len(), 1);
+        assert_eq!(tree.root_children, vec![42]);
+    }
+
+    #[test]
+    fn a11y_tree_clear_empties_both() {
+        let mut tree = A11yTree::new();
+        tree.push(A11yNode {
+            id: 1,
+            role: A11yRole::Label,
+            label: "x".into(),
+            value: None,
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            checked: None,
+            value_range: None,
+            children: vec![],
+        });
+        tree.push(A11yNode {
+            id: 2,
+            role: A11yRole::Label,
+            label: "y".into(),
+            value: None,
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            checked: None,
+            value_range: None,
+            children: vec![],
+        });
+        assert_eq!(tree.nodes.len(), 2);
+        assert_eq!(tree.root_children.len(), 2);
+        tree.clear();
+        assert!(tree.nodes.is_empty());
+        assert!(tree.root_children.is_empty());
     }
 }

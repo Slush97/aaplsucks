@@ -89,3 +89,66 @@ impl<'a> Default for RichText<'a> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_starts_empty() {
+        let rt = RichText::new();
+        assert!(rt.spans.is_empty());
+    }
+
+    #[test]
+    fn builder_chain_produces_correct_spans() {
+        let color = Color::new(1.0, 0.0, 0.0, 1.0);
+        let rt = RichText::new()
+            .span("a")
+            .bold("b")
+            .colored("c", color)
+            .sized("d", 20.0);
+
+        assert_eq!(rt.spans.len(), 4);
+
+        // span("a") — plain
+        assert_eq!(rt.spans[0].text, "a");
+        assert!(!rt.spans[0].bold);
+        assert!(rt.spans[0].color.is_none());
+        assert!(rt.spans[0].size.is_none());
+
+        // bold("b")
+        assert_eq!(rt.spans[1].text, "b");
+        assert!(rt.spans[1].bold);
+        assert!(rt.spans[1].color.is_none());
+        assert!(rt.spans[1].size.is_none());
+
+        // colored("c", red)
+        assert_eq!(rt.spans[2].text, "c");
+        assert!(!rt.spans[2].bold);
+        assert_eq!(rt.spans[2].color, Some(color));
+        assert!(rt.spans[2].size.is_none());
+
+        // sized("d", 20.0)
+        assert_eq!(rt.spans[3].text, "d");
+        assert!(!rt.spans[3].bold);
+        assert!(rt.spans[3].color.is_none());
+        assert_eq!(rt.spans[3].size, Some(20.0));
+    }
+
+    #[test]
+    fn push_custom_span() {
+        let custom = Span {
+            text: "custom",
+            color: Some(Color::new(0.0, 1.0, 0.0, 1.0)),
+            bold: true,
+            size: Some(32.0),
+        };
+        let rt = RichText::new().push(custom);
+        assert_eq!(rt.spans.len(), 1);
+        assert_eq!(rt.spans[0].text, "custom");
+        assert!(rt.spans[0].bold);
+        assert_eq!(rt.spans[0].color, Some(Color::new(0.0, 1.0, 0.0, 1.0)));
+        assert_eq!(rt.spans[0].size, Some(32.0));
+    }
+}

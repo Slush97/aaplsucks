@@ -42,3 +42,82 @@ macro_rules! id {
         _ID
     }};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv1a_empty_string_is_offset_basis() {
+        assert_eq!(fnv1a(""), 0xcbf29ce484222325);
+    }
+
+    #[test]
+    fn fnv1a_known_value_a() {
+        // FNV-1a of "a": offset_basis ^ 0x61, then *prime
+        let expected = (0xcbf29ce484222325_u64 ^ 0x61).wrapping_mul(0x00000100000001b3);
+        assert_eq!(fnv1a("a"), expected);
+    }
+
+    #[test]
+    fn fnv1a_known_value_foobar() {
+        // Compute step-by-step for "foobar"
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for &b in b"foobar" {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x00000100000001b3);
+        }
+        assert_eq!(fnv1a("foobar"), hash);
+    }
+
+    #[test]
+    fn fnv1a_different_strings_differ() {
+        assert_ne!(fnv1a("button_ok"), fnv1a("button_cancel"));
+    }
+
+    #[test]
+    fn fnv1a_runtime_matches_const() {
+        assert_eq!(fnv1a_runtime("hello"), fnv1a("hello"));
+        assert_eq!(fnv1a_runtime(""), fnv1a(""));
+        assert_eq!(fnv1a_runtime("widget_123"), fnv1a("widget_123"));
+    }
+
+    #[test]
+    fn fnv1a_mix_deterministic() {
+        let seed = fnv1a("prefix_");
+        let a = fnv1a_mix(seed, 42);
+        let b = fnv1a_mix(seed, 42);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fnv1a_mix_different_vals_differ() {
+        let seed = fnv1a("prefix_");
+        assert_ne!(fnv1a_mix(seed, 1), fnv1a_mix(seed, 2));
+        assert_ne!(fnv1a_mix(seed, 0), fnv1a_mix(seed, u64::MAX));
+    }
+
+    #[test]
+    fn hover_salt_produces_distinct_ids() {
+        let ids = [fnv1a("btn"), fnv1a("slider"), fnv1a("input"), 0, 1, u64::MAX];
+        for id in ids {
+            assert_ne!(id ^ HOVER_SALT, id, "HOVER_SALT should flip bits for id={id}");
+        }
+    }
+
+    #[test]
+    fn id_macro_matches_fnv1a() {
+        let macro_val = crate::id!("my_widget");
+        assert_eq!(macro_val, fnv1a("my_widget"));
+
+        let macro_val2 = crate::id!("other");
+        assert_eq!(macro_val2, fnv1a("other"));
+    }
+
+    #[test]
+    fn id_macro_is_const() {
+        // This compiles because id! produces a const — that's the test.
+        const ID: u64 = crate::id!("compile_time");
+        assert_eq!(ID, fnv1a("compile_time"));
+    }
+}

@@ -1,4 +1,14 @@
 //! Scrollable container widget — GPU-clipped, mouse wheel + draggable scrollbar.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! ui.scrollable(id!("log"), 300.0, |ui| {
+//!     for line in &log_lines {
+//!         ui.label(line);
+//!     }
+//! });
+//! ```
 
 use crate::layout::{Rect, Vec2};
 use crate::paint;
@@ -104,10 +114,10 @@ impl<'f> Ui<'f> {
             }
         }
 
-        // Consume scroll event if mouse is inside container.
+        // Consume scroll event — apply directly, no inertia.
         if let Some((sx, sy, delta)) = self.state.pending_scroll {
             if container.contains(sx, sy) {
-                offset -= delta * self.theme.scroll_speed;
+                offset += delta * self.theme.scroll_speed;
                 self.state.pending_scroll = None;
             }
         }
@@ -160,14 +170,36 @@ impl<'f> Ui<'f> {
             let scrollbar_id = id.wrapping_add(1);
             self.state.hit_rects.push((thumb_rect, scrollbar_id, WidgetKind::Scrollbar));
 
-            // Handle click on thumb to initiate drag.
+            // Handle click on track or thumb to initiate drag.
             if let Some((cx, cy, ref mut consumed)) = self.state.mouse.pending_click {
-                if !*consumed && thumb_rect.contains(cx, cy) {
+                if !*consumed && track_rect.contains(cx, cy) {
                     *consumed = true;
-                    self.state.scrollbar_drag = Some((id, cy - thumb_y));
+                    if thumb_rect.contains(cx, cy) {
+                        // Grab thumb at click position.
+                        self.state.scrollbar_drag = Some((id, cy - thumb_y));
+                    } else {
+                        // Click on track: jump thumb center to click position, then drag.
+                        let half_thumb = thumb_h / 2.0;
+                        let new_thumb_top = (cy - track_y - half_thumb).clamp(0.0, scrollable_range);
+                        offset = if scrollable_range > 0.0 {
+                            (new_thumb_top / scrollable_range) * max_scroll
+                        } else {
+                            0.0
+                        };
+                        self.state.scrollbar_drag = Some((id, half_thumb));
+                        // Re-store the updated offset.
+                        self.state.scroll_offsets.insert(id, (offset.clamp(0.0, max_scroll), 0));
+                    }
                 }
             }
         }
+
+        self.push_a11y_node(crate::state::A11yNode {
+            id, role: crate::state::A11yRole::ScrollView, label: String::new(),
+            value: None, rect: container, focused: false, disabled: false,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
 
         Response {
             clicked: false,

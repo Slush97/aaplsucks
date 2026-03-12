@@ -165,3 +165,132 @@ pub(crate) struct LayoutContext {
     pub max_cross: f32,
     pub clip_rect: Option<[f32; 4]>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Rect::contains ──
+
+    #[test]
+    fn rect_contains_point_inside() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert!(r.contains(50.0, 40.0));
+    }
+
+    #[test]
+    fn rect_contains_left_top_edge_included() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert!(r.contains(10.0, 20.0)); // exact top-left corner
+    }
+
+    #[test]
+    fn rect_contains_right_edge_excluded() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        // x=110 is x+w, should be excluded (px < self.x + self.w)
+        assert!(!r.contains(110.0, 40.0));
+    }
+
+    #[test]
+    fn rect_contains_bottom_edge_excluded() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        // y=70 is y+h, should be excluded
+        assert!(!r.contains(50.0, 70.0));
+    }
+
+    #[test]
+    fn rect_contains_outside() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert!(!r.contains(5.0, 25.0));   // left of rect
+        assert!(!r.contains(50.0, 15.0));  // above rect
+        assert!(!r.contains(200.0, 40.0)); // right of rect
+        assert!(!r.contains(50.0, 80.0));  // below rect
+    }
+
+    // ── Rect::intersect ──
+
+    #[test]
+    fn rect_intersect_overlapping() {
+        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let b = Rect::new(50.0, 50.0, 100.0, 100.0);
+        let i = a.intersect(&b).unwrap();
+        assert_eq!(i.x, 50.0);
+        assert_eq!(i.y, 50.0);
+        assert_eq!(i.w, 50.0);
+        assert_eq!(i.h, 50.0);
+    }
+
+    #[test]
+    fn rect_intersect_disjoint() {
+        let a = Rect::new(0.0, 0.0, 50.0, 50.0);
+        let b = Rect::new(100.0, 100.0, 50.0, 50.0);
+        assert!(a.intersect(&b).is_none());
+    }
+
+    #[test]
+    fn rect_intersect_touching_edge_is_none() {
+        // Touching at edge: a ends at x=50, b starts at x=50 => no overlap (x1 == x0, not >)
+        let a = Rect::new(0.0, 0.0, 50.0, 50.0);
+        let b = Rect::new(50.0, 0.0, 50.0, 50.0);
+        assert!(a.intersect(&b).is_none());
+    }
+
+    #[test]
+    fn rect_intersect_fully_contained() {
+        let outer = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let inner = Rect::new(50.0, 50.0, 30.0, 30.0);
+        let i = outer.intersect(&inner).unwrap();
+        assert_eq!(i.x, 50.0);
+        assert_eq!(i.y, 50.0);
+        assert_eq!(i.w, 30.0);
+        assert_eq!(i.h, 30.0);
+    }
+
+    // ── Constraints::apply ──
+
+    #[test]
+    fn constraints_none_passes_through() {
+        let c = Constraints::new();
+        let (w, h) = c.apply(100.0, 50.0);
+        assert_eq!(w, 100.0);
+        assert_eq!(h, 50.0);
+    }
+
+    #[test]
+    fn constraints_min_width_clamps_up() {
+        let c = Constraints::new().min_width(200.0);
+        let (w, _) = c.apply(100.0, 50.0);
+        assert_eq!(w, 200.0);
+    }
+
+    #[test]
+    fn constraints_max_width_clamps_down() {
+        let c = Constraints::new().max_width(50.0);
+        let (w, _) = c.apply(100.0, 50.0);
+        assert_eq!(w, 50.0);
+    }
+
+    #[test]
+    fn constraints_min_wins_over_max_on_conflict() {
+        // min > max: min takes priority (applied after max)
+        let c = Constraints::new().min_width(200.0).max_width(100.0);
+        let (w, _) = c.apply(150.0, 50.0);
+        assert_eq!(w, 200.0);
+    }
+
+    #[test]
+    fn constraints_min_height_clamps_up() {
+        let c = Constraints::new().min_height(100.0);
+        let (_, h) = c.apply(50.0, 30.0);
+        assert_eq!(h, 100.0);
+    }
+
+    #[test]
+    fn constraints_aspect_ratio_adjusts_height() {
+        // 2:1 ratio, w=200 => h should be 100
+        let c = Constraints::new().aspect_ratio(2.0);
+        let (w, h) = c.apply(200.0, 50.0);
+        assert_eq!(w, 200.0);
+        assert_eq!(h, 100.0);
+    }
+}

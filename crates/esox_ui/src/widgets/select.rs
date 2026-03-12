@@ -196,6 +196,7 @@ impl<'f> Ui<'f> {
 
         match overlay {
             Overlay::ContextMenu { .. } => return self.draw_context_menu_overlay(),
+            Overlay::ComboboxDropdown { .. } => return self.draw_combobox_overlay(),
             _ => {}
         }
 
@@ -206,7 +207,7 @@ impl<'f> Ui<'f> {
                 choices,
                 ..
             } => (*id, *anchor, choices.clone()),
-            Overlay::ContextMenu { .. } => unreachable!(),
+            _ => unreachable!(),
         };
 
         let item_h = self.theme.item_height;
@@ -235,7 +236,7 @@ impl<'f> Ui<'f> {
             let overlay = self.state.overlay.as_mut()?;
             let (choices, hovered) = match overlay {
                 Overlay::Dropdown { ref choices, ref mut hovered, .. } => (choices, hovered),
-                Overlay::ContextMenu { .. } => unreachable!(),
+                _ => unreachable!(),
             };
             {
                 for (event, _) in &self.state.keys {
@@ -284,7 +285,7 @@ impl<'f> Ui<'f> {
                 selected,
                 ..
             } => (choices.clone(), *hovered, *selected),
-            Overlay::ContextMenu { .. } => unreachable!(),
+            _ => unreachable!(),
         };
         let dd_h = choices.len() as f32 * item_h;
 

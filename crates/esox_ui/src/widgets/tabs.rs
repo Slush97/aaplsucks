@@ -1,4 +1,17 @@
 //! Tab bar widget — switchable tabs with optional content area and fade animation.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! let mut tab = TabState::new();
+//! ui.tabs(id!("settings"), &mut tab, &["General", "Advanced"], |ui, idx| {
+//!     match idx {
+//!         0 => ui.label("General settings"),
+//!         1 => ui.label("Advanced settings"),
+//!         _ => {}
+//!     }
+//! });
+//! ```
 
 use esox_gfx::ShapeBuilder;
 use winit::keyboard::{Key, NamedKey};
@@ -111,6 +124,13 @@ impl<'f> Ui<'f> {
             }
 
             let selected = state.selected == i;
+
+            self.push_a11y_node(crate::state::A11yNode {
+                id: tab_id, role: crate::state::A11yRole::Tab, label: label.to_string(),
+                value: None, rect: tab_rect, focused: tab_response.focused, disabled: false,
+                expanded: None, selected: Some(selected), checked: None,
+                value_range: None, children: Vec::new(),
+            });
 
             // Hover animation.
             let hover_t = self.state.hover_t(tab_id, tab_response.hovered && !selected, 120.0);

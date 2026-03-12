@@ -16,3 +16,19 @@ pub struct Response {
     /// The widget is disabled (no interaction).
     pub disabled: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_default_all_false() {
+        let r = Response::default();
+        assert!(!r.clicked);
+        assert!(!r.right_clicked);
+        assert!(!r.hovered);
+        assert!(!r.focused);
+        assert!(!r.changed);
+        assert!(!r.disabled);
+    }
+}

@@ -18,6 +18,14 @@ impl<'f> Ui<'f> {
         let rect = self.allocate_rect(self.region.w, h);
         let v = value.clamp(0.0, 1.0);
 
+        self.push_a11y_node(crate::state::A11yNode {
+            id: 0, role: crate::state::A11yRole::ProgressBar,
+            label: format!("{:.0}%", v * 100.0),
+            value: Some(v.to_string()), rect, focused: false, disabled: false,
+            expanded: None, selected: None, checked: None,
+            value_range: Some((0.0, 1.0, v)), children: Vec::new(),
+        });
+
         // Track.
         paint::draw_rounded_rect(self.frame, rect, self.theme.bg_input, radius);
 

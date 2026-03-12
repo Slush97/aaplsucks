@@ -36,6 +36,13 @@ impl<'f> Ui<'f> {
             || (state.selected_nodes.is_empty() && state.selected == Some(id));
         let is_expanded = state.expanded.contains(&id);
 
+        self.push_a11y_node(crate::state::A11yNode {
+            id, role: crate::state::A11yRole::TreeItem, label: label.to_string(),
+            value: None, rect, focused: response.focused, disabled: false,
+            expanded: Some(is_expanded), selected: Some(is_selected), checked: None,
+            value_range: None, children: Vec::new(),
+        });
+
         // Focus ring.
         if response.focused {
             paint::draw_focus_ring(

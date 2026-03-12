@@ -73,6 +73,13 @@ impl<'f> Ui<'f> {
         let mut response = self.widget_response(id, rect);
         let disabled = response.disabled;
 
+        self.push_a11y_node(crate::state::A11yNode {
+            id, role: crate::state::A11yRole::TextArea, label: placeholder.to_string(),
+            value: Some(input.text.clone()), rect, focused: response.focused, disabled: response.disabled,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
+
         if disabled {
             // ── Disabled draw ──
             paint::draw_rounded_rect(self.frame, rect, self.theme.disabled_bg, self.theme.corner_radius);
@@ -395,6 +402,14 @@ impl<'f> Ui<'f> {
         self.register_widget(id, rect, WidgetKind::TextInput);
 
         let mut response = self.widget_response(id, rect);
+
+        self.push_a11y_node(crate::state::A11yNode {
+            id, role: crate::state::A11yRole::TextArea, label: placeholder.to_string(),
+            value: Some(input.text.clone()), rect, focused: response.focused, disabled: response.disabled,
+            expanded: None, selected: None, checked: None,
+            value_range: None, children: Vec::new(),
+        });
+
         if response.disabled {
             paint::draw_rounded_rect(self.frame, rect, self.theme.disabled_bg, self.theme.corner_radius);
             paint::draw_dashed_border(self.frame, rect, self.theme.disabled_border, 6.0, 4.0, 1.0);

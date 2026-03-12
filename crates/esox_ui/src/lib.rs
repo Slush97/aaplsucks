@@ -1,7 +1,38 @@
 //! `esox_ui` — Immediate-mode GPU widget library for esox_platform apps.
 //!
-//! Widgets are method calls on `Ui` that return a `Response`. Layout is
-//! cursor-based. State lives in the app. The borrow checker stays happy.
+//! ## Pattern
+//!
+//! Widgets are method calls on [`Ui`] that return a [`Response`]. Layout is
+//! cursor-based (vertical by default, horizontal via [`Ui::row`]). All mutable
+//! state lives in the app; the library stores nothing between frames.
+//!
+//! ```ignore
+//! let mut ui = Ui::begin(&mut frame, &gpu, &mut resources, &mut text, &mut state, &theme, viewport);
+//!
+//! ui.label("Hello");
+//! if ui.button(id!("click"), "Click me").clicked {
+//!     count += 1;
+//! }
+//! ui.text_input(id!("name"), &mut name, "placeholder…");
+//!
+//! ui.finish();
+//! ```
+//!
+//! ## Layout model
+//!
+//! - **Vertical** (default): widgets stack top-to-bottom
+//! - **Horizontal**: `ui.row(|ui| { ... })` places widgets left-to-right
+//! - **Columns**: `ui.columns(&[2.0, 1.0], |ui, i| { ... })` for weighted flex
+//! - **Constraints**: `ui.constrained(c, |ui| { ... })` for min/max/aspect
+//! - **Scroll**: `ui.scrollable(id, height, |ui| { ... })` for clipped content
+//!
+//! ## Animation API
+//!
+//! - [`Ui::animate`] — drive a value towards a target with easing
+//! - [`Ui::animate_bool`] — convenience for 0→1 toggle animations
+//! - [`Ui::is_animating`] — check if an animation is in-flight
+//! - [`Easing`] — `Linear`, `EaseOutCubic`, `EaseInOutCubic`, `EaseOutExpo`
+//! - [`lerp_color`] — interpolate between colors
 
 pub mod a11y;
 pub mod id;
@@ -28,7 +59,9 @@ pub use text::TextRenderer;
 pub use theme::{Theme, ThemeBuilder, ThemeTransition};
 pub use widgets::image::{ImageCache, ImageHandle};
 pub use widgets::table::{ColumnWidth, TableColumn};
+pub use widgets::form::FieldStatus;
 pub use widgets::tree::TreeNodeResponse;
+pub use widgets::menu_bar::{Menu, MenuEntry, MenuItem};
 
 use esox_gfx::{Frame, GpuContext, RenderResources};
 use layout::{Direction, LayoutContext, Vec2};
@@ -215,6 +248,55 @@ impl<'f> Ui<'f> {
     pub fn indent(&mut self, offset: f32, width: f32) {
         self.cursor.x += offset;
         self.region = Rect::new(self.cursor.x, self.region.y, width, self.region.h);
+    }
+
+    /// Run a closure with a temporary spacing value. Restores original spacing after.
+    pub fn with_spacing(&mut self, gap: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.spacing;
+        self.spacing = gap;
+        f(self);
+        self.spacing = saved;
+    }
+
+    /// Run a closure in a horizontal row with a specific inter-widget gap.
+    pub fn row_spaced(&mut self, gap: f32, f: impl FnOnce(&mut Self)) {
+        let saved = self.spacing;
+        self.spacing = gap;
+        self.row(|ui| {
+            f(ui);
+        });
+        self.spacing = saved;
+    }
+
+    /// Center content horizontally within the current region.
+    ///
+    /// `content_width` is the expected width of the content inside.
+    pub fn center_horizontal(&mut self, content_width: f32, f: impl FnOnce(&mut Self)) {
+        let cw = content_width.min(self.region.w);
+        let offset = (self.region.w - cw) / 2.0;
+
+        let saved_cursor = self.cursor;
+        let saved_region = self.region;
+
+        self.cursor.x += offset;
+        self.region = Rect::new(self.cursor.x, self.cursor.y, cw, self.region.h);
+
+        f(self);
+
+        let new_y = self.cursor.y;
+        self.cursor = saved_cursor;
+        self.cursor.y = new_y;
+        self.region = saved_region;
+    }
+
+    /// In a row, advance cursor.x to right-align the remaining content.
+    ///
+    /// `reserve_right` is the width to reserve for trailing widgets.
+    pub fn fill_space(&mut self, reserve_right: f32) {
+        let target_x = self.region.x + self.region.w - reserve_right;
+        if target_x > self.cursor.x {
+            self.cursor.x = target_x;
+        }
     }
 
     // ── Flex/Weighted Columns ──
@@ -734,6 +816,71 @@ impl<'f> Ui<'f> {
         if self.state.a11y_enabled {
             self.state.a11y_tree.push(node);
         }
+    }
+
+    // ── Animation API ──
+
+    /// Drive a custom animation. Returns the current interpolated value.
+    ///
+    /// `id` identifies the animation (use `id!()` or `fnv1a_mix`).
+    /// `target` is the value to animate towards.
+    /// On first call, starts settled at `target`. When `target` changes,
+    /// restarts from the current value (smooth retargeting).
+    pub fn animate(&mut self, id: u64, target: f32, duration_ms: f32, easing: Easing) -> f32 {
+        self.state.anim_t(id, target, duration_ms, easing)
+    }
+
+    /// Boolean animation helper. Returns 0.0→1.0 interpolation.
+    ///
+    /// Equivalent to `animate(id, if active { 1.0 } else { 0.0 }, ...)`.
+    pub fn animate_bool(&mut self, id: u64, active: bool, duration_ms: f32, easing: Easing) -> f32 {
+        let target = if active { 1.0 } else { 0.0 };
+        self.state.anim_t(id, target, duration_ms, easing)
+    }
+
+    /// Whether the given animation is currently in-flight (not settled).
+    pub fn is_animating(&self, id: u64) -> bool {
+        self.state.anim_active(id)
+    }
+
+    // ── Focus control ──
+
+    /// Set focus to the given widget ID.
+    pub fn request_focus(&mut self, id: u64) {
+        self.state.focused = Some(id);
+        self.state.reset_blink();
+    }
+
+    /// Remove focus from any widget.
+    pub fn clear_focus(&mut self) {
+        self.state.focused = None;
+    }
+
+    /// Check if the given widget ID currently has focus.
+    pub fn has_focus(&self, id: u64) -> bool {
+        self.state.focused == Some(id)
+    }
+
+    /// Move focus to the next widget in the focus chain.
+    pub fn focus_next(&mut self) {
+        self.state.focus_next();
+    }
+
+    /// Move focus to the previous widget in the focus chain.
+    pub fn focus_prev(&mut self) {
+        self.state.focus_prev();
+    }
+
+    // ── Damage tracking ──
+
+    /// Whether the UI has damage that requires a redraw.
+    ///
+    /// Returns `true` if any widget state changed (hover, focus, animation,
+    /// scroll, overlay) since the last frame. When this returns `false`,
+    /// the platform layer can skip GPU submission to save power.
+    pub fn needs_redraw(&self) -> bool {
+        self.state.damage.is_full_invalidation()
+            || self.state.damage.regions().map_or(false, |r| !r.is_empty())
     }
 
     // ── Context Menu ──

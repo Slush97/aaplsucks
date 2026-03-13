@@ -114,6 +114,11 @@ pub struct SsaoPass {
     // Whether noise texture has been uploaded.
     noise_uploaded: std::cell::Cell<bool>,
 
+    // Dummy 1x1 depth texture for initial/resize blur bind groups.
+    #[allow(dead_code)]
+    dummy_depth_texture: wgpu::Texture,
+    dummy_depth_view: wgpu::TextureView,
+
     // Current dimensions.
     width: u32,
     height: u32,
@@ -292,6 +297,17 @@ impl SsaoPass {
                         },
                         count: None,
                     },
+                    // binding 3: depth texture (for bilateral blur — depth-aware edge preservation)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -370,6 +386,7 @@ impl SsaoPass {
             &occlusion_sample_view,
             &point_sampler,
             &params_buffer,
+            &dummy_depth_view,
         );
 
         Self {
@@ -393,6 +410,8 @@ impl SsaoPass {
             point_sampler,
             repeat_sampler,
             noise_uploaded: std::cell::Cell::new(false),
+            dummy_depth_texture: dummy_depth,
+            dummy_depth_view,
             width: w,
             height: h,
         }
@@ -466,6 +485,7 @@ impl SsaoPass {
             &self.occlusion_sample_view,
             &self.point_sampler,
             &self.params_buffer,
+            &self.dummy_depth_view,
         );
     }
 
@@ -563,6 +583,7 @@ impl SsaoPass {
             &self.occlusion_sample_view,
             &self.point_sampler,
             &self.params_buffer,
+            depth_view,
         );
 
         // ── Pass 2: Blur ──
@@ -682,6 +703,7 @@ fn create_blur_bind_group(
     occlusion_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     params_buffer: &wgpu::Buffer,
+    depth_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("esox_ssao_blur_bg"),
@@ -698,6 +720,10 @@ fn create_blur_bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(depth_view),
             },
         ],
     })
@@ -895,19 +921,27 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOutput {
 
 /// Reconstruct view-space position from depth and UV.
 fn reconstruct_view_pos(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    // UV to clip space: [0,1] -> [-1,1], flip Y.
-    let clip = vec4<f32>(uv * 2.0 - 1.0, depth, 1.0);
+    // UV to clip space: [0,1] -> [-1,1], flip Y (UV y=0 is top, clip y=+1 is top).
+    let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y, depth, 1.0);
     let view_h = params.inv_projection * clip;
     return view_h.xyz / view_h.w;
+}
+
+/// Reconstruct view-space position from an integer pixel coordinate.
+fn view_pos_at(pixel: vec2<i32>, tex_size: vec2<f32>) -> vec3<f32> {
+    let uv = (vec2<f32>(pixel) + 0.5) / tex_size;
+    let depth = textureLoad(t_depth, pixel, 0);
+    return reconstruct_view_pos(uv, depth);
 }
 
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) f32 {
     let uv = in.uv;
     let tex_size = vec2<f32>(textureDimensions(t_depth));
+    let pixel = vec2<i32>(in.position.xy);
 
     // Sample depth at this fragment.
-    let depth = textureLoad(t_depth, vec2<i32>(uv * tex_size), 0);
+    let depth = textureLoad(t_depth, pixel, 0);
 
     // Early out for far plane (no geometry).
     if depth >= 1.0 {
@@ -917,10 +951,30 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
     // Reconstruct view-space position.
     let view_pos = reconstruct_view_pos(uv, depth);
 
-    // Reconstruct normal from depth via cross(dpdx, dpdy).
-    let view_pos_dx = dpdx(view_pos);
-    let view_pos_dy = dpdy(view_pos);
-    let normal = normalize(cross(view_pos_dy, view_pos_dx));
+    // Reconstruct normal from depth — pick the shorter differential per axis
+    // to avoid crossing depth discontinuities at geometry edges.
+    let left   = view_pos_at(pixel + vec2(-1, 0), tex_size);
+    let right  = view_pos_at(pixel + vec2( 1, 0), tex_size);
+    let top    = view_pos_at(pixel + vec2( 0,-1), tex_size);
+    let bottom = view_pos_at(pixel + vec2( 0, 1), tex_size);
+
+    let dl = view_pos - left;
+    let dr = right - view_pos;
+    let dt = view_pos - top;
+    let db = bottom - view_pos;
+
+    // Skip SSAO at large depth discontinuities (geometry silhouette edges)
+    // where the reconstructed normal is unreliable.
+    let min_dz = min(min(abs(dl.z), abs(dr.z)), min(abs(dt.z), abs(db.z)));
+    let max_dz = max(max(abs(dl.z), abs(dr.z)), max(abs(dt.z), abs(db.z)));
+    if max_dz > abs(view_pos.z) * 0.1 && max_dz > min_dz * 10.0 {
+        return 1.0;
+    }
+
+    let ddx = select(dr, dl, abs(dl.z) < abs(dr.z));
+    let ddy = select(db, dt, abs(dt.z) < abs(db.z));
+
+    let normal = normalize(cross(ddy, ddx));
 
     // Sample noise for random tangent rotation.
     let noise_uv = uv * params.noise_scale;
@@ -947,9 +1001,21 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
         sample_uv = sample_uv * 0.5 + 0.5;
         sample_uv.y = 1.0 - sample_uv.y;
 
+        // Skip samples that project outside the screen — out-of-bounds
+        // textureLoad returns depth=0 (near plane), causing false occlusion.
+        if sample_uv.x < 0.0 || sample_uv.x > 1.0 || sample_uv.y < 0.0 || sample_uv.y > 1.0 {
+            continue;
+        }
+
         // Sample depth at projected position.
         let sample_screen = vec2<i32>(sample_uv * tex_size);
         let sample_depth = textureLoad(t_depth, sample_screen, 0);
+
+        // Skip samples that land on the far plane (sky).
+        if sample_depth >= 1.0 {
+            continue;
+        }
+
         let sample_view = reconstruct_view_pos(sample_uv, sample_depth);
 
         // Range check: avoid occlusion from distant geometry.
@@ -967,13 +1033,17 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
 }
 "#;
 
-/// SSAO blur shader (WGSL) — 4x4 box blur on the R8 occlusion texture.
+/// SSAO blur shader (WGSL) — bilateral 4x4 blur on the R8 occlusion texture.
+///
+/// Depth-aware: rejects samples across depth discontinuities to prevent
+/// dark SSAO halos from bleeding across geometry edges (e.g. ground → sky).
 pub(crate) const SSAO_BLUR_SHADER: &str = r#"
 // ── Bindings ──
 
 @group(0) @binding(0) var t_occlusion: texture_2d<f32>;
 @group(0) @binding(1) var s_point: sampler;
 @group(0) @binding(2) var<uniform> params: BlurParams;
+@group(0) @binding(3) var t_depth: texture_depth_2d;
 
 struct BlurParams {
     // We reuse the SsaoParams layout; noise_scale.xy encodes viewport dimensions.
@@ -1004,23 +1074,42 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOutput {
     return out;
 }
 
-// ── Fragment shader — 4x4 box blur ──
+// ── Fragment shader — bilateral 4x4 blur ──
 
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) f32 {
     let tex_size = vec2<f32>(textureDimensions(t_occlusion));
     let texel_size = 1.0 / tex_size;
     let uv = in.uv;
+    let pixel = vec2<i32>(in.position.xy);
+
+    let center_depth = textureLoad(t_depth, pixel, 0);
+
+    // Depth threshold: reject samples that cross a depth discontinuity.
+    // Use a relative threshold so it works at all distances.
+    let depth_threshold = max(center_depth * 0.02, 0.0002);
 
     var result = 0.0;
-    for (var x = -2; x < 2; x++) {
-        for (var y = -2; y < 2; y++) {
+    var total_weight = 0.0;
+
+    for (var x = -2; x <= 2; x++) {
+        for (var y = -2; y <= 2; y++) {
+            let sample_pixel = pixel + vec2(x, y);
+            let sample_depth = textureLoad(t_depth, sample_pixel, 0);
+            let depth_diff = abs(center_depth - sample_depth);
+
+            // Weight is 1.0 if depth is similar, 0.0 if across a discontinuity.
+            let w = select(0.0, 1.0, depth_diff < depth_threshold);
+
             let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-            result += textureSampleLevel(t_occlusion, s_point, uv + offset, 0.0).r;
+            let ao = textureSampleLevel(t_occlusion, s_point, uv + offset, 0.0).r;
+
+            result += ao * w;
+            total_weight += w;
         }
     }
-    result /= 16.0;
-    return result;
+
+    return result / max(total_weight, 1.0);
 }
 "#;
 

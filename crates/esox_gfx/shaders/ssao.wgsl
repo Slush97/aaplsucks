@@ -1,4 +1,4 @@
-// -- Bindings --
+// ── Bindings ──
 
 @group(0) @binding(0) var t_depth: texture_depth_2d;
 @group(0) @binding(1) var t_noise: texture_2d<f32>;
@@ -18,7 +18,7 @@ struct SsaoParams {
     _pad: vec2<f32>,
 }
 
-// -- Vertex shader -- fullscreen triangle --
+// ── Vertex shader — fullscreen triangle ──
 
 struct VsOutput {
     @builtin(position) position: vec4<f32>,
@@ -36,23 +36,31 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOutput {
     return out;
 }
 
-// -- Fragment shader --
+// ── Fragment shader ──
 
 /// Reconstruct view-space position from depth and UV.
 fn reconstruct_view_pos(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    // UV to clip space: [0,1] -> [-1,1], flip Y.
-    let clip = vec4<f32>(uv * 2.0 - 1.0, depth, 1.0);
+    // UV to clip space: [0,1] -> [-1,1], flip Y (UV y=0 is top, clip y=+1 is top).
+    let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y, depth, 1.0);
     let view_h = params.inv_projection * clip;
     return view_h.xyz / view_h.w;
+}
+
+/// Reconstruct view-space position from an integer pixel coordinate.
+fn view_pos_at(pixel: vec2<i32>, tex_size: vec2<f32>) -> vec3<f32> {
+    let uv = (vec2<f32>(pixel) + 0.5) / tex_size;
+    let depth = textureLoad(t_depth, pixel, 0);
+    return reconstruct_view_pos(uv, depth);
 }
 
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) f32 {
     let uv = in.uv;
     let tex_size = vec2<f32>(textureDimensions(t_depth));
+    let pixel = vec2<i32>(in.position.xy);
 
     // Sample depth at this fragment.
-    let depth = textureLoad(t_depth, vec2<i32>(uv * tex_size), 0);
+    let depth = textureLoad(t_depth, pixel, 0);
 
     // Early out for far plane (no geometry).
     if depth >= 1.0 {
@@ -62,10 +70,30 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
     // Reconstruct view-space position.
     let view_pos = reconstruct_view_pos(uv, depth);
 
-    // Reconstruct normal from depth via cross(dpdx, dpdy).
-    let view_pos_dx = dpdx(view_pos);
-    let view_pos_dy = dpdy(view_pos);
-    let normal = normalize(cross(view_pos_dy, view_pos_dx));
+    // Reconstruct normal from depth — pick the shorter differential per axis
+    // to avoid crossing depth discontinuities at geometry edges.
+    let left   = view_pos_at(pixel + vec2(-1, 0), tex_size);
+    let right  = view_pos_at(pixel + vec2( 1, 0), tex_size);
+    let top    = view_pos_at(pixel + vec2( 0,-1), tex_size);
+    let bottom = view_pos_at(pixel + vec2( 0, 1), tex_size);
+
+    let dl = view_pos - left;
+    let dr = right - view_pos;
+    let dt = view_pos - top;
+    let db = bottom - view_pos;
+
+    // Skip SSAO at large depth discontinuities (geometry silhouette edges)
+    // where the reconstructed normal is unreliable.
+    let min_dz = min(min(abs(dl.z), abs(dr.z)), min(abs(dt.z), abs(db.z)));
+    let max_dz = max(max(abs(dl.z), abs(dr.z)), max(abs(dt.z), abs(db.z)));
+    if max_dz > abs(view_pos.z) * 0.1 && max_dz > min_dz * 10.0 {
+        return 1.0;
+    }
+
+    let ddx = select(dr, dl, abs(dl.z) < abs(dr.z));
+    let ddy = select(db, dt, abs(dt.z) < abs(db.z));
+
+    let normal = normalize(cross(ddy, ddx));
 
     // Sample noise for random tangent rotation.
     let noise_uv = uv * params.noise_scale;
@@ -92,9 +120,21 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
         sample_uv = sample_uv * 0.5 + 0.5;
         sample_uv.y = 1.0 - sample_uv.y;
 
+        // Skip samples that project outside the screen — out-of-bounds
+        // textureLoad returns depth=0 (near plane), causing false occlusion.
+        if sample_uv.x < 0.0 || sample_uv.x > 1.0 || sample_uv.y < 0.0 || sample_uv.y > 1.0 {
+            continue;
+        }
+
         // Sample depth at projected position.
         let sample_screen = vec2<i32>(sample_uv * tex_size);
         let sample_depth = textureLoad(t_depth, sample_screen, 0);
+
+        // Skip samples that land on the far plane (sky).
+        if sample_depth >= 1.0 {
+            continue;
+        }
+
         let sample_view = reconstruct_view_pos(sample_uv, sample_depth);
 
         // Range check: avoid occlusion from distant geometry.

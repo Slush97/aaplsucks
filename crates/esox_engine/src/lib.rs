@@ -21,25 +21,42 @@
 //! }
 //! ```
 
+pub mod animation_graph;
 pub mod assets;
 pub mod audio;
+#[cfg(feature = "ui")]
+pub mod debug_overlay;
 pub mod ecs;
 pub mod engine;
 pub mod game;
 pub mod input;
 pub mod physics;
+#[cfg(feature = "serialization")]
+pub mod scene;
 pub mod time;
 
 // Re-export core types.
+pub use animation_graph::{
+    AnimGraphDef, AnimGraphRuntime, AnimParams, AnimState, BlendEntry, Condition, ParamValue,
+    StateSource, Transition,
+};
 pub use assets::{AssetHandle, AssetId, AssetManager, MaterialAsset, MeshAsset, TextureAsset};
 pub use ecs::{
-    Animator, Camera3D, Children, DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent,
-    PointLightComponent, SpotLightComponent, Transform3D,
+    AnimGraphController, Animator, Camera3D, Children, ColliderComponent,
+    DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent, ParticleEmitter,
+    PointLightComponent, RigidBodyComponent, SpotLightComponent, Transform3D, TriggerVolume,
+    physics_sync_system,
 };
 pub use engine::EngineConfig;
 pub use game::Game;
 pub use input::{ActionBinding, AxisBinding, InputManager, MouseAxis};
-pub use physics::{BodyDesc, BodyHandle, BodyType, NullPhysics, PhysicsBackend, RayHit};
+pub use physics::{
+    BodyDesc, BodyHandle, BodyType, ColliderDesc, ColliderShape, ContactEvent, NullPhysics,
+    PhysicsBackend, RayHit, TriggerEvent, TriggerPhase,
+};
+pub use physics::entity_map::PhysicsEntityMap;
+#[cfg(feature = "rapier")]
+pub use physics::rapier::RapierPhysics;
 pub use time::TimeState;
 
 // Re-export commonly used types from dependencies.
@@ -59,6 +76,8 @@ pub struct Ctx<'a> {
     pub renderer: &'a mut esox_gfx::mesh3d::Renderer3D,
     pub gpu: &'a esox_gfx::GpuContext,
     pub assets: &'a mut AssetManager,
+    pub physics: &'a mut dyn PhysicsBackend,
+    pub entity_map: &'a mut PhysicsEntityMap,
     pub viewport: (u32, u32),
 }
 

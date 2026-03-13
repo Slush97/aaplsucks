@@ -6,13 +6,16 @@ use esox_platform::perf::PerfMonitor;
 use esox_platform::{AppDelegate, MouseInputEvent};
 
 use crate::assets::AssetManager;
+#[cfg(feature = "ui")]
+use crate::debug_overlay::{EngineStats, draw_debug_overlay};
 use crate::ecs::{
     animation_system, camera_sync_system, hierarchy_system, light_collection_system,
-    render_extraction_system,
+    particle_system, physics_sync_system, render_extraction_system,
 };
 use crate::game::Game;
 use crate::input::InputManager;
 use crate::physics::{NullPhysics, PhysicsBackend};
+use crate::physics::entity_map::PhysicsEntityMap;
 use crate::time::FixedTimestep;
 use crate::Ctx;
 
@@ -28,6 +31,8 @@ pub struct EngineConfig {
     pub postprocess: bool,
     /// Enable shadows.
     pub shadows: bool,
+    /// Optional physics backend. Defaults to `NullPhysics` if `None`.
+    pub physics: Option<Box<dyn PhysicsBackend>>,
 }
 
 impl Default for EngineConfig {
@@ -51,6 +56,7 @@ impl Default for EngineConfig {
             },
             postprocess: true,
             shadows: true,
+            physics: None,
         }
     }
 }
@@ -65,8 +71,15 @@ pub(crate) struct Engine {
     timestep: FixedTimestep,
     assets: AssetManager,
     physics: Box<dyn PhysicsBackend>,
+    entity_map: PhysicsEntityMap,
     viewport: (u32, u32),
     initialized: bool,
+    #[cfg(feature = "ui")]
+    debug_overlay_visible: bool,
+    #[cfg(feature = "ui")]
+    last_batch_stats: esox_gfx::mesh3d::BatchStats3D,
+    #[cfg(feature = "ui")]
+    last_physics_us: u64,
     #[cfg(feature = "ui")]
     ui_state: esox_ui::UiState,
     #[cfg(feature = "ui")]
@@ -76,8 +89,9 @@ pub(crate) struct Engine {
 }
 
 impl Engine {
-    pub fn new(config: EngineConfig, game: Box<dyn Game>) -> Self {
+    pub fn new(mut config: EngineConfig, game: Box<dyn Game>) -> Self {
         let tick_rate = config.tick_rate;
+        let physics = config.physics.take().unwrap_or_else(|| Box::new(NullPhysics));
         Self {
             config,
             game,
@@ -86,9 +100,16 @@ impl Engine {
             input: InputManager::new(),
             timestep: FixedTimestep::new(tick_rate),
             assets: AssetManager::new(),
-            physics: Box::new(NullPhysics),
+            physics,
+            entity_map: PhysicsEntityMap::new(),
             viewport: (1280, 720),
             initialized: false,
+            #[cfg(feature = "ui")]
+            debug_overlay_visible: false,
+            #[cfg(feature = "ui")]
+            last_batch_stats: esox_gfx::mesh3d::BatchStats3D::default(),
+            #[cfg(feature = "ui")]
+            last_physics_us: 0,
             #[cfg(feature = "ui")]
             ui_state: esox_ui::UiState::new(),
             #[cfg(feature = "ui")]
@@ -143,6 +164,8 @@ impl AppDelegate for Engine {
             renderer: &mut renderer,
             gpu,
             assets: &mut self.assets,
+            physics: &mut *self.physics,
+            entity_map: &mut self.entity_map,
             viewport: self.viewport,
         };
         self.game.init(&mut ctx);
@@ -173,27 +196,45 @@ impl AppDelegate for Engine {
         self.assets.process_uploads(gpu, renderer);
 
         // 3. Fixed-rate update loop.
+        #[cfg(feature = "ui")]
+        let mut physics_us: u64 = 0;
         self.input.begin_frame(tick_count);
         for tick_i in 0..tick_count {
             self.input.pre_update();
 
             self.timestep.time_state_cache = self.timestep.time_state(tick_i + 1);
-            let mut ctx = Ctx {
-                world: &mut self.world,
-                input: &mut self.input,
-                time: &self.timestep.time_state_cache,
-                renderer,
-                gpu,
-                assets: &mut self.assets,
-                viewport: self.viewport,
-            };
-            self.game.update(&mut ctx);
+            {
+                let mut ctx = Ctx {
+                    world: &mut self.world,
+                    input: &mut self.input,
+                    time: &self.timestep.time_state_cache,
+                    renderer,
+                    gpu,
+                    assets: &mut self.assets,
+                    physics: &mut *self.physics,
+                    entity_map: &mut self.entity_map,
+                    viewport: self.viewport,
+                };
+                self.game.update(&mut ctx);
+            }
 
+            #[cfg(feature = "ui")]
+            let phys_start = std::time::Instant::now();
             self.physics.step(self.timestep.tick_dt);
+            #[cfg(feature = "ui")]
+            {
+                physics_us += phys_start.elapsed().as_micros() as u64;
+            }
+
+            physics_sync_system(&mut self.world, &*self.physics);
 
             self.input.post_update();
         }
         self.input.end_frame();
+        #[cfg(feature = "ui")]
+        {
+            self.last_physics_us = physics_us;
+        }
 
         // 4. Variable-rate render callback.
         {
@@ -205,6 +246,8 @@ impl AppDelegate for Engine {
                 renderer,
                 gpu,
                 assets: &mut self.assets,
+                physics: &mut *self.physics,
+                entity_map: &mut self.entity_map,
                 viewport: self.viewport,
             };
             self.game.render(&mut ctx, alpha);
@@ -224,10 +267,18 @@ impl AppDelegate for Engine {
         let frame_dt = self.timestep.time_state_cache.frame_dt;
         animation_system(&mut self.world, renderer, gpu, frame_dt);
 
+        // 7.6. Particle system — advance emitters and queue particle draws.
+        particle_system(&mut self.world, renderer, gpu, frame_dt);
+
         // 8. Dispatch skinning compute (if any).
         let mut cmd_bufs = Vec::new();
         if let Some(skin_cmd) = renderer.dispatch_skinning(gpu) {
             cmd_bufs.push(skin_cmd);
+        }
+
+        // 8.1. Dispatch particle compute (if any).
+        if let Some(particle_cmd) = renderer.dispatch_particles(gpu) {
+            cmd_bufs.push(particle_cmd);
         }
 
         // 9. Camera sync.
@@ -236,7 +287,7 @@ impl AppDelegate for Engine {
         // 10. Encode 3D render pass.
         let elapsed = self.timestep.time_state_cache.elapsed;
         let dt = self.timestep.time_state_cache.frame_dt;
-        let (render_cmd, _stats) = renderer.encode(
+        let (render_cmd, batch_stats) = renderer.encode(
             gpu,
             surface_view,
             &camera,
@@ -246,6 +297,12 @@ impl AppDelegate for Engine {
             dt,
             self.config.clear_color,
         );
+        #[cfg(feature = "ui")]
+        {
+            self.last_batch_stats = batch_stats;
+        }
+        #[cfg(not(feature = "ui"))]
+        let _ = batch_stats;
         cmd_bufs.push(render_cmd);
 
         cmd_bufs
@@ -284,6 +341,8 @@ impl AppDelegate for Engine {
                 renderer,
                 gpu: _gpu,
                 assets: &mut self.assets,
+                physics: &mut *self.physics,
+                entity_map: &mut self.entity_map,
                 viewport: self.viewport,
             };
 
@@ -295,6 +354,19 @@ impl AppDelegate for Engine {
             self.game.ui(&mut ui, &ctx);
 
             ui.finish();
+
+            if self.debug_overlay_visible {
+                let text = self.text_renderer.as_mut().unwrap();
+                let stats = EngineStats {
+                    physics_step_us: self.last_physics_us,
+                    batch_stats: self.last_batch_stats,
+                    entity_count: self.world.len() as usize,
+                };
+                draw_debug_overlay(
+                    _frame, _gpu, _resources, text,
+                    &stats, _perf, self.viewport,
+                );
+            }
         }
     }
 
@@ -303,6 +375,15 @@ impl AppDelegate for Engine {
         event: &winit::event::KeyEvent,
         _modifiers: winit::keyboard::ModifiersState,
     ) {
+        #[cfg(feature = "ui")]
+        {
+            use winit::keyboard::{KeyCode, PhysicalKey};
+            if event.state.is_pressed()
+                && event.physical_key == PhysicalKey::Code(KeyCode::F3)
+            {
+                self.debug_overlay_visible = !self.debug_overlay_visible;
+            }
+        }
         self.input.handle_key_event(event);
         #[cfg(feature = "ui")]
         self.ui_state.process_key(event.clone(), _modifiers);

@@ -4,14 +4,16 @@ use glam::Vec3;
 use hecs::World;
 
 use esox_gfx::mesh3d::{
-    Camera, DirectionalLight, InstanceData, LightEnvironment, PointLight, Renderer3D, SpotLight,
+    Camera, DirectionalLight, EmitterParams, InstanceData, LightEnvironment, PointLight,
+    Renderer3D, SpotLight,
 };
 use esox_gfx::GpuContext;
 
 use super::components::{
-    Animator, Camera3D, DirectionalLightComponent, GlobalTransform, MeshRenderer,
-    PointLightComponent, SpotLightComponent,
+    AnimGraphController, Animator, Camera3D, DirectionalLightComponent, GlobalTransform,
+    MeshRenderer, PointLightComponent, SpotLightComponent,
 };
+use super::particle_components::ParticleEmitter;
 
 /// Extract renderable entities and issue draw calls to the renderer.
 ///
@@ -108,6 +110,64 @@ pub fn animation_system(
     for (_e, animator) in world.query_mut::<&mut Animator>() {
         animator.player.advance(dt, &animator.clips);
         renderer.update_joints(gpu, animator.skinned_mesh_index, animator.player.skinning_matrices());
+    }
+
+    // Animation graph controllers — state machine with crossfade blending.
+    for (_e, ctrl) in world.query_mut::<&mut AnimGraphController>() {
+        ctrl.graph.advance(dt, &ctrl.clips);
+        renderer.update_joints(gpu, ctrl.skinned_mesh_index, ctrl.graph.skinning_matrices());
+    }
+}
+
+/// Advance particle emitters: accumulate spawns, upload emitter params, queue draw calls.
+pub fn particle_system(
+    world: &mut World,
+    renderer: &mut Renderer3D,
+    gpu: &GpuContext,
+    dt: f32,
+) {
+    static FRAME_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let frame = FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    for (_e, (gt, emitter)) in world.query_mut::<(&GlobalTransform, &mut ParticleEmitter)>() {
+        if !emitter.active {
+            continue;
+        }
+
+        // Accumulate continuous spawn count.
+        emitter.spawn_accumulator += emitter.spawn_rate * dt;
+        let continuous_spawns = emitter.spawn_accumulator as u32;
+        emitter.spawn_accumulator -= continuous_spawns as f32;
+
+        let spawn_count = continuous_spawns + emitter.burst_count;
+        emitter.burst_count = 0;
+
+        if spawn_count == 0 && dt == 0.0 {
+            continue;
+        }
+
+        // Extract world position from GlobalTransform.
+        let pos = gt.0.col(3).truncate();
+
+        let params = EmitterParams {
+            origin: pos.into(),
+            spawn_count,
+            velocity_min: emitter.velocity_min.into(),
+            size_start: emitter.size[0],
+            velocity_max: emitter.velocity_max.into(),
+            size_end: emitter.size[1],
+            gravity: emitter.gravity.into(),
+            lifetime_min: emitter.lifetime[0],
+            color_start: emitter.color_start,
+            color_end: emitter.color_end,
+            dt,
+            lifetime_max: emitter.lifetime[1],
+            seed: frame.wrapping_mul(2654435761), // Knuth multiplicative hash for varied seeds
+            _pad: 0,
+        };
+
+        renderer.update_particle_emitter(gpu, emitter.pool, &params);
+        renderer.draw_particles(emitter.pool, emitter.material);
     }
 }
 

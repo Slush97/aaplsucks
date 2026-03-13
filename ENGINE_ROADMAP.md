@@ -78,12 +78,61 @@ Thin crate on top of esox_gfx + esox_platform that adds game-specific abstractio
 
 **Done when:** can build a simple 3D game (e.g. a platformer) using only esox crates.
 
-## Phase 6 — Tooling (stretch)
+## Phase 6 — Tooling ✓ (partial)
 
-- Scene editor (using esox_ui for the editor UI, esox_gfx mesh3d for the viewport)
-- Shader hot-reload (esocidae already has this — port the file watcher + Naga validation)
-- GPU profiler overlay (extend PerfMonitor with GPU timestamp queries)
-- Asset pipeline CLI (mesh optimization, texture compression)
+- Shader hot-reload (file watcher + Naga validation) ✓
+- Scene editor — deferred to Phase 9 (needs serialization first)
+- GPU profiler overlay — moved to Phase 7
+- Asset pipeline CLI (mesh optimization, texture compression) — deferred
+
+## Phase 7 — Content pipeline ✓
+
+Foundation for creating and persisting game content without hardcoding Rust.
+
+- **Scene serialization** ✓ — `ron` format for saving/loading entity worlds (Transform3D, MeshRenderer, lights, hierarchy). Derive `Serialize`/`Deserialize` on core components. `SceneFile` type that round-trips a hecs World to disk.
+- **Rapier3d integration** ✓ — wire `rapier3d` into the existing `PhysicsBackend` trait. Collider components (box, sphere, capsule, mesh), rigid body sync with Transform3D, contact/trigger events.
+- **Debug overlay** ✓ — FPS counter, draw call count, entity count, physics step time. Render as esox_ui overlay on top of 3D. Toggle with a key binding (F3 or similar).
+- **Prefab system** ✓ — serialized entity templates that can be instantiated at runtime. `instantiate_prefab()` spawns entities from a `SceneFile` with transform offset.
+
+**Done when:** can build a level in code, save it to a `.scene.ron` file, quit, relaunch, and load it back identically. Physics objects collide via rapier. Debug overlay shows stats.
+
+## Phase 8 — Game feel (in progress)
+
+The systems that make games feel like games.
+
+- **Particle system** ✓ — GPU compute-driven particles with emitter components. Spawn rate, lifetime, velocity, gravity, color/size interpolation. Indirect draw with existing instanced mesh pipeline.
+- **Animation state machine** — blend trees (1D/2D), transition graph between clips, crossfade blending. `AnimationGraph` component that drives the existing `Animator`.
+- **Trigger volumes** ✓ — sensor collider regions that fire Enter/Stay/Exit events. `TriggerVolume` marker component, `PhysicsEntityMap` for handle↔entity resolution.
+- **Collision events** ✓ — contact callbacks from rapier exposed via `drain_contacts()` / `drain_triggers()`, resolvable to ECS entities via `PhysicsEntityMap`.
+- **Audio improvements** — trigger sounds from collision events, distance-based attenuation tuning, music crossfade.
+
+**Done when:** a character can run through a particle-emitting trigger zone, blend between walk/run/jump animations, and hear a spatial sound on collision.
+
+## Phase 9 — Scene editor
+
+Built with esox_ui + esox_gfx, saves to Phase 7's serialization format.
+
+- **Viewport** — 3D scene rendered in an esox_ui panel, orbit/fly camera controls
+- **Entity inspector** — select entity, edit Transform3D / material / light / physics properties in a property panel
+- **Scene hierarchy** — tree widget (already exists in esox_ui) showing entity parent-child relationships, drag to reparent
+- **Transform gizmos** — translate/rotate/scale handles rendered in the 3D viewport
+- **Asset browser** — file picker for meshes, textures, prefabs. Drag into viewport to spawn.
+- **Play/stop** — snapshot world state, enter play mode (run game systems), stop to restore snapshot
+- **GPU profiler overlay** — timestamp queries per render pass, displayed as a bar chart
+
+**Done when:** can visually place objects, set up lights, assign materials, save the scene, and load it in a standalone game binary.
+
+## Phase 10 — Networking (future, optional)
+
+Architecture is already compatible (deterministic fixed timestep, input-as-data, state/render separation). If pursued:
+
+- Client-server model with authoritative server
+- Input prediction + rollback on client
+- Entity replication (delta-compressed component snapshots)
+- Consider `lightyear` crate or custom UDP protocol
+- Scope: LAN co-op first, internet later
+
+**Not a priority — listed to document that the architecture intentionally keeps the door open.**
 
 ## Dependency additions
 
@@ -96,7 +145,12 @@ gltf = "1"             # asset loading
 
 # Phase 5
 hecs = "0.10"          # ECS
-kira = "3"             # audio
+kira = "0.12"          # audio
+
+# Phase 7
+ron = "0.8"            # scene serialization format
+serde = "1"            # derive Serialize/Deserialize on components
+rapier3d = "0.22"      # physics engine (behind `rapier` feature)
 ```
 
 ## Crate graph (target state)
@@ -124,5 +178,6 @@ phosphor (migrated consumer)
 
 - macOS/Windows support
 - Deferred rendering (forward is simpler, faster for moderate scenes, easier MSAA)
-- Built-in physics engine (integrate, don't build)
+- Built-in physics engine (integrate rapier, don't build from scratch)
 - Scripting language (Rust is the scripting language)
+- Internet multiplayer (LAN co-op is Phase 10 stretch goal, MMO-scale is out of scope)

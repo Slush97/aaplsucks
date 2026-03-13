@@ -91,7 +91,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Bit flag to distinguish skinned (standalone-buffer) mesh handles from mega-buffer handles.
-const SKINNED_MESH_BIT: u32 = 0x8000_0000;
+pub(crate) const SKINNED_MESH_BIT: u32 = 0x8000_0000;
 
 /// Size of `DrawIndexedIndirectArgs` (5 × u32 = 20 bytes).
 const INDIRECT_ARGS_SIZE: u64 = 20;
@@ -254,6 +254,12 @@ pub struct Renderer3D {
     // Skinning.
     pub(crate) skinning_pipeline: Option<SkinningPipeline>,
     pub(crate) skinned_meshes: Vec<SkinnedMesh>,
+
+    // Particles.
+    pub(crate) particle_pipeline: Option<super::particles::ParticlePipeline>,
+    pub(crate) particle_pools: Vec<super::particles::ParticlePool>,
+    pub(crate) particle_draw_cmds: Vec<super::particles::ParticleDrawCmd>,
+    pub(crate) particle_quad_mesh: Option<MeshHandle>,
 
     // Per-frame state.
     draw_cmds: Vec<DrawCmd>,
@@ -830,6 +836,10 @@ impl Renderer3D {
             meshes: Vec::new(),
             skinning_pipeline: None,
             skinned_meshes: Vec::new(),
+            particle_pipeline: None,
+            particle_pools: Vec::new(),
+            particle_draw_cmds: Vec::new(),
+            particle_quad_mesh: None,
             draw_cmds: Vec::new(),
             instance_staging: Vec::new(),
             lod_staging: Vec::new(),
@@ -2243,9 +2253,10 @@ impl Renderer3D {
 
                 let indirect_buf = self.indirect_buffer.as_ref().unwrap();
 
-                // Build groups: contiguous runs in `ordered` with same pipeline+material.
-                // Each group: (pipeline_key, material_idx, start_in_indirect, count, is_skinned_group).
-                let mut groups: Vec<(PipelineKey, u32, u32, u32)> = Vec::new();
+                // Build groups: contiguous runs in `ordered` with same pipeline+material+buffer source.
+                // Skinned meshes each get their own group since they use separate vertex/index buffers.
+                // (pipeline_key, material_idx, start_in_indirect, count, skinned_mesh_idx or u32::MAX for mega-buffer)
+                let mut groups: Vec<(PipelineKey, u32, u32, u32, u32)> = Vec::new();
                 let mut indirect_args: Vec<[u32; 5]> = Vec::with_capacity(ordered.len());
 
                 for &oi_idx in &ordered {
@@ -2258,10 +2269,10 @@ impl Renderer3D {
                     let is_skinned = (cmd.mesh.0 & SKINNED_MESH_BIT) != 0;
 
                     // Resolve index count and base vertex/index for this draw.
-                    let (index_count, index_offset, base_vertex) = if is_skinned {
-                        let skinned_idx = (cmd.mesh.0 & !SKINNED_MESH_BIT) as usize;
-                        if skinned_idx < self.meshes.len() {
-                            (self.meshes[skinned_idx].index_count, 0u32, 0i32)
+                    let (index_count, index_offset, base_vertex, skinned_idx) = if is_skinned {
+                        let si = (cmd.mesh.0 & !SKINNED_MESH_BIT) as usize;
+                        if si < self.meshes.len() {
+                            (self.meshes[si].index_count, 0u32, 0i32, si as u32)
                         } else {
                             continue;
                         }
@@ -2269,7 +2280,7 @@ impl Renderer3D {
                         let mesh_idx = cmd.mesh.0 as usize;
                         if mesh_idx < self.mesh_regions.len() {
                             let r = &self.mesh_regions[mesh_idx];
-                            (r.index_count, r.index_offset, r.vertex_offset as i32)
+                            (r.index_count, r.index_offset, r.vertex_offset as i32, u32::MAX)
                         } else {
                             continue;
                         }
@@ -2285,14 +2296,15 @@ impl Renderer3D {
                     ]);
 
                     // Extend current group or start new one.
+                    // Skinned meshes break groups because they need different vertex/index buffers.
                     let mat_key = cmd.material.0;
                     if let Some(last) = groups.last_mut() {
-                        if last.0 == key && last.1 == mat_key {
+                        if last.0 == key && last.1 == mat_key && last.4 == skinned_idx {
                             last.3 += 1;
                             continue;
                         }
                     }
-                    groups.push((key, mat_key, arg_idx, 1));
+                    groups.push((key, mat_key, arg_idx, 1, skinned_idx));
                 }
 
                 // Upload indirect args.
@@ -2304,8 +2316,8 @@ impl Renderer3D {
                     );
                 }
 
-                // Issue one multi_draw_indexed_indirect per group.
-                for (key, mat_key, start, count) in &groups {
+                // Issue one multi_draw_indexed_indirect per group, rebinding buffers for skinned meshes.
+                for (key, mat_key, start, count, skinned_idx) in &groups {
                     if current_pipeline_key != Some(*key) {
                         if let Some(pipeline) = self.pipeline_cache.get(key) {
                             pass.set_pipeline(pipeline);
@@ -2322,6 +2334,27 @@ impl Renderer3D {
                         current_material = Some(*mat_key);
                         stats.material_switches += 1;
                     }
+
+                    // Rebind vertex/index buffers when switching between mega-buffer and skinned meshes.
+                    if *skinned_idx != u32::MAX {
+                        let mesh = &self.meshes[*skinned_idx as usize];
+                        if current_is_mega {
+                            current_is_mega = false;
+                        }
+                        pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                        pass.set_index_buffer(
+                            mesh.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                    } else if !current_is_mega {
+                        pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.mega_buffer.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        current_is_mega = true;
+                    }
+
                     pass.multi_draw_indexed_indirect(
                         indirect_buf,
                         *start as u64 * INDIRECT_ARGS_SIZE,
@@ -2456,6 +2489,60 @@ impl Renderer3D {
                     }
                 }
             }
+
+            // ── Particle indirect draws ──
+            if let Some(quad_handle) = self.particle_quad_mesh {
+                let quad_idx = quad_handle.0 as usize;
+                if quad_idx < self.mesh_regions.len() {
+                    // Rebind mega-buffer for particle quad if needed.
+                    if !current_is_mega {
+                        pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.mega_buffer.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                    }
+
+                    let r = &self.mesh_regions[quad_idx];
+
+                    for pcmd in &self.particle_draw_cmds {
+                        let pool_idx = pcmd.pool.0 as usize;
+                        if pool_idx >= self.particle_pools.len() {
+                            continue;
+                        }
+                        let pool = &self.particle_pools[pool_idx];
+
+                        // Set material pipeline + bind group.
+                        let mat_idx = pcmd.material.0 as usize;
+                        if mat_idx >= self.materials.len() {
+                            continue;
+                        }
+                        let mat = &self.materials[mat_idx];
+                        let key = mat.pipeline_key;
+                        if current_pipeline_key != Some(key) {
+                            if let Some(pipeline) = self.pipeline_cache.get(&key) {
+                                pass.set_pipeline(pipeline);
+                                current_pipeline_key = Some(key);
+                                stats.pipeline_switches += 1;
+                            } else {
+                                continue;
+                            }
+                        }
+                        pass.set_bind_group(2, Some(&mat.bind_group), &[]);
+
+                        // Bind particle instance output as VB slot 1.
+                        pass.set_vertex_buffer(1, pool.instance_output.slice(..));
+
+                        // Indirect draw: instance_count was set by finalize_main.
+                        pass.draw_indexed_indirect(
+                            &pool.indirect_args_buffer,
+                            0,
+                        );
+                        stats.draw_calls += 1;
+                    }
+                }
+            }
+            self.particle_draw_cmds.clear();
         }
 
         // ── Post-processing chain ──

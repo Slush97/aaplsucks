@@ -4,8 +4,11 @@ use glam::{Mat4, Quat, Vec3};
 
 use esox_gfx::mesh3d::{AnimationClip, AnimationPlayer, MaterialHandle, MeshHandle};
 
+use crate::animation_graph::AnimGraphRuntime;
+
 /// Local-space transform (position, rotation, scale).
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transform3D {
     pub position: Vec3,
     pub rotation: Quat,
@@ -57,6 +60,8 @@ pub struct MeshRenderer {
 }
 
 /// Camera component.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 pub struct Camera3D {
     pub fov_y: f32,
     pub near: f32,
@@ -76,6 +81,8 @@ impl Default for Camera3D {
 }
 
 /// Point light component. Position derived from Transform3D.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 pub struct PointLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
@@ -83,6 +90,8 @@ pub struct PointLightComponent {
 }
 
 /// Spot light component. Position and direction derived from Transform3D.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpotLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
@@ -92,6 +101,8 @@ pub struct SpotLightComponent {
 }
 
 /// Directional light component. Direction derived from Transform3D rotation (forward = -Z).
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 pub struct DirectionalLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
@@ -100,6 +111,15 @@ pub struct DirectionalLightComponent {
 /// Skeletal animation component — drives skinned meshes via an animation player.
 pub struct Animator {
     pub player: AnimationPlayer,
+    pub clips: Vec<AnimationClip>,
+    pub skinned_mesh_index: usize,
+}
+
+/// Animation graph controller — drives skinned meshes via a state machine with
+/// crossfade blending. Replaces `Animator` for entities that need multiple
+/// animation states (idle/walk/run/jump).
+pub struct AnimGraphController {
+    pub graph: AnimGraphRuntime,
     pub clips: Vec<AnimationClip>,
     pub skinned_mesh_index: usize,
 }

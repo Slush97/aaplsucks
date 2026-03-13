@@ -50,6 +50,8 @@ pub struct AssetManager {
     textures: AssetRegistry<TextureHandle>,
     materials: AssetRegistry<MaterialHandle>,
     path_map: HashMap<PathBuf, AssetId>,
+    /// Reverse map from asset ID to a string name (path or user-provided name like `"@cube"`).
+    reverse_map: HashMap<AssetId, String>,
     parse_tx: mpsc::Sender<loader::ParseResult>,
     parse_rx: mpsc::Receiver<loader::ParseResult>,
 }
@@ -62,6 +64,7 @@ impl AssetManager {
             textures: AssetRegistry::new(),
             materials: AssetRegistry::new(),
             path_map: HashMap::new(),
+            reverse_map: HashMap::new(),
             parse_tx: tx,
             parse_rx: rx,
         }
@@ -94,6 +97,74 @@ impl AssetManager {
         }
     }
 
+    /// Register a pre-uploaded mesh handle with a name (for serialization).
+    pub fn register_mesh_named(
+        &mut self,
+        name: impl Into<String>,
+        handle: MeshHandle,
+    ) -> AssetHandle<MeshAsset> {
+        let id = self.meshes.insert(handle);
+        self.reverse_map.insert(id, name.into());
+        AssetHandle {
+            id,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Register a pre-uploaded material handle with a name (for serialization).
+    pub fn register_material_named(
+        &mut self,
+        name: impl Into<String>,
+        handle: MaterialHandle,
+    ) -> AssetHandle<MaterialAsset> {
+        let id = self.materials.insert(handle);
+        self.reverse_map.insert(id, name.into());
+        AssetHandle {
+            id,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Look up the name/path for a mesh asset handle (for serialization).
+    pub fn mesh_name(&self, handle: AssetHandle<MeshAsset>) -> Option<&str> {
+        self.reverse_map.get(&handle.id).map(|s| s.as_str())
+    }
+
+    /// Look up the name/path for a material asset handle (for serialization).
+    pub fn material_name(&self, handle: AssetHandle<MaterialAsset>) -> Option<&str> {
+        self.reverse_map.get(&handle.id).map(|s| s.as_str())
+    }
+
+    /// Find a GPU mesh handle by name (for deserialization).
+    pub fn find_mesh_by_name(&self, name: &str) -> Option<MeshHandle> {
+        self.reverse_map
+            .iter()
+            .find(|(_, v)| v.as_str() == name)
+            .and_then(|(id, _)| self.meshes.get(*id))
+    }
+
+    /// Find a GPU material handle by name (for deserialization).
+    pub fn find_material_by_name(&self, name: &str) -> Option<MaterialHandle> {
+        self.reverse_map
+            .iter()
+            .find(|(_, v)| v.as_str() == name)
+            .and_then(|(id, _)| self.materials.get(*id))
+    }
+
+    /// Look up the name for a GPU mesh handle (searches all registered meshes).
+    pub fn name_for_gpu_mesh(&self, gpu_handle: MeshHandle) -> Option<&str> {
+        self.meshes.find_id_by_value(gpu_handle)
+            .and_then(|id| self.reverse_map.get(&id))
+            .map(|s| s.as_str())
+    }
+
+    /// Look up the name for a GPU material handle (searches all registered materials).
+    pub fn name_for_gpu_material(&self, gpu_handle: MaterialHandle) -> Option<&str> {
+        self.materials.find_id_by_value(gpu_handle)
+            .and_then(|id| self.reverse_map.get(&id))
+            .map(|s| s.as_str())
+    }
+
     /// Load a mesh from MeshData synchronously (upload immediately).
     pub fn load_mesh_sync(
         &mut self,
@@ -112,6 +183,7 @@ impl AssetManager {
             return id;
         }
         let id = self.meshes.allocate(); // Placeholder slot.
+        self.reverse_map.insert(id, path.to_string_lossy().into_owned());
         self.path_map.insert(path.clone(), id);
         loader::spawn_gltf_parse(self.parse_tx.clone(), id, path);
         id

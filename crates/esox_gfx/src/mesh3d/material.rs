@@ -172,7 +172,7 @@ impl MaterialDescriptor {
 
 /// Handle to a material stored in the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MaterialHandle(pub(crate) u32);
+pub struct MaterialHandle(pub u32);
 
 /// Internal material — pipeline key + GPU resources.
 pub(crate) struct Material {

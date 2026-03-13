@@ -64,6 +64,21 @@ impl<T: Copy> AssetRegistry<T> {
         })
     }
 
+    /// Find the AssetId for a given GPU handle value (linear scan).
+    pub fn find_id_by_value(&self, value: T) -> Option<AssetId>
+    where
+        T: PartialEq,
+    {
+        for (index, (generation, slot)) in self.slots.iter().enumerate() {
+            if let Some(v) = slot {
+                if *v == value {
+                    return Some(AssetId::new(index as u32, *generation));
+                }
+            }
+        }
+        None
+    }
+
     /// Free a slot for reuse.
     #[allow(dead_code)]
     pub fn remove(&mut self, id: AssetId) -> bool {

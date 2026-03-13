@@ -7,5 +7,5 @@ edition.workspace = true
 hot-reload = ["esox_engine/hot-reload"]
 
 [dependencies]
-esox_engine = { workspace = true, features = ["audio", "ui"] }
+esox_engine = { workspace = true, features = ["audio", "ui", "rapier"] }
 tracing-subscriber = { workspace = true }

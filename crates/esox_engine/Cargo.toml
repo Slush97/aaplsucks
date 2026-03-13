@@ -9,6 +9,8 @@ default = []
 audio = ["dep:kira"]
 gamepad = ["dep:gilrs"]
 hot-reload = ["dep:notify", "esox_gfx/hot-reload"]
+rapier = ["dep:rapier3d"]
+serialization = ["dep:serde", "dep:ron", "glam/serde"]
 ui = ["dep:esox_ui", "dep:esox_font"]
 
 [dependencies]
@@ -24,5 +26,8 @@ tracing = { workspace = true }
 kira = { version = "0.12", optional = true, default-features = false, features = ["cpal", "ogg"] }
 gilrs = { version = "0.11", optional = true }
 notify = { version = "7", optional = true }
+serde = { workspace = true, optional = true }
+ron = { workspace = true, optional = true }
+rapier3d = { workspace = true, optional = true }
 esox_ui = { workspace = true, optional = true }
 esox_font = { workspace = true, optional = true }

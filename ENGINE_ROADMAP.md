@@ -66,18 +66,18 @@ These are the things that make it run well on modest hardware.
 
 **Done when:** scene looks good enough that you'd ship it. ✓
 
-## Phase 5 — Game engine crate (`esox_engine`)
+## Phase 5 — Game engine crate (`esox_engine`) ✓
 
 Thin crate on top of esox_gfx + esox_platform that adds game-specific abstractions.
 
-- **Fixed timestep** — decouple update from render (`accumulator += dt; while acc >= TICK { update() }`)
-- **Entity/component storage** — `hecs` or hand-rolled sparse sets
-- **Input action mapping** — bind physical keys to semantic actions, gamepad support
-- **Audio** — `kira` integration (spatial audio, music, SFX)
-- **Physics hooks** — trait-based integration point for rapier or custom
-- **Asset manager** — async loading, handle-based references, hot-reload
+- **Fixed timestep** ✓ — decouple update from render (`accumulator += dt; while acc >= TICK { update() }`)
+- **Entity/component storage** ✓ — `hecs` sparse sets with `Transform3D`, `GlobalTransform`, hierarchy propagation
+- **Input action mapping** ✓ — bind physical keys/mouse buttons to semantic actions, axis bindings, scroll wheel support
+- **Audio** ✓ — `kira` integration (spatial audio, music, SFX)
+- **Physics hooks** ✓ — trait-based `PhysicsBackend` with rapier implementation
+- **Asset manager** ✓ — handle-based references, name↔handle resolution, hot-reload
 
-**Done when:** can build a simple 3D game (e.g. a platformer) using only esox crates.
+**Done when:** can build a simple 3D game (e.g. a platformer) using only esox crates. ✓
 
 ## Phase 6 — Tooling ✓ (partial)
 
@@ -97,7 +97,7 @@ Foundation for creating and persisting game content without hardcoding Rust.
 
 **Done when:** can build a level in code, save it to a `.scene.ron` file, quit, relaunch, and load it back identically. Physics objects collide via rapier. Debug overlay shows stats.
 
-## Phase 8 — Game feel
+## Phase 8 — Game feel ✓
 
 The systems that make games feel like games.
 
@@ -111,17 +111,28 @@ The systems that make games feel like games.
 
 **Done when:** a character can run through a particle-emitting trigger zone, blend between walk/run/jump animations, and hear a spatial sound on collision. ✓
 
-## Phase 9 — Scene editor
+## Phase 9 — Scene editor (MVP ✓, in progress)
 
-Built with esox_ui + esox_gfx, saves to Phase 7's serialization format.
+Built with esox_ui + esox_gfx as `examples/editor/`, implements the `Game` trait. 3D scene renders through the normal engine pipeline; UI panels drawn on top via `Game::ui()`.
 
-- **Viewport** — 3D scene rendered in an esox_ui panel, orbit/fly camera controls
-- **Entity inspector** — select entity, edit Transform3D / material / light / physics properties in a property panel
-- **Scene hierarchy** — tree widget (already exists in esox_ui) showing entity parent-child relationships, drag to reparent
-- **Transform gizmos** — translate/rotate/scale handles rendered in the 3D viewport
-- **Asset browser** — file picker for meshes, textures, prefabs. Drag into viewport to spawn.
-- **Play/stop** — snapshot world state, enter play mode (run game systems), stop to restore snapshot
-- **GPU profiler overlay** — timestamp queries per render pass, displayed as a bar chart
+- **Editor camera** ✓ — orbit mode (MMB rotate, scroll zoom, Shift+MMB pan) and fly mode (RMB + WASD/QE). Smooth transitions between modes.
+- **Viewport picking** ✓ — left-click ray-AABB intersection against all `(GlobalTransform, MeshRenderer)` entities, selects closest hit. Uses `mesh_local_aabb()` for per-mesh bounds.
+- **Scene hierarchy** ✓ — scrollable tree panel of all entities using `tree_node` + `tree_indent`. Root entities = no `Parent`, recurses `Children`. Click to select. Smart labels from `Tag`, component type, or entity ID fallback.
+- **Entity inspector** ✓ — property panel showing editable components for selected entity:
+  - Transform3D: position, euler rotation (degrees), scale via `number_input`
+  - Camera3D: FOV, near, far (read-only for now)
+  - MeshRenderer: visible, tint (read-only)
+  - Point/Spot/Directional lights: color, intensity, range with live editing via pending edit queue
+- **Entity spawning** ✓ — menu bar Entity menu: Add Empty, Cube, Sphere, Point Light, Spot Light. Delete key to remove.
+- **Translate gizmo** ✓ — 3-axis arrows (red/green/blue) rendered at selected entity, scale-invariant sizing
+- **Menu bar** ✓ — File (New/Open/Save stubs, Quit), Edit (Delete, Duplicate stub), View (Reset Camera, Focus Selected), Entity (spawn primitives)
+- **3-panel layout** ✓ — hierarchy (left ~15%) | viewport (center) | inspector (right ~25%) via `split_pane_h`
+- **Transform gizmo interaction** — drag-to-move on axis planes (not yet implemented)
+- **Save/Load** — wire up File menu to `save_scene()` / `load_scene()` (not yet implemented)
+- **Undo/redo** — command pattern with `UndoStack` (not yet implemented)
+- **Play/stop** — snapshot world state, run game systems, restore on stop (not yet implemented)
+- **Asset browser** — file picker for meshes, textures, prefabs (not yet implemented)
+- **GPU profiler overlay** — timestamp queries per render pass, bar chart (not yet implemented)
 
 **Done when:** can visually place objects, set up lights, assign materials, save the scene, and load it in a standalone game binary.
 

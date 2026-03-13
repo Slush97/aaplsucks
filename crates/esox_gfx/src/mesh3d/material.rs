@@ -221,9 +221,10 @@ pub(crate) fn create_pipeline(
     layout: &wgpu::PipelineLayout,
     shader_modules: &HashMap<MaterialType, wgpu::ShaderModule>,
     key: &PipelineKey,
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     let shader = &shader_modules[&key.material_type];
-    create_pipeline_with_shader(device, format, layout, shader, key)
+    create_pipeline_with_shader(device, format, layout, shader, key, sample_count)
 }
 
 /// Create a render pipeline using an explicit shader module (for custom materials).
@@ -233,6 +234,7 @@ pub(crate) fn create_pipeline_with_shader(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     key: &PipelineKey,
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     let depth_format = wgpu::TextureFormat::Depth32Float;
 
@@ -269,7 +271,7 @@ pub(crate) fn create_pipeline_with_shader(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: 1,
+            count: sample_count,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },

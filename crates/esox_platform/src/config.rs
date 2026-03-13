@@ -29,7 +29,7 @@ impl Default for PlatformConfig {
             opacity: 1.0,
             background: "#2b2b2b".into(),
             hdr: false,
-            msaa: 1,
+            msaa: 4,
             security: SecurityConfig::default(),
             accessibility: AccessibilityConfig::default(),
         }

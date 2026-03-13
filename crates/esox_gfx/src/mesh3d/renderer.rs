@@ -143,13 +143,19 @@ struct CompositeParams3D {
 
 /// Internal state for the 3D post-process pipeline.
 struct PostProcess3D {
-    /// Offscreen HDR color texture.
+    /// Offscreen HDR color texture (1x, used as resolve target / sampling source).
     #[allow(dead_code)]
     color_texture: wgpu::Texture,
-    /// View for rendering into (RENDER_ATTACHMENT).
+    /// View for rendering into (RENDER_ATTACHMENT) — 1x when no MSAA, unused as
+    /// direct render target when MSAA is active (resolve writes here instead).
     color_view: wgpu::TextureView,
-    /// View for sampling (TEXTURE_BINDING).
+    /// View for sampling (TEXTURE_BINDING) — always 1x.
     sample_view: wgpu::TextureView,
+    /// MSAA render texture (sample_count > 1). Render pass writes here and
+    /// hardware-resolves into `color_view`.
+    #[allow(dead_code)]
+    msaa_color_texture: Option<wgpu::Texture>,
+    msaa_color_view: Option<wgpu::TextureView>,
     /// Bloom pass (reusing the 2D dual-Kawase implementation).
     bloom_pass: BloomPass,
     /// Bloom downsample pipeline.
@@ -220,10 +226,15 @@ pub struct Renderer3D {
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
 
-    // Depth.
+    // Depth — render target (MSAA when sample_count > 1).
     #[allow(dead_code)]
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    // Depth — 1x sampling view for post-processing (SSAO, SDF, motion blur).
+    // When sample_count == 1 this is the same texture/view as above.
+    #[allow(dead_code)]
+    depth_sample_texture: Option<wgpu::Texture>,
+    depth_sample_view: wgpu::TextureView,
     depth_width: u32,
     depth_height: u32,
 
@@ -285,6 +296,9 @@ pub struct Renderer3D {
 
     // SDF effects.
     sdf_pass: Option<SdfPass>,
+
+    // MSAA sample count (1 = off, 4 = 4x).
+    sample_count: u32,
 }
 
 impl Renderer3D {
@@ -663,7 +677,7 @@ impl Renderer3D {
                 depth_write: true,
             };
             let pipeline =
-                create_pipeline(device, format, &pipeline_layout, &shader_modules, &key);
+                create_pipeline(device, format, &pipeline_layout, &shader_modules, &key, gpu.sample_count);
             pipeline_cache.insert(key, pipeline);
         }
 
@@ -744,7 +758,15 @@ impl Renderer3D {
         // ── Depth texture ──
 
         let (depth_texture, depth_view) =
-            create_depth_texture(device, gpu.config.width, gpu.config.height);
+            create_depth_texture(device, gpu.config.width, gpu.config.height, gpu.sample_count);
+        // Separate 1x depth for sampling by SSAO/SDF/motion blur when MSAA is active.
+        let (depth_sample_texture, depth_sample_view) = if gpu.sample_count > 1 {
+            let (t, v) = create_depth_texture(device, gpu.config.width, gpu.config.height, 1);
+            (Some(t), v)
+        } else {
+            let v = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (None, v)
+        };
 
         // ── Mega-buffer ──
 
@@ -778,6 +800,8 @@ impl Renderer3D {
             instance_capacity,
             depth_texture,
             depth_view,
+            depth_sample_texture,
+            depth_sample_view,
             depth_width: gpu.config.width,
             depth_height: gpu.config.height,
             mega_buffer,
@@ -808,6 +832,7 @@ impl Renderer3D {
             motion_blur_pass: None,
             prev_view_projection: None,
             sdf_pass: None,
+            sample_count: gpu.sample_count,
         }
     }
 
@@ -990,6 +1015,7 @@ impl Renderer3D {
                 &self.pipeline_layout,
                 &self.shader_modules,
                 &key,
+                self.sample_count,
             );
             self.pipeline_cache.insert(key, pipeline);
         }
@@ -1040,6 +1066,7 @@ impl Renderer3D {
                     &self.pipeline_layout,
                     &self.shader_modules,
                     &new_key,
+                    self.sample_count,
                 );
                 self.pipeline_cache.insert(new_key, pipeline);
             }
@@ -1106,6 +1133,7 @@ impl Renderer3D {
             &self.pipeline_layout,
             &shader,
             &key,
+            self.sample_count,
         );
         self.pipeline_cache.insert(key, pipeline);
 
@@ -1136,11 +1164,20 @@ impl Renderer3D {
         if self.postprocess.is_some() {
             return;
         }
+        if self.sample_count > 1 {
+            tracing::warn!(
+                "MSAA ({}x) is active but no depth resolve pass exists — \
+                 depth-dependent post-processing (SSAO, motion blur) will \
+                 read a blank depth buffer",
+                self.sample_count,
+            );
+        }
         let device = &*gpu.device;
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
 
-        let (color_texture, color_view, sample_view) = create_hdr_texture(device, w, h);
+        let (color_texture, color_view, sample_view, msaa_color_texture, msaa_color_view) =
+            create_hdr_texture(device, w, h, self.sample_count);
         let bloom_pass = BloomPass::new(device, w, h, HDR_FORMAT, &sample_view);
 
         // Create bloom pipelines.
@@ -1317,6 +1354,8 @@ impl Renderer3D {
             color_texture,
             color_view,
             sample_view,
+            msaa_color_texture,
+            msaa_color_view,
             bloom_pass,
             bloom_down_pipeline,
             bloom_up_pipeline,
@@ -1339,6 +1378,7 @@ impl Renderer3D {
 
     /// Rebuild all cached material pipelines for the current `surface_format`.
     fn rebuild_pipeline_cache(&mut self, device: &wgpu::Device) {
+        let sample_count = self.sample_count;
         let new_cache: HashMap<PipelineKey, wgpu::RenderPipeline> = self
             .pipeline_cache
             .keys()
@@ -1349,6 +1389,7 @@ impl Renderer3D {
                     &self.pipeline_layout,
                     &self.shader_modules,
                     key,
+                    sample_count,
                 );
                 (*key, pipeline)
             })
@@ -1408,6 +1449,13 @@ impl Renderer3D {
     pub fn enable_ssao(&mut self, gpu: &GpuContext) {
         if self.ssao_pass.is_some() {
             return;
+        }
+        if self.sample_count > 1 {
+            tracing::warn!(
+                "enabling SSAO with MSAA ({}x) — depth buffer is unresolved, \
+                 SSAO will produce incorrect results",
+                self.sample_count,
+            );
         }
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
@@ -1495,6 +1543,13 @@ impl Renderer3D {
         if self.motion_blur_pass.is_some() {
             return;
         }
+        if self.sample_count > 1 {
+            tracing::warn!(
+                "enabling motion blur with MSAA ({}x) — depth buffer is \
+                 unresolved, motion blur will produce incorrect results",
+                self.sample_count,
+            );
+        }
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
         self.motion_blur_pass = Some(MotionBlurPass::new(&gpu.device, w, h));
@@ -1514,7 +1569,7 @@ impl Renderer3D {
         desc: &SdfEffectDescriptor,
     ) -> Result<SdfEffectHandle, String> {
         let sdf_pass = self.sdf_pass.get_or_insert_with(|| SdfPass::new(&gpu.device));
-        let depth_view = &self.depth_view;
+        let depth_view = &self.depth_sample_view;
         sdf_pass.register_effect(&gpu.device, &gpu.queue, depth_view, desc)
     }
 
@@ -1629,9 +1684,17 @@ impl Renderer3D {
     ) -> (wgpu::CommandBuffer, BatchStats3D) {
         // Ensure depth texture matches viewport.
         if viewport_width != self.depth_width || viewport_height != self.depth_height {
-            let (tex, view) = create_depth_texture(&gpu.device, viewport_width, viewport_height);
+            let (tex, view) = create_depth_texture(&gpu.device, viewport_width, viewport_height, self.sample_count);
             self.depth_texture = tex;
             self.depth_view = view;
+            if self.sample_count > 1 {
+                let (st, sv) = create_depth_texture(&gpu.device, viewport_width, viewport_height, 1);
+                self.depth_sample_texture = Some(st);
+                self.depth_sample_view = sv;
+            } else {
+                self.depth_sample_texture = None;
+                self.depth_sample_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            }
             self.depth_width = viewport_width;
             self.depth_height = viewport_height;
 
@@ -1643,17 +1706,20 @@ impl Renderer3D {
                 mb.resize(&gpu.device, viewport_width, viewport_height);
             }
             if let Some(sdf) = &mut self.sdf_pass {
-                sdf.rebuild_bind_groups(&gpu.device, &self.depth_view);
+                sdf.rebuild_bind_groups(&gpu.device, &self.depth_sample_view);
             }
         }
 
         // Resize offscreen HDR target if needed.
         if let Some(pp) = &mut self.postprocess {
             if viewport_width != pp.width || viewport_height != pp.height {
-                let (tex, cv, sv) = create_hdr_texture(&gpu.device, viewport_width, viewport_height);
+                let (tex, cv, sv, msaa_tex, msaa_v) =
+                    create_hdr_texture(&gpu.device, viewport_width, viewport_height, self.sample_count);
                 pp.color_texture = tex;
                 pp.color_view = cv;
                 pp.sample_view = sv;
+                pp.msaa_color_texture = msaa_tex;
+                pp.msaa_color_view = msaa_v;
                 pp.bloom_pass.resize(&gpu.device, viewport_width, viewport_height, &pp.sample_view);
                 pp.width = viewport_width;
                 pp.height = viewport_height;
@@ -1910,10 +1976,25 @@ impl Renderer3D {
         }
 
         // Determine scene color target: offscreen HDR or direct to surface.
-        let scene_color_target: &wgpu::TextureView = if let Some(pp) = &self.postprocess {
-            &pp.color_view
+        // When MSAA is active, render into the multisampled texture and resolve
+        // into the 1x texture that post-processing will sample from.
+        let (scene_color_target, scene_resolve_target): (&wgpu::TextureView, Option<&wgpu::TextureView>) =
+            if let Some(pp) = &self.postprocess {
+                if let Some(msaa_view) = &pp.msaa_color_view {
+                    (msaa_view, Some(&pp.color_view))
+                } else {
+                    (&pp.color_view, None)
+                }
+            } else {
+                (target, None)
+            };
+
+        // MSAA requires StoreOp::Discard on the multisampled attachment (the
+        // resolved data lives in the resolve target).
+        let color_store = if scene_resolve_target.is_some() {
+            wgpu::StoreOp::Discard
         } else {
-            target
+            wgpu::StoreOp::Store
         };
 
         {
@@ -1921,10 +2002,10 @@ impl Renderer3D {
                 label: Some("esox_3d_render_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: scene_color_target,
-                    resolve_target: None,
+                    resolve_target: scene_resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear_color),
-                        store: wgpu::StoreOp::Store,
+                        store: color_store,
                     },
                     depth_slice: None,
                 })],
@@ -2201,7 +2282,7 @@ impl Renderer3D {
                 &mut encoder,
                 &gpu.queue,
                 scene_color_target,
-                &self.depth_view,
+                &self.depth_sample_view,
                 inv_vp,
                 camera.position,
                 [
@@ -2223,18 +2304,18 @@ impl Renderer3D {
                 camera.near,
                 camera.far,
             );
-            ssao.encode(&gpu.device, &mut encoder, &gpu.queue, &self.depth_view, proj);
+            ssao.encode(&gpu.device, &mut encoder, &gpu.queue, &self.depth_sample_view, proj);
         }
 
         // Motion blur (reads depth + scene HDR, writes blurred HDR).
         if let Some(mb) = &mut self.motion_blur_pass {
             if let (Some(pp), Some(prev_vp)) = (&self.postprocess, &self.prev_view_projection) {
                 let inv_vp = vp.inverse();
-                mb.rebuild_bind_groups(&gpu.device, &self.depth_view, &pp.sample_view);
+                mb.rebuild_bind_groups(&gpu.device, &self.depth_sample_view, &pp.sample_view);
                 mb.encode(
                     &mut encoder,
                     &gpu.queue,
-                    &self.depth_view,
+                    &self.depth_sample_view,
                     &pp.sample_view,
                     inv_vp,
                     *prev_vp,
@@ -2379,7 +2460,14 @@ fn create_depth_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    sample_count: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
+    // MSAA depth textures cannot have TEXTURE_BINDING usage.
+    let usage = if sample_count > 1 {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+    } else {
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("esox_3d_depth"),
         size: wgpu::Extent3d {
@@ -2388,29 +2476,40 @@ fn create_depth_texture(
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
 }
 
-/// Create an HDR offscreen texture with both RENDER_ATTACHMENT and TEXTURE_BINDING usage.
+/// Create an HDR offscreen texture (1x) with both RENDER_ATTACHMENT and TEXTURE_BINDING usage.
+/// When `sample_count > 1`, also creates an MSAA render texture that resolves into the 1x texture.
 fn create_hdr_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+    sample_count: u32,
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::TextureView,
+    Option<wgpu::Texture>,
+    Option<wgpu::TextureView>,
+) {
+    let size = wgpu::Extent3d {
+        width: width.max(1),
+        height: height.max(1),
+        depth_or_array_layers: 1,
+    };
+
+    // 1x resolve / sampling texture (always created).
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("esox_3d_hdr_offscreen"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
+        size,
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -2426,7 +2525,29 @@ fn create_hdr_texture(
         label: Some("esox_3d_hdr_sample_view"),
         ..Default::default()
     });
-    (texture, color_view, sample_view)
+
+    // MSAA render texture (only when sample_count > 1).
+    let (msaa_texture, msaa_view) = if sample_count > 1 {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_hdr_msaa"),
+            size,
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("esox_3d_hdr_msaa_view"),
+            ..Default::default()
+        });
+        (Some(tex), Some(view))
+    } else {
+        (None, None)
+    };
+
+    (texture, color_view, sample_view, msaa_texture, msaa_view)
 }
 
 // ── Shader sources ──

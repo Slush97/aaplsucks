@@ -821,18 +821,10 @@ impl FrameEncoder {
                 ColorLoadOp::Load => wgpu::LoadOp::Load,
             };
 
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("quad_render_pass_surface"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: resolve,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: depth_view.map(|view| {
+            // Depth attachment must match the color attachment's sample count.
+            // When MSAA is skipped (Load path), drop the multisampled depth too.
+            let depth_attachment = if use_msaa {
+                depth_view.map(|view| {
                     wgpu::RenderPassDepthStencilAttachment {
                         view,
                         depth_ops: Some(wgpu::Operations {
@@ -844,7 +836,23 @@ impl FrameEncoder {
                             store: wgpu::StoreOp::Store,
                         }),
                     }
-                }),
+                })
+            } else {
+                None
+            };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("quad_render_pass_surface"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: load_op,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: depth_attachment,
                 ..Default::default()
             });
 

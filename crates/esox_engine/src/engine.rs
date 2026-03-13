@@ -149,6 +149,7 @@ impl AppDelegate for Engine {
         self.assets.process_uploads(gpu, renderer);
 
         // 3. Fixed-rate update loop.
+        self.input.begin_frame(tick_count);
         for tick_i in 0..tick_count {
             self.input.pre_update();
 
@@ -168,6 +169,7 @@ impl AppDelegate for Engine {
 
             self.input.post_update();
         }
+        self.input.end_frame();
 
         // 4. Variable-rate render callback.
         {
@@ -255,6 +257,12 @@ impl AppDelegate for Engine {
                 self.input.handle_mouse_button(button, false)
             }
             MouseInputEvent::Scroll { .. } | MouseInputEvent::Left => {}
+        }
+    }
+
+    fn on_focus_changed(&mut self, focused: bool) {
+        if !focused {
+            self.input.clear_all_state();
         }
     }
 

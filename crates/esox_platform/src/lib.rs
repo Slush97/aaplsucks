@@ -820,9 +820,8 @@ impl ApplicationHandler<AppUserEvent> for App {
                 self.current_modifiers = mods.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Intercept Ctrl+Shift+C/V only on press (not release).
                 if event.state == winit::event::ElementState::Pressed {
-                    // Intercept Ctrl+Shift+C (copy) and Ctrl+Shift+V (paste)
-                    // using extracted helpers for testability.
                     let text_all_mods = {
                         use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
                         event.text_with_all_modifiers().map(|s| s.to_string())
@@ -876,12 +875,13 @@ impl ApplicationHandler<AppUserEvent> for App {
                             return;
                         }
                     }
+                }
 
-                    self.delegate.on_key(&event, self.current_modifiers);
-                    // Trigger immediate redraw so PTY response is picked up quickly.
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                // Forward both press AND release events so the input system
+                // can track key-up state (axes, held, just_released).
+                self.delegate.on_key(&event, self.current_modifiers);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
                 }
             }
             WindowEvent::CursorLeft { .. } => {

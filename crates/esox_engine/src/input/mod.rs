@@ -40,10 +40,14 @@ pub struct InputManager {
 
     /// Current mouse position in pixels.
     pub(crate) mouse_pos: (f64, f64),
-    /// Mouse delta since last frame.
+    /// Mouse delta for the current tick (distributed from frame delta).
     pub(crate) mouse_delta: (f64, f64),
-    /// Accumulated mouse delta (reset each tick).
+    /// Accumulated mouse delta from OS events (reset each frame).
     mouse_delta_accum: (f64, f64),
+    /// Mouse delta snapshot for the current frame.
+    mouse_delta_frame: (f64, f64),
+    /// Number of fixed ticks in the current frame (for delta distribution).
+    frame_tick_count: u32,
 }
 
 impl InputManager {
@@ -61,6 +65,8 @@ impl InputManager {
             mouse_pos: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
             mouse_delta_accum: (0.0, 0.0),
+            mouse_delta_frame: (0.0, 0.0),
+            frame_tick_count: 1,
         }
     }
 
@@ -210,11 +216,37 @@ impl InputManager {
         }
     }
 
-    /// Called at the start of each fixed tick: transition JustPressed -> Held.
+    /// Clear all key and mouse button state. Called on focus loss to prevent
+    /// stuck keys when the compositor swallows release events.
+    pub(crate) fn clear_all_state(&mut self) {
+        self.keys_down.clear();
+        self.keys_just_pressed.clear();
+        self.keys_just_released.clear();
+        self.mouse_buttons_down = [false; 3];
+        self.mouse_buttons_just_pressed = [false; 3];
+        self.mouse_buttons_just_released = [false; 3];
+        self.action_states.values_mut().for_each(|s| *s = ActionState::Idle);
+    }
+
+    /// Called once per frame before the fixed tick loop.
+    /// Snapshots mouse delta and stores tick count for even distribution.
+    pub(crate) fn begin_frame(&mut self, tick_count: u32) {
+        self.frame_tick_count = tick_count;
+        // Snapshot mouse delta for this frame; keep accumulating if no ticks run.
+        if tick_count > 0 {
+            self.mouse_delta_frame = self.mouse_delta_accum;
+            self.mouse_delta_accum = (0.0, 0.0);
+        }
+    }
+
+    /// Called at the start of each fixed tick: distribute mouse delta, update action states.
     pub(crate) fn pre_update(&mut self) {
-        // Snapshot mouse delta for this tick.
-        self.mouse_delta = self.mouse_delta_accum;
-        self.mouse_delta_accum = (0.0, 0.0);
+        // Distribute mouse delta evenly across ticks in this frame.
+        let tc = self.frame_tick_count.max(1) as f64;
+        self.mouse_delta = (
+            self.mouse_delta_frame.0 / tc,
+            self.mouse_delta_frame.1 / tc,
+        );
 
         // Update action states from raw input.
         for (name, bindings) in &self.actions {
@@ -263,12 +295,23 @@ impl InputManager {
         }
     }
 
-    /// Called at the end of each fixed tick: clear transient state.
+    /// Called at the end of each fixed tick.
+    /// Transient flags persist for all ticks in the frame (cleared in end_frame).
     pub(crate) fn post_update(&mut self) {
-        self.keys_just_pressed.clear();
-        self.keys_just_released.clear();
-        self.mouse_buttons_just_pressed = [false; 3];
-        self.mouse_buttons_just_released = [false; 3];
+        // No-op: flags persist until end_frame() so that multi-tick frames
+        // don't silently eat input events.
+    }
+
+    /// Called once per frame after the fixed tick loop: clear transient state.
+    /// Only clears if at least one tick ran, so events aren't silently dropped
+    /// during high-FPS frames where no fixed tick executes.
+    pub(crate) fn end_frame(&mut self) {
+        if self.frame_tick_count > 0 {
+            self.keys_just_pressed.clear();
+            self.keys_just_released.clear();
+            self.mouse_buttons_just_pressed = [false; 3];
+            self.mouse_buttons_just_released = [false; 3];
+        }
     }
 }
 
@@ -307,18 +350,86 @@ mod tests {
     }
 
     #[test]
-    fn action_held_after_update() {
+    fn action_held_after_frame() {
         let mut input = InputManager::new();
         input.bind_action("jump", ActionBinding::Key(KeyCode::Space));
 
         input.handle_key_event(&make_key_event(KeyCode::Space, true));
+        input.begin_frame(1);
         input.pre_update();
         input.post_update();
-        // Next tick, key is still down but not "just pressed".
+        input.end_frame();
+        // Next frame, key is still down but not "just pressed".
+        input.begin_frame(1);
         input.pre_update();
 
         assert!(!input.just_pressed("jump"));
         assert!(input.held("jump"));
+    }
+
+    #[test]
+    fn just_pressed_survives_multi_tick_frame() {
+        let mut input = InputManager::new();
+        input.bind_action("jump", ActionBinding::Key(KeyCode::Space));
+
+        input.handle_key_event(&make_key_event(KeyCode::Space, true));
+        input.begin_frame(3);
+
+        // Tick 0
+        input.pre_update();
+        assert!(input.just_pressed("jump"), "tick 0 should see just_pressed");
+        input.post_update();
+
+        // Tick 1 — event must survive within same frame
+        input.pre_update();
+        assert!(input.just_pressed("jump"), "tick 1 should still see just_pressed");
+        input.post_update();
+
+        input.end_frame();
+
+        // Next frame — no longer just pressed
+        input.begin_frame(1);
+        input.pre_update();
+        assert!(!input.just_pressed("jump"));
+        assert!(input.held("jump"));
+    }
+
+    #[test]
+    fn mouse_delta_distributed_across_ticks() {
+        let mut input = InputManager::new();
+        // Set initial position
+        input.handle_mouse_move(100.0, 100.0);
+        input.begin_frame(1);
+        input.pre_update();
+        input.post_update();
+        input.end_frame();
+
+        // Move mouse 60px in X
+        input.handle_mouse_move(160.0, 100.0);
+        input.begin_frame(3); // 3 ticks this frame
+
+        input.pre_update();
+        assert!(
+            (input.mouse_delta().0 - 20.0).abs() < 1e-6,
+            "each tick gets 1/3 of delta"
+        );
+        input.post_update();
+
+        input.pre_update();
+        assert!(
+            (input.mouse_delta().0 - 20.0).abs() < 1e-6,
+            "each tick gets 1/3 of delta"
+        );
+        input.post_update();
+
+        input.pre_update();
+        assert!(
+            (input.mouse_delta().0 - 20.0).abs() < 1e-6,
+            "each tick gets 1/3 of delta"
+        );
+        input.post_update();
+
+        input.end_frame();
     }
 
     #[test]

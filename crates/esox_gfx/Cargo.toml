@@ -7,14 +7,14 @@ description = "GPU rendering engine with arena scene graph and instanced quad pi
 
 [features]
 default = []
-mesh3d = ["dep:glam", "dep:image", "dep:gltf"]
+mesh3d = ["dep:glam", "dep:gltf"]
 hot-reload = ["dep:notify"]
 
 [dependencies]
 bytemuck = { workspace = true }
 glam = { version = "0.29", optional = true }
 gltf = { workspace = true, optional = true }
-image = { workspace = true, optional = true }
+image = { workspace = true }
 naga = { workspace = true }
 notify = { version = "7", optional = true }
 raw-window-handle = { workspace = true }

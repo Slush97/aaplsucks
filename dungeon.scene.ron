@@ -1,0 +1,274 @@
+(
+    entities: [
+        (
+            id: 0,
+            transform: Some((
+                position: (0.0, 0.0, -6.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (10.0, 0.2, 12.0),
+            )),
+        ),
+        (
+            id: 1,
+            transform: Some((
+                position: (0.0, 5.0, -6.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (10.0, 0.2, 12.0),
+            )),
+        ),
+        (
+            id: 2,
+            transform: Some((
+                position: (-5.0, 2.5, -6.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 5.0, 12.0),
+            )),
+        ),
+        (
+            id: 3,
+            transform: Some((
+                position: (5.0, 2.5, -6.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 5.0, 12.0),
+            )),
+        ),
+        (
+            id: 4,
+            transform: Some((
+                position: (0.0, 2.5, -12.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (10.0, 5.0, 0.3),
+            )),
+        ),
+        (
+            id: 5,
+            transform: Some((
+                position: (0.0, 0.0, -16.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (3.0, 0.2, 8.0),
+            )),
+        ),
+        (
+            id: 6,
+            transform: Some((
+                position: (0.0, 3.5, -16.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (3.0, 0.2, 8.0),
+            )),
+        ),
+        (
+            id: 7,
+            transform: Some((
+                position: (-1.5, 1.75, -16.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.2, 3.5, 8.0),
+            )),
+        ),
+        (
+            id: 8,
+            transform: Some((
+                position: (1.5, 1.75, -16.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.2, 3.5, 8.0),
+            )),
+        ),
+        (
+            id: 9,
+            transform: Some((
+                position: (0.0, 0.0, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (8.0, 0.2, 8.0),
+            )),
+        ),
+        (
+            id: 10,
+            transform: Some((
+                position: (0.0, 4.5, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (8.0, 0.2, 8.0),
+            )),
+        ),
+        (
+            id: 11,
+            transform: Some((
+                position: (-4.0, 2.25, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 4.5, 8.0),
+            )),
+        ),
+        (
+            id: 12,
+            transform: Some((
+                position: (4.0, 2.25, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 4.5, 8.0),
+            )),
+        ),
+        (
+            id: 13,
+            transform: Some((
+                position: (0.0, 2.25, -28.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (8.0, 4.5, 0.3),
+            )),
+        ),
+        (
+            id: 14,
+            transform: Some((
+                position: (0.0, 0.0, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (6.0, 0.2, 6.0),
+            )),
+        ),
+        (
+            id: 15,
+            transform: Some((
+                position: (-1.5, 8.0, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (2.5, 0.2, 6.0),
+            )),
+        ),
+        (
+            id: 16,
+            transform: Some((
+                position: (1.5, 8.0, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (2.5, 0.2, 6.0),
+            )),
+        ),
+        (
+            id: 17,
+            transform: Some((
+                position: (-3.0, 4.0, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 8.0, 6.0),
+            )),
+        ),
+        (
+            id: 18,
+            transform: Some((
+                position: (3.0, 4.0, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (0.3, 8.0, 6.0),
+            )),
+        ),
+        (
+            id: 19,
+            transform: Some((
+                position: (0.0, 4.0, -34.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (6.0, 8.0, 0.3),
+            )),
+        ),
+        (
+            id: 20,
+            transform: Some((
+                position: (-4.5, 3.0, -3.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            point_light: Some((
+                color: (1.0, 0.7, 0.3),
+                intensity: 12.0,
+                range: 15.0,
+            )),
+            tag: Some("torch"),
+        ),
+        (
+            id: 21,
+            transform: Some((
+                position: (4.5, 3.0, -9.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            point_light: Some((
+                color: (1.0, 0.7, 0.3),
+                intensity: 12.0,
+                range: 15.0,
+            )),
+            tag: Some("torch"),
+        ),
+        (
+            id: 22,
+            transform: Some((
+                position: (0.0, 3.2, -16.0),
+                rotation: (-0.70710677, 0.0, 0.0, 0.70710677),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            spot_light: Some((
+                color: (0.8, 0.85, 1.0),
+                intensity: 15.0,
+                range: 10.0,
+                inner_cone_angle: 0.4,
+                outer_cone_angle: 0.8,
+            )),
+        ),
+        (
+            id: 23,
+            transform: Some((
+                position: (-2.0, 0.8, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            tag: Some("pickup"),
+        ),
+        (
+            id: 24,
+            transform: Some((
+                position: (0.0, 0.8, -25.6),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            tag: Some("pickup"),
+        ),
+        (
+            id: 25,
+            transform: Some((
+                position: (2.0, 0.8, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            tag: Some("pickup"),
+        ),
+        (
+            id: 26,
+            transform: Some((
+                position: (0.0, 4.0, -24.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            point_light: Some((
+                color: (1.0, 0.85, 0.5),
+                intensity: 10.0,
+                range: 12.0,
+            )),
+        ),
+        (
+            id: 27,
+            transform: Some((
+                position: (0.0, 7.5, -31.0),
+                rotation: (0.0, 0.0, 0.0, 1.0),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            point_light: Some((
+                color: (0.9, 0.95, 1.0),
+                intensity: 12.0,
+                range: 15.0,
+            )),
+        ),
+        (
+            id: 28,
+            transform: Some((
+                position: (0.2601106, 1.7, -1.3064724),
+                rotation: (-0.00000006647452, -0.058756106, -0.0000000039125436, 0.99827236),
+                scale: (1.0, 1.0, 1.0),
+            )),
+            camera: Some((
+                fov_y: 0.7853982,
+                near: 0.1,
+                far: 100.0,
+                active: true,
+            )),
+        ),
+    ],
+)

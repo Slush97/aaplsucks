@@ -33,6 +33,7 @@ pub mod offscreen;
 pub mod pipeline;
 pub mod primitive;
 pub mod scene;
+pub mod screenshot;
 pub mod shape;
 
 // Re-exports for convenience.
@@ -66,4 +67,5 @@ pub use primitive::{
 pub use scene::{
     MAX_BATCH_PRIMITIVES, MAX_NODES, Node, NodeContent, NodeId, ResolvedPrimitive, Scene,
 };
+pub use screenshot::ScreenshotCapture;
 pub use shape::{ShapeBuilder, primitive_to_instance};

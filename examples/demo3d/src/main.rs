@@ -76,11 +76,8 @@ impl AppDelegate for Demo3dApp {
         // Enable shadows.
         renderer.enable_shadows(gpu);
         renderer.set_shadow_config(ShadowConfig {
-            enabled: true,
-            cascade_count: 3,
             shadow_distance: 15.0,
-            depth_bias: 0.002,
-            normal_bias: 0.03,
+            ..ShadowConfig::default()
         });
 
         // Enable SSAO.
@@ -101,6 +98,7 @@ impl AppDelegate for Demo3dApp {
                     color: [0.4, 0.7, 1.0],
                     intensity: 8.0,
                     range: 12.0,
+                    cast_shadows: false,
                 },
             ],
             spot_lights: vec![
@@ -112,6 +110,7 @@ impl AppDelegate for Demo3dApp {
                     range: 15.0,
                     inner_cone_angle: 15.0_f32.to_radians(),
                     outer_cone_angle: 30.0_f32.to_radians(),
+                    cast_shadows: false,
                 },
             ],
         };

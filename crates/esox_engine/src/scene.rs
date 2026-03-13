@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::AssetManager;
 use crate::ecs::components::{
     Camera3D, DirectionalLightComponent, MeshRenderer, PointLightComponent, SpotLightComponent,
-    Transform3D,
+    Tag, Transform3D,
 };
 use crate::ecs::hierarchy::{Children, Parent};
 
@@ -36,6 +36,8 @@ pub struct SceneEntity {
     pub directional_light: Option<DirectionalLightComponent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 /// String-based asset references for mesh renderer serialization.
@@ -96,6 +98,8 @@ pub fn save_scene(world: &World, assets: &AssetManager) -> SceneFile {
             .ok()
             .and_then(|p| entity_to_id.get(&p.0).copied());
 
+        let tag = world.get::<&Tag>(entity).ok().map(|t| t.0.clone());
+
         entities.push(SceneEntity {
             id,
             transform: Some(transform),
@@ -105,6 +109,7 @@ pub fn save_scene(world: &World, assets: &AssetManager) -> SceneFile {
             spot_light,
             directional_light,
             parent,
+            tag,
         });
     }
 
@@ -184,6 +189,7 @@ pub fn load_scene(
                     color: pl.color,
                     intensity: pl.intensity,
                     range: pl.range,
+                    cast_shadows: pl.cast_shadows,
                 },
             );
         }
@@ -197,6 +203,7 @@ pub fn load_scene(
                     range: sl.range,
                     inner_cone_angle: sl.inner_cone_angle,
                     outer_cone_angle: sl.outer_cone_angle,
+                    cast_shadows: sl.cast_shadows,
                 },
             );
         }
@@ -209,6 +216,10 @@ pub fn load_scene(
                     intensity: dl.intensity,
                 },
             );
+        }
+
+        if let Some(ref tag) = se.tag {
+            let _ = world.insert_one(entity, Tag(tag.clone()));
         }
 
         id_to_entity.insert(se.id, entity);
@@ -291,6 +302,7 @@ pub fn instantiate_prefab(
                 spot_light: se.spot_light,
                 directional_light: se.directional_light,
                 parent: se.parent,
+                tag: se.tag.clone(),
             };
             if roots.contains(&se.id) {
                 if let Some(ref mut t) = se.transform {
@@ -423,6 +435,7 @@ mod tests {
             color: [1.0, 0.8, 0.6],
             intensity: 100.0,
             range: 50.0,
+            cast_shadows: false,
         };
         world.spawn((
             t,
@@ -460,6 +473,7 @@ mod tests {
                 spot_light: None,
                 directional_light: None,
                 parent: None,
+                tag: None,
             }],
         };
 
@@ -492,6 +506,7 @@ mod tests {
                 spot_light: None,
                 directional_light: None,
                 parent: None,
+                tag: None,
             }],
         };
 

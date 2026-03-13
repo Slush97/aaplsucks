@@ -11,6 +11,9 @@ members = [
     "examples/bench3d",
     "examples/engine_demo",
     "examples/platformer",
+    "examples/dungeon",
+    "examples/editor",
+    "examples/shadow_test",
     "apps/dwnldr-gui",
 ]
 

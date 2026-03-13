@@ -167,6 +167,7 @@ impl Game for EngineDemo {
                 color: [0.4, 0.7, 1.0],
                 intensity: 10.0,
                 range: 15.0,
+                cast_shadows: false,
             },
         ));
 
@@ -183,6 +184,7 @@ impl Game for EngineDemo {
                 range: 15.0,
                 inner_cone_angle: 15.0_f32.to_radians(),
                 outer_cone_angle: 30.0_f32.to_radians(),
+                cast_shadows: false,
             },
         ));
 

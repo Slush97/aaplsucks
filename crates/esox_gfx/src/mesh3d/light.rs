@@ -28,6 +28,8 @@ pub struct PointLight {
     pub intensity: f32,
     /// Maximum range (attenuation cutoff distance).
     pub range: f32,
+    /// Whether this light casts shadows.
+    pub cast_shadows: bool,
 }
 
 /// A spot light with position, direction, cone angles, color, intensity, and range.
@@ -47,6 +49,8 @@ pub struct SpotLight {
     pub inner_cone_angle: f32,
     /// Outer cone angle in radians (falloff from inner to outer).
     pub outer_cone_angle: f32,
+    /// Whether this light casts shadows.
+    pub cast_shadows: bool,
 }
 
 /// GPU-packed point light data (32 bytes).
@@ -131,22 +135,50 @@ impl LightEnvironment {
         Self::default()
     }
 
+    /// Returns (point_shadow_count, spot_shadow_count) — number of shadow-casting
+    /// lights of each type, capped at 4 each.
+    pub fn shadow_casting_counts(&self) -> (usize, usize) {
+        let point = self
+            .point_lights
+            .iter()
+            .filter(|pl| pl.cast_shadows)
+            .count()
+            .min(4);
+        let spot = self
+            .spot_lights
+            .iter()
+            .filter(|sl| sl.cast_shadows)
+            .count()
+            .min(4);
+        (point, spot)
+    }
+
     /// Pack into GPU-ready [`LightUniforms`].
+    ///
+    /// Shadow-casting lights are sorted to the front so shader indices 0..N
+    /// correspond to the shadow map array layers.
     pub fn to_uniforms(&self) -> LightUniforms {
-        let point_count = self.point_lights.len().min(MAX_POINT_LIGHTS);
+        // Sort shadow-casters first.
+        let mut sorted_points: Vec<&PointLight> = self.point_lights.iter().collect();
+        sorted_points.sort_by_key(|pl| !pl.cast_shadows);
+
+        let point_count = sorted_points.len().min(MAX_POINT_LIGHTS);
         let mut point_lights = [PointLightGpu {
             position_range: [0.0; 4],
             color_intensity: [0.0; 4],
         }; MAX_POINT_LIGHTS];
 
-        for (i, pl) in self.point_lights.iter().take(point_count).enumerate() {
+        for (i, pl) in sorted_points.iter().take(point_count).enumerate() {
             point_lights[i] = PointLightGpu {
                 position_range: [pl.position[0], pl.position[1], pl.position[2], pl.range],
                 color_intensity: [pl.color[0], pl.color[1], pl.color[2], pl.intensity],
             };
         }
 
-        let spot_count = self.spot_lights.len().min(MAX_SPOT_LIGHTS);
+        let mut sorted_spots: Vec<&SpotLight> = self.spot_lights.iter().collect();
+        sorted_spots.sort_by_key(|sl| !sl.cast_shadows);
+
+        let spot_count = sorted_spots.len().min(MAX_SPOT_LIGHTS);
         let mut spot_lights = [SpotLightGpu {
             position_range: [0.0; 4],
             direction_inner: [0.0; 4],
@@ -154,7 +186,7 @@ impl LightEnvironment {
             outer_pad: [0.0; 4],
         }; MAX_SPOT_LIGHTS];
 
-        for (i, sl) in self.spot_lights.iter().take(spot_count).enumerate() {
+        for (i, sl) in sorted_spots.iter().take(spot_count).enumerate() {
             spot_lights[i] = SpotLightGpu {
                 position_range: [sl.position[0], sl.position[1], sl.position[2], sl.range],
                 direction_inner: [
@@ -255,6 +287,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0],
                 intensity: 5.0,
                 range: 10.0,
+                cast_shadows: false,
             }],
             spot_lights: Vec::new(),
         };
@@ -276,6 +309,7 @@ mod tests {
                     color: [1.0, 1.0, 1.0],
                     intensity: 1.0,
                     range: 5.0,
+                    cast_shadows: false,
                 })
                 .collect(),
             ..Default::default()
@@ -296,6 +330,7 @@ mod tests {
                 range: 20.0,
                 inner_cone_angle: 0.3,
                 outer_cone_angle: 0.5,
+                cast_shadows: false,
             }],
             ..Default::default()
         };
@@ -323,6 +358,7 @@ mod tests {
                     range: 5.0,
                     inner_cone_angle: 0.3,
                     outer_cone_angle: 0.5,
+                    cast_shadows: false,
                 })
                 .collect(),
             ..Default::default()

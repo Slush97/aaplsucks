@@ -1253,6 +1253,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dungeon"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dwnldr"
 version = "0.1.0"
 dependencies = [
@@ -1302,6 +1310,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "winit",
+]
+
+[[package]]
+name = "editor"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1427,6 +1443,7 @@ dependencies = [
  "rapier3d",
  "ron",
  "serde",
+ "serde_json",
  "tracing",
  "wgpu",
  "winit",
@@ -4664,6 +4681,14 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "shadow_test"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "tracing-subscriber",
 ]
 
 [[package]]

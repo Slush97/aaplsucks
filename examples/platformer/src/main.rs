@@ -101,6 +101,7 @@ struct GameAudio {
     manager: esox_engine::audio::AudioManager,
     jump_sfx: esox_engine::audio::spatial::SoundHandle,
     collect_sfx: esox_engine::audio::spatial::SoundHandle,
+    footstep_sfx: Option<esox_engine::audio::spatial::SoundHandle>,
 }
 
 // ── Particles ──
@@ -396,6 +397,7 @@ impl Game for Platformer {
                         duration: 0.25,
                         priority: 0,
                     }],
+                    events: vec![],
                 },
                 AnimState {
                     name: "Locomotion".into(),
@@ -417,6 +419,10 @@ impl Game for Platformer {
                         duration: 0.3,
                         priority: 0,
                     }],
+                    events: vec![
+                        AnimEvent { name: "footstep".into(), time: 0.0 },
+                        AnimEvent { name: "footstep".into(), time: 0.5 },
+                    ],
                 },
             ],
             default_state: 0,
@@ -484,6 +490,7 @@ impl Game for Platformer {
                 color: [0.6, 0.7, 1.0],
                 intensity: 5.0,
                 range: 30.0,
+                cast_shadows: false,
             },
         ));
 
@@ -509,11 +516,10 @@ impl Game for Platformer {
         ctx.renderer.generate_procedural_ibl(ctx.gpu);
 
         ctx.renderer.set_shadow_config(ShadowConfig {
-            enabled: true,
-            cascade_count: 3,
             shadow_distance: 40.0,
-            depth_bias: 0.005,
-            normal_bias: 0.05,
+            depth_bias: 0.003,
+            normal_bias: 0.03,
+            ..ShadowConfig::default()
         });
 
         ctx.renderer.set_postprocess(PostProcess3DConfig {
@@ -614,12 +620,14 @@ impl Game for Platformer {
         if let Some(mut mgr) = esox_engine::audio::AudioManager::new() {
             let jump = mgr.load("assets/jump.ogg");
             let collect = mgr.load("assets/collect.ogg");
+            let footstep = mgr.load("assets/footstep.ogg").ok();
             match (jump, collect) {
                 (Ok(j), Ok(c)) => {
                     self.audio = Some(GameAudio {
                         manager: mgr,
                         jump_sfx: j,
                         collect_sfx: c,
+                        footstep_sfx: footstep,
                     });
                 }
                 _ => {
@@ -874,10 +882,27 @@ impl Game for Platformer {
         }
 
         // Drive animation graph: normalize speed to [0, 1] for walk/run blend.
+        // Also drain animation events for footstep sounds.
         if let Some(pe) = self.player_entity {
             if let Ok(mut ctrl) = ctx.world.get::<&mut AnimGraphController>(pe) {
                 let normalized = (horiz_speed / MOVE_SPEED).clamp(0.0, 1.0);
                 ctrl.graph.params.set_float("speed", normalized);
+
+                // Play footstep SFX from animation events (only when grounded).
+                if self.grounded {
+                    for event in ctrl.graph.drain_events() {
+                        if event.name == "footstep" {
+                            if let Some(audio) = &mut self.audio {
+                                if let Some(sfx) = audio.footstep_sfx {
+                                    audio.manager.play(sfx);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Discard events while airborne.
+                    let _ = ctrl.graph.drain_events().count();
+                }
             }
         }
 

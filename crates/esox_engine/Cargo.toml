@@ -31,3 +31,6 @@ ron = { workspace = true, optional = true }
 rapier3d = { workspace = true, optional = true }
 esox_ui = { workspace = true, optional = true }
 esox_font = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = "1"

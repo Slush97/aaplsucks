@@ -56,7 +56,7 @@ pub use renderer::{BatchStats3D, PostProcess3DConfig, Renderer3D};
 pub use scene::Scene3D;
 pub use motion_blur::{MotionBlurConfig, MotionBlurPass};
 pub use sdf_pass::{SdfBlendMode, SdfEffectDescriptor, SdfEffectHandle, SdfParams, SdfPass};
-pub use shadow::{ShadowConfig, ShadowPass, ShadowUniforms};
+pub use shadow::{OmniShadowUniforms, PointShadowPass, ShadowConfig, ShadowPass, ShadowUniforms, SpotShadowPass};
 pub use ssao::{SsaoConfig, SsaoParams, SsaoPass};
 pub use particles::{EmitterParams, ParticlePoolHandle};
 pub use skeleton::AnimationPlayer;

@@ -112,7 +112,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if dist < pl_range {
             let l = to_light / max(dist, 0.001);
             let atten = pl_intensity / max(dist * dist, 0.01);
-            lo = lo + pl_color * atten * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
+            let psf = point_shadow_factor(i, in.world_position, pl_pos, pl_range, n);
+            lo = lo + pl_color * atten * psf * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
         }
     }
 
@@ -135,7 +136,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let cos_theta = dot(normalize(-sl_dir), l);
             let s_atten = spot_attenuation(cos_theta, sl_cos_inner, sl_cos_outer);
             let d_atten = sl_intensity / max(dist * dist, 0.01);
-            lo = lo + sl_color * d_atten * s_atten * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
+            let ssf = spot_shadow_factor(i, in.world_position);
+            lo = lo + sl_color * d_atten * s_atten * ssf * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
         }
     }
 

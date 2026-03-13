@@ -99,6 +99,23 @@ pub enum StateSource {
     BlendTree1D { param: String, entries: Vec<BlendEntry> },
 }
 
+// ── Animation events ──
+
+/// An event defined on an animation state, fired when playback crosses `time`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+pub struct AnimEvent {
+    pub name: String,
+    pub time: f32,
+}
+
+/// An event emitted by the runtime when an `AnimEvent` fires.
+#[derive(Debug, Clone)]
+pub struct FiredEvent {
+    pub name: String,
+    pub state_name: String,
+}
+
 // ── Graph definition (data-driven) ──
 
 /// A transition between animation states.
@@ -124,6 +141,7 @@ pub struct AnimState {
     pub looping: bool,
     pub speed: f32,
     pub transitions: Vec<Transition>,
+    pub events: Vec<AnimEvent>,
 }
 
 /// Data-driven animation graph definition.
@@ -160,6 +178,10 @@ pub struct AnimGraphRuntime {
     output: Vec<Mat4>,
     /// Scratch buffer to avoid allocating during crossfade.
     scratch: Vec<Mat4>,
+    /// Events fired this frame, drained by game code.
+    fired_events: Vec<FiredEvent>,
+    /// Previous playback time for event detection.
+    prev_time: f32,
 }
 
 fn smoothstep(t: f32) -> f32 {
@@ -202,6 +224,8 @@ impl AnimGraphRuntime {
             crossfade: None,
             output,
             scratch,
+            fired_events: Vec::new(),
+            prev_time: 0.0,
         };
 
         // Start playing the default state.
@@ -242,6 +266,54 @@ impl AnimGraphRuntime {
             }
         }
 
+        // 2.5. Detect animation events.
+        {
+            let state = &self.def.states[self.current_state];
+            let current_time = match &state.source {
+                StateSource::Clip { .. } => self.player_a.time(),
+                StateSource::BlendTree1D { .. } => {
+                    // All blend players advance in lockstep; use first.
+                    self.blend_players.first().map_or(0.0, |p| p.time())
+                }
+            };
+
+            // Get clip duration for wrap detection.
+            let clip_duration = match &state.source {
+                StateSource::Clip { clip_index } => {
+                    clips.get(*clip_index).map_or(0.0, |c| c.duration)
+                }
+                StateSource::BlendTree1D { entries, .. } => {
+                    entries.first()
+                        .and_then(|e| clips.get(e.clip_index))
+                        .map_or(0.0, |c| c.duration)
+                }
+            };
+
+            let prev = self.prev_time;
+            let curr = current_time;
+
+            for event in &state.events {
+                let fired = if curr >= prev {
+                    // Normal forward playback: event fires if in (prev, curr].
+                    event.time > prev && event.time <= curr
+                } else if state.looping && clip_duration > 0.0 {
+                    // Wrapped: fires if in (prev, duration] or [0, curr].
+                    event.time > prev || event.time <= curr
+                } else {
+                    false
+                };
+
+                if fired {
+                    self.fired_events.push(FiredEvent {
+                        name: event.name.clone(),
+                        state_name: state.name.clone(),
+                    });
+                }
+            }
+
+            self.prev_time = curr;
+        }
+
         // 3. Compute blended output for current state.
         self.compute_state_output();
 
@@ -261,6 +333,11 @@ impl AnimGraphRuntime {
     /// Get the final blended skinning matrices.
     pub fn skinning_matrices(&self) -> &[Mat4] {
         &self.output
+    }
+
+    /// Drain all events fired since the last call.
+    pub fn drain_events(&mut self) -> std::vec::Drain<'_, FiredEvent> {
+        self.fired_events.drain(..)
     }
 
     fn evaluate_transitions(&self) -> Option<(usize, f32)> {
@@ -313,6 +390,8 @@ impl AnimGraphRuntime {
                 }
             }
         }
+
+        self.prev_time = 0.0;
     }
 
     fn compute_state_output(&mut self) {
@@ -578,6 +657,7 @@ mod tests {
                 looping: true,
                 speed: 1.0,
                 transitions: vec![],
+                events: vec![],
             }],
             default_state: 0,
         };
@@ -617,6 +697,7 @@ mod tests {
                         duration: 0.2,
                         priority: 0,
                     }],
+                    events: vec![],
                 },
                 AnimState {
                     name: "run".into(),
@@ -624,6 +705,7 @@ mod tests {
                     looping: true,
                     speed: 1.0,
                     transitions: vec![],
+                    events: vec![],
                 },
             ],
             default_state: 0,
@@ -669,9 +751,10 @@ mod tests {
                             priority: 0, // higher priority (lower number)
                         },
                     ],
+                    events: vec![],
                 },
-                AnimState { name: "a".into(), source: StateSource::Clip { clip_index: 1 }, looping: true, speed: 1.0, transitions: vec![] },
-                AnimState { name: "b".into(), source: StateSource::Clip { clip_index: 2 }, looping: true, speed: 1.0, transitions: vec![] },
+                AnimState { name: "a".into(), source: StateSource::Clip { clip_index: 1 }, looping: true, speed: 1.0, transitions: vec![], events: vec![] },
+                AnimState { name: "b".into(), source: StateSource::Clip { clip_index: 2 }, looping: true, speed: 1.0, transitions: vec![], events: vec![] },
             ],
             default_state: 0,
         };
@@ -727,6 +810,7 @@ mod tests {
                         duration: 1.0, // 1s crossfade for easy math
                         priority: 0,
                     }],
+                    events: vec![],
                 },
                 AnimState {
                     name: "b".into(),
@@ -734,6 +818,7 @@ mod tests {
                     looping: true,
                     speed: 1.0,
                     transitions: vec![],
+                    events: vec![],
                 },
             ],
             default_state: 0,
@@ -796,6 +881,7 @@ mod tests {
                         duration: 0.2,
                         priority: 0,
                     }],
+                    events: vec![],
                 },
                 AnimState {
                     name: "b".into(),
@@ -803,6 +889,7 @@ mod tests {
                     looping: true,
                     speed: 1.0,
                     transitions: vec![],
+                    events: vec![],
                 },
             ],
             default_state: 0,
@@ -840,6 +927,7 @@ mod tests {
                         duration: 0.2,
                         priority: 0,
                     }],
+                    events: vec![],
                 },
                 AnimState {
                     name: "locomotion".into(),
@@ -853,6 +941,7 @@ mod tests {
                     looping: true,
                     speed: 1.0,
                     transitions: vec![],
+                    events: vec![],
                 },
             ],
             default_state: 0,
@@ -864,5 +953,125 @@ mod tests {
         assert_eq!(roundtrip.default_state, 0);
         assert_eq!(roundtrip.states[0].name, "idle");
         assert_eq!(roundtrip.states[1].name, "locomotion");
+    }
+
+    // ── Animation event tests ──
+
+    #[test]
+    fn event_fires_at_correct_time() {
+        let skin = make_skin(1);
+        let player = AnimationPlayer::new(&skin);
+        let clips = vec![make_clip(0, 0.0, 1.0, 1.0)];
+
+        let def = AnimGraphDef {
+            states: vec![AnimState {
+                name: "walk".into(),
+                source: StateSource::Clip { clip_index: 0 },
+                looping: true,
+                speed: 1.0,
+                transitions: vec![],
+                events: vec![AnimEvent { name: "footstep".into(), time: 0.5 }],
+            }],
+            default_state: 0,
+        };
+
+        let mut runtime = AnimGraphRuntime::new(def, player);
+
+        // Advance to 0.3 — event at 0.5 should not fire.
+        runtime.advance(0.3, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        assert!(events.is_empty(), "should not fire before event time");
+
+        // Advance to 0.6 — event at 0.5 should fire.
+        runtime.advance(0.3, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "footstep");
+        assert_eq!(events[0].state_name, "walk");
+    }
+
+    #[test]
+    fn event_wraps_on_loop() {
+        let skin = make_skin(1);
+        let player = AnimationPlayer::new(&skin);
+        // Clip with 1.0s duration.
+        let clips = vec![make_clip(0, 0.0, 1.0, 1.0)];
+
+        let def = AnimGraphDef {
+            states: vec![AnimState {
+                name: "walk".into(),
+                source: StateSource::Clip { clip_index: 0 },
+                looping: true,
+                speed: 1.0,
+                transitions: vec![],
+                events: vec![AnimEvent { name: "footstep".into(), time: 0.1 }],
+            }],
+            default_state: 0,
+        };
+
+        let mut runtime = AnimGraphRuntime::new(def, player);
+
+        // Advance to 0.9.
+        runtime.advance(0.9, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        assert_eq!(events.len(), 1, "should fire at 0.1 during 0..0.9");
+
+        // Advance by 0.3 — should wrap (0.9 -> 1.0 -> 0.2) and fire event at 0.1.
+        runtime.advance(0.3, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        assert_eq!(events.len(), 1, "should fire on loop wrap");
+    }
+
+    #[test]
+    fn no_double_fire_during_crossfade() {
+        let skin = make_skin(1);
+        let player = AnimationPlayer::new(&skin);
+        let clips = vec![
+            make_clip(0, 0.0, 1.0, 1.0),
+            make_clip(0, 0.0, 2.0, 1.0),
+        ];
+
+        let def = AnimGraphDef {
+            states: vec![
+                AnimState {
+                    name: "a".into(),
+                    source: StateSource::Clip { clip_index: 0 },
+                    looping: true,
+                    speed: 1.0,
+                    transitions: vec![Transition {
+                        target_state: 1,
+                        conditions: vec![Condition::BoolTrue { param: "go".into() }],
+                        duration: 0.5,
+                        priority: 0,
+                    }],
+                    events: vec![AnimEvent { name: "event_a".into(), time: 0.2 }],
+                },
+                AnimState {
+                    name: "b".into(),
+                    source: StateSource::Clip { clip_index: 1 },
+                    looping: true,
+                    speed: 1.0,
+                    transitions: vec![],
+                    events: vec![AnimEvent { name: "event_b".into(), time: 0.3 }],
+                },
+            ],
+            default_state: 0,
+        };
+
+        let mut runtime = AnimGraphRuntime::new(def, player);
+
+        // Advance past event_a.
+        runtime.advance(0.3, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "event_a");
+
+        // Trigger transition to state b.
+        runtime.params.set_bool("go", true);
+        runtime.advance(0.4, &clips);
+        let events: Vec<_> = runtime.drain_events().collect();
+        // Should fire event_b at 0.3 in the new state, not event_a again.
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "event_b");
     }
 }

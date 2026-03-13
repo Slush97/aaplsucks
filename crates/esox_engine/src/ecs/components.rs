@@ -87,6 +87,8 @@ pub struct PointLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
     pub range: f32,
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub cast_shadows: bool,
 }
 
 /// Spot light component. Position and direction derived from Transform3D.
@@ -98,6 +100,8 @@ pub struct SpotLightComponent {
     pub range: f32,
     pub inner_cone_angle: f32,
     pub outer_cone_angle: f32,
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub cast_shadows: bool,
 }
 
 /// Directional light component. Direction derived from Transform3D rotation (forward = -Z).
@@ -107,6 +111,11 @@ pub struct DirectionalLightComponent {
     pub color: [f32; 3],
     pub intensity: f32,
 }
+
+/// Generic string tag for identifying entities across scene save/load.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+pub struct Tag(pub String);
 
 /// Skeletal animation component — drives skinned meshes via an animation player.
 pub struct Animator {

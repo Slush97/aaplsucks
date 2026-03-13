@@ -437,6 +437,8 @@ pub struct App {
     redraw_pending: bool,
     /// Count of consecutive render failures (for device-lost recovery).
     consecutive_render_failures: u32,
+    /// Whether a screenshot should be captured on the next frame.
+    screenshot_pending: bool,
     /// Receiver for pipelines compiled on a background thread.
     pipeline_rx: Option<esox_gfx::PipelineReceiver>,
     /// Event loop proxy for waking the main thread from background compilation.
@@ -474,6 +476,7 @@ impl App {
             last_redraw: std::time::Instant::now(),
             redraw_pending: false,
             consecutive_render_failures: 0,
+            screenshot_pending: false,
             pipeline_rx: None,
             event_proxy: None,
             perf: crate::perf::PerfMonitor::new(300),
@@ -874,6 +877,15 @@ impl ApplicationHandler<AppUserEvent> for App {
                             }
                             return;
                         }
+                    }
+                }
+
+                // F12 — screenshot
+                if event.state == winit::event::ElementState::Pressed {
+                    use winit::keyboard::{KeyCode, PhysicalKey};
+                    if event.physical_key == PhysicalKey::Code(KeyCode::F12) {
+                        self.screenshot_pending = true;
+                        tracing::info!("screenshot requested (F12)");
                     }
                 }
 
@@ -1379,6 +1391,19 @@ impl ApplicationHandler<AppUserEvent> for App {
                         None
                     };
 
+                    // Create screenshot capture buffer if requested.
+                    let screenshot_capture = if self.screenshot_pending {
+                        self.screenshot_pending = false;
+                        Some(esox_gfx::ScreenshotCapture::new(
+                            &gpu.device,
+                            gpu.config.width,
+                            gpu.config.height,
+                            gpu.config.format,
+                        ))
+                    } else {
+                        None
+                    };
+
                     if let Err(e) = esox_gfx::FrameEncoder::encode_and_submit_with_surface(
                         gpu,
                         resources,
@@ -1390,6 +1415,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                         pp,
                         self.msaa_view.as_ref(),
                         self.depth_view.as_ref(),
+                        screenshot_capture.as_ref(),
                     ) {
                         tracing::error!("render error: {e}");
                         self.consecutive_render_failures += 1;
@@ -1401,6 +1427,15 @@ impl ApplicationHandler<AppUserEvent> for App {
                         return;
                     }
                     self.consecutive_render_failures = 0;
+
+                    // Save screenshot on a background thread.
+                    if let Some(capture) = screenshot_capture {
+                        let device = gpu.device.clone();
+                        let path = screenshot_path();
+                        std::thread::spawn(move || {
+                            capture.save_blocking(&device, path);
+                        });
+                    }
 
                     // Read counts after encoding (build_batches runs inside the encoder).
                     let instance_count = self.frame.instance_count() as u32;
@@ -1516,6 +1551,32 @@ static SIGNAL_EXIT: AtomicBool = AtomicBool::new(false);
 
 /// Install signal handlers so SIGTERM/SIGINT trigger a graceful exit
 /// (allowing perf report to be written).
+/// Generate a timestamped screenshot file path in the user's Pictures directory
+/// (or current directory as fallback).
+fn screenshot_path() -> std::path::PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let dir = std::env::var_os("XDG_PICTURES_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            dirs_fallback().map(|home| home.join("Pictures"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    // Ensure the directory exists.
+    let _ = std::fs::create_dir_all(&dir);
+
+    dir.join(format!("screenshot_{timestamp}.png"))
+}
+
+/// Best-effort home directory lookup without adding a dependency.
+fn dirs_fallback() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
 fn install_signal_handlers() {
     #[cfg(target_os = "linux")]
     unsafe {

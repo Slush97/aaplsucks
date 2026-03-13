@@ -9,7 +9,7 @@ pub mod systems;
 
 pub use components::{
     AnimGraphController, Animator, Camera3D, DirectionalLightComponent, GlobalTransform,
-    MeshRenderer, PointLightComponent, SpotLightComponent, Transform3D,
+    MeshRenderer, PointLightComponent, SpotLightComponent, Tag, Transform3D,
 };
 pub use hierarchy::{Children, Parent, hierarchy_system};
 pub use physics_components::{ColliderComponent, RigidBodyComponent, TriggerVolume};

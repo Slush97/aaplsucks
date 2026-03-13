@@ -48,6 +48,13 @@ pub struct InputManager {
     mouse_delta_frame: (f64, f64),
     /// Number of fixed ticks in the current frame (for delta distribution).
     frame_tick_count: u32,
+
+    /// Scroll delta accumulated this frame.
+    scroll_accum: f32,
+    /// Scroll delta for the current tick (distributed from frame total).
+    pub(crate) scroll_delta: f32,
+    /// Snapshot for the current frame.
+    scroll_frame: f32,
 }
 
 impl InputManager {
@@ -67,6 +74,9 @@ impl InputManager {
             mouse_delta_accum: (0.0, 0.0),
             mouse_delta_frame: (0.0, 0.0),
             frame_tick_count: 1,
+            scroll_accum: 0.0,
+            scroll_delta: 0.0,
+            scroll_frame: 0.0,
         }
     }
 
@@ -167,6 +177,11 @@ impl InputManager {
         self.keys_down.get(&key).copied().unwrap_or(false)
     }
 
+    /// Scroll wheel delta for this tick (positive = scroll up).
+    pub fn scroll_delta(&self) -> f32 {
+        self.scroll_delta
+    }
+
     /// Whether a mouse button is currently held (0=left, 1=middle, 2=right).
     pub fn is_mouse_button_down(&self, button: u8) -> bool {
         self.mouse_buttons_down
@@ -199,6 +214,10 @@ impl InputManager {
         self.mouse_pos = (x, y);
         self.mouse_delta_accum.0 += dx;
         self.mouse_delta_accum.1 += dy;
+    }
+
+    pub(crate) fn handle_scroll(&mut self, delta_y: f32) {
+        self.scroll_accum += delta_y;
     }
 
     pub(crate) fn handle_mouse_button(&mut self, button: u8, pressed: bool) {
@@ -236,6 +255,8 @@ impl InputManager {
         if tick_count > 0 {
             self.mouse_delta_frame = self.mouse_delta_accum;
             self.mouse_delta_accum = (0.0, 0.0);
+            self.scroll_frame = self.scroll_accum;
+            self.scroll_accum = 0.0;
         }
     }
 
@@ -247,6 +268,7 @@ impl InputManager {
             self.mouse_delta_frame.0 / tc,
             self.mouse_delta_frame.1 / tc,
         );
+        self.scroll_delta = self.scroll_frame / self.frame_tick_count.max(1) as f32;
 
         // Update action states from raw input.
         for (name, bindings) in &self.actions {

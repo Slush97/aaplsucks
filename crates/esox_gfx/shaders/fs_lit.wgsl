@@ -44,7 +44,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let l = to_light / max(dist, 0.001);
             let atten = pl_intensity / max(dist * dist, 0.01);
             let pl_ndotl = max(dot(n, l), 0.0);
-            diffuse = diffuse + pl_color * atten * pl_ndotl;
+            let psf = point_shadow_factor(i, in.world_position, pl_pos, pl_range, n);
+            diffuse = diffuse + pl_color * atten * pl_ndotl * psf;
         }
     }
 
@@ -68,7 +69,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let spot_atten = spot_attenuation(cos_theta, sl_cos_inner, sl_cos_outer);
             let dist_atten = sl_intensity / max(dist * dist, 0.01);
             let sl_ndotl = max(dot(n, l), 0.0);
-            diffuse = diffuse + sl_color * dist_atten * spot_atten * sl_ndotl;
+            let ssf = spot_shadow_factor(i, in.world_position);
+            diffuse = diffuse + sl_color * dist_atten * spot_atten * sl_ndotl * ssf;
         }
     }
 

@@ -493,6 +493,7 @@ impl FrameEncoder {
         post_process: Option<PostProcessPass<'_>>,
         msaa_view: Option<&wgpu::TextureView>,
         depth_view: Option<&wgpu::TextureView>,
+        screenshot: Option<&crate::screenshot::ScreenshotCapture>,
     ) -> Result<(), crate::error::Error> {
         Self::encode_and_submit_surface_inner(
             gpu,
@@ -505,6 +506,7 @@ impl FrameEncoder {
             post_process,
             msaa_view,
             depth_view,
+            screenshot,
         )
     }
 
@@ -746,6 +748,7 @@ impl FrameEncoder {
         post_process: Option<PostProcessPass<'_>>,
         msaa_view: Option<&wgpu::TextureView>,
         depth_view: Option<&wgpu::TextureView>,
+        screenshot: Option<&crate::screenshot::ScreenshotCapture>,
     ) -> Result<(), crate::error::Error> {
         let instance_count = frame.instance_count();
 
@@ -937,6 +940,9 @@ impl FrameEncoder {
                         pipeline_id = pp.pipeline_id.0,
                         "post-process pipeline not found, skipping"
                     );
+                    if let Some(sc) = screenshot {
+                        sc.encode_copy(&mut encoder, &surface.texture.texture);
+                    }
                     gpu.queue.submit(std::iter::once(encoder.finish()));
                     surface.texture.present();
                     return Ok(());
@@ -963,6 +969,9 @@ impl FrameEncoder {
             pass.draw(0..3, 0..1);
         }
 
+        if let Some(sc) = screenshot {
+            sc.encode_copy(&mut encoder, &surface.texture.texture);
+        }
         gpu.queue.submit(std::iter::once(encoder.finish()));
         surface.texture.present();
         Ok(())

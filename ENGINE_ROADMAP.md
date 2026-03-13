@@ -55,15 +55,16 @@ These are the things that make it run well on modest hardware.
 
 **Done when:** scene with 10K objects renders at 60fps on integrated graphics.
 
-## Phase 4 — Visual quality
+## Phase 4 — Visual quality ✓
 
-- **Shadow maps** — single cascaded shadow map for directional light
-- **Spot lights** — extend light.rs
-- **Environment mapping** — IBL for PBR (diffuse irradiance + specular prefilter)
-- **Post-processing** — bloom already exists; add SSAO, motion blur as optional passes
-- **SDF effects** — optional render pass using existing raymarching pipeline for particles, procedural terrain, volumetrics
+- **Shadow maps** ✓ — cascaded shadow maps (CSM) for directional lights with PCF soft shadows
+- **Spot lights** ✓ — spot light support in light.rs with inner/outer cone angles
+- **Environment mapping** ✓ — IBL for PBR (diffuse irradiance + specular prefilter, procedural generation)
+- **Post-processing** ✓ — bloom, SSAO, motion blur, SDF effects
+- **Point light shadows** ✓ — cube map shadow maps
+- **Spot light shadows** ✓ — shadow maps for spot lights
 
-**Done when:** scene looks good enough that you'd ship it.
+**Done when:** scene looks good enough that you'd ship it. ✓
 
 ## Phase 5 — Game engine crate (`esox_engine`)
 
@@ -96,17 +97,19 @@ Foundation for creating and persisting game content without hardcoding Rust.
 
 **Done when:** can build a level in code, save it to a `.scene.ron` file, quit, relaunch, and load it back identically. Physics objects collide via rapier. Debug overlay shows stats.
 
-## Phase 8 — Game feel (in progress)
+## Phase 8 — Game feel
 
 The systems that make games feel like games.
 
 - **Particle system** ✓ — GPU compute-driven particles with emitter components. Spawn rate, lifetime, velocity, gravity, color/size interpolation. Indirect draw with existing instanced mesh pipeline.
-- **Animation state machine** — blend trees (1D/2D), transition graph between clips, crossfade blending. `AnimationGraph` component that drives the existing `Animator`.
+- **Animation state machine** ✓ — 1D blend trees, crossfade blending, transition graph with conditions and priorities. `AnimGraphController` component drives `AnimationPlayer`.
+- **Animation events** ✓ — `AnimEvent` on states, fired when playback crosses event time (handles looping wrap). Game code drains via `AnimGraphRuntime::drain_events()`.
 - **Trigger volumes** ✓ — sensor collider regions that fire Enter/Stay/Exit events. `TriggerVolume` marker component, `PhysicsEntityMap` for handle↔entity resolution.
 - **Collision events** ✓ — contact callbacks from rapier exposed via `drain_contacts()` / `drain_triggers()`, resolvable to ECS entities via `PhysicsEntityMap`.
-- **Audio improvements** — trigger sounds from collision events, distance-based attenuation tuning, music crossfade.
+- **Audio improvements** ✓ — `play_at_volume`, music crossfade (`MusicHandle`), `distance_attenuation`, collision-triggered sounds.
+- **2D blend trees** — deferred (no current demo needs them)
 
-**Done when:** a character can run through a particle-emitting trigger zone, blend between walk/run/jump animations, and hear a spatial sound on collision.
+**Done when:** a character can run through a particle-emitting trigger zone, blend between walk/run/jump animations, and hear a spatial sound on collision. ✓
 
 ## Phase 9 — Scene editor
 

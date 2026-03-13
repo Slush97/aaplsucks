@@ -19,6 +19,18 @@ pub const MAX_SHADOW_CASCADES: usize = 4;
 /// Shadow map resolution per cascade layer (width and height).
 const SHADOW_MAP_SIZE: u32 = 2048;
 
+/// Maximum point lights that can cast shadows simultaneously.
+pub const MAX_SHADOW_POINT_LIGHTS: usize = 4;
+
+/// Maximum spot lights that can cast shadows simultaneously.
+pub const MAX_SHADOW_SPOT_LIGHTS: usize = 4;
+
+/// Shadow map resolution for point light cube faces.
+pub const POINT_SHADOW_MAP_SIZE: u32 = 512;
+
+/// Shadow map resolution for spot light shadow maps.
+pub const SPOT_SHADOW_MAP_SIZE: u32 = 1024;
+
 // ── Shadow vertex shader ──
 
 pub(crate) const SHADOW_VERTEX_SHADER: &str = r#"
@@ -84,6 +96,17 @@ pub struct ShadowConfig {
     pub depth_bias: f32,
     /// Normal-direction bias to reduce peter-panning.
     pub normal_bias: f32,
+    /// Distance to pull the light back from the frustum center.
+    /// Higher values accommodate taller geometry. Default: 50.0.
+    pub light_distance: f32,
+    /// Depth bias for point light shadows.
+    pub point_depth_bias: f32,
+    /// Normal bias for point light shadows.
+    pub point_normal_bias: f32,
+    /// Depth bias for spot light shadows.
+    pub spot_depth_bias: f32,
+    /// Normal bias for spot light shadows.
+    pub spot_normal_bias: f32,
 }
 
 impl Default for ShadowConfig {
@@ -93,9 +116,32 @@ impl Default for ShadowConfig {
             cascade_count: 3,
             shadow_distance: 100.0,
             depth_bias: 0.002,
-            normal_bias: 0.03,
+            normal_bias: 0.02,
+            light_distance: 50.0,
+            point_depth_bias: 0.005,
+            point_normal_bias: 0.08,
+            spot_depth_bias: 0.003,
+            spot_normal_bias: 0.02,
         }
     }
+}
+
+// ── Omni shadow GPU uniform struct ──
+
+/// GPU-side uniform data for point and spot light shadow maps.
+///
+/// 1824 bytes = 24 mat4x4 (1536) + 4 mat4x4 (256) + 2 vec4 (32).
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct OmniShadowUniforms {
+    /// View-projection matrices for point light cube faces (4 lights × 6 faces = 24).
+    pub point_light_vp: [[[f32; 4]; 4]; 24],
+    /// View-projection matrices for spot lights (up to 4).
+    pub spot_light_vp: [[[f32; 4]; 4]; MAX_SHADOW_SPOT_LIGHTS],
+    /// x=point_shadow_count, y=spot_shadow_count, z=point_depth_bias, w=point_normal_bias.
+    pub omni_config: [f32; 4],
+    /// x=spot_depth_bias, y=spot_normal_bias, zw=pad.
+    pub omni_config2: [f32; 4],
 }
 
 // ── Per-cascade uniform (just a single light-VP matrix) ──
@@ -144,6 +190,7 @@ fn compute_cascade_matrix(
     near_split: f32,
     far_split: f32,
     light_dir: Vec3,
+    light_distance: f32,
 ) -> Mat4 {
     // Build a projection for this sub-frustum.
     let proj = Mat4::perspective_rh(camera.fov_y, aspect, near_split, far_split);
@@ -175,7 +222,7 @@ fn compute_cascade_matrix(
 
     // Light view matrix: look at the center from the light direction.
     let light_dir_n = light_dir.normalize();
-    let light_pos = center - light_dir_n * 50.0;
+    let light_pos = center - light_dir_n * light_distance;
     let light_view = Mat4::look_at_rh(light_pos, center, Vec3::Y);
 
     // Project corners into light view space and find tight AABB.
@@ -200,6 +247,15 @@ fn compute_cascade_matrix(
     let z_margin = (max_z - min_z) * 0.5;
     min_z -= z_margin;
 
+    // Texel snapping: round ortho bounds to the shadow map texel grid so
+    // shadow edges don't shimmer when the camera moves.
+    let texels_per_unit_x = SHADOW_MAP_SIZE as f32 / (max_x - min_x);
+    let texels_per_unit_y = SHADOW_MAP_SIZE as f32 / (max_y - min_y);
+    min_x = (min_x * texels_per_unit_x).floor() / texels_per_unit_x;
+    max_x = (max_x * texels_per_unit_x).ceil() / texels_per_unit_x;
+    min_y = (min_y * texels_per_unit_y).floor() / texels_per_unit_y;
+    max_y = (max_y * texels_per_unit_y).ceil() / texels_per_unit_y;
+
     let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, min_z, max_z);
 
     light_proj * light_view
@@ -211,6 +267,7 @@ pub fn compute_cascade_matrices(
     aspect: f32,
     light_dir: Vec3,
     splits: &[f32],
+    light_distance: f32,
 ) -> Vec<Mat4> {
     let cascade_count = splits.len().saturating_sub(1);
     let mut matrices = Vec::with_capacity(cascade_count);
@@ -218,7 +275,7 @@ pub fn compute_cascade_matrices(
     for i in 0..cascade_count {
         let near_split = splits[i];
         let far_split = splits[i + 1];
-        matrices.push(compute_cascade_matrix(camera, aspect, near_split, far_split, light_dir));
+        matrices.push(compute_cascade_matrix(camera, aspect, near_split, far_split, light_dir, light_distance));
     }
 
     matrices
@@ -238,9 +295,9 @@ pub struct ShadowPass {
     /// Per-cascade views for render-pass depth attachments.
     pub(crate) cascade_views: Vec<wgpu::TextureView>,
     /// Depth-only render pipeline (vertex shader only).
-    pipeline: wgpu::RenderPipeline,
+    pub(crate) pipeline: wgpu::RenderPipeline,
     /// Bind group layout for per-cascade uniforms.
-    bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     /// Per-cascade uniform buffers (one light-VP mat4x4 each).
     cascade_buffers: Vec<wgpu::Buffer>,
     /// Per-cascade bind groups referencing the uniform buffers.
@@ -374,8 +431,8 @@ impl ShadowPass {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 4,
-                    slope_scale: 3.0,
+                    constant: 2,
+                    slope_scale: 1.5,
                     clamp: 0.0,
                 },
             }),
@@ -435,8 +492,8 @@ impl ShadowPass {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: 4,
-                    slope_scale: 3.0,
+                    constant: 2,
+                    slope_scale: 1.5,
                     clamp: 0.0,
                 },
             }),
@@ -463,7 +520,7 @@ impl ShadowPass {
         let shadow_far = self.config.shadow_distance.min(camera.far);
         let splits = compute_cascade_splits(camera.near, shadow_far, count, 0.5);
         let light = Vec3::from(light_dir);
-        let matrices = compute_cascade_matrices(camera, aspect, light, &splits);
+        let matrices = compute_cascade_matrices(camera, aspect, light, &splits, self.config.light_distance);
 
         // Upload per-cascade light-VP matrices.
         let mut light_vp = [[[0.0f32; 4]; 4]; MAX_SHADOW_CASCADES];
@@ -527,6 +584,300 @@ impl ShadowPass {
     }
 }
 
+// ── Point light face matrices ──
+
+/// Compute 6 view-projection matrices for a point light's cube shadow map.
+///
+/// Each face covers a 90° FOV, aspect 1:1, rendering into one layer of the
+/// depth texture array.
+pub fn point_light_face_matrices(position: Vec3, range: f32) -> [Mat4; 6] {
+    let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, range);
+
+    // +X, -X, +Y, -Y, +Z, -Z
+    let targets_and_ups: [(Vec3, Vec3); 6] = [
+        (Vec3::X, -Vec3::Y),
+        (-Vec3::X, -Vec3::Y),
+        (Vec3::Y, Vec3::Z),
+        (-Vec3::Y, -Vec3::Z),
+        (Vec3::Z, -Vec3::Y),
+        (-Vec3::Z, -Vec3::Y),
+    ];
+
+    let mut matrices = [Mat4::IDENTITY; 6];
+    for (i, (dir, up)) in targets_and_ups.iter().enumerate() {
+        let view = Mat4::look_at_rh(position, position + *dir, *up);
+        matrices[i] = proj * view;
+    }
+    matrices
+}
+
+/// Compute a view-projection matrix for a spot light shadow map.
+pub fn spot_light_vp(position: Vec3, direction: Vec3, outer_angle: f32, range: f32) -> Mat4 {
+    let fov = (outer_angle * 2.0).min(std::f32::consts::PI - 0.01);
+    let proj = Mat4::perspective_rh(fov, 1.0, 0.1, range);
+
+    let dir = direction.normalize();
+    // Choose an up vector that isn't parallel to direction.
+    let up = if dir.y.abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let view = Mat4::look_at_rh(position, position + dir, up);
+    proj * view
+}
+
+// ── PointShadowPass ──
+
+/// Depth-only render pass for point light cube shadow maps.
+///
+/// Uses a `texture_depth_2d_array` with 24 layers (4 lights × 6 faces).
+/// Reuses the same shadow vertex shader and pipeline as the CSM pass.
+pub struct PointShadowPass {
+    /// Depth texture array (512×512, 24 layers).
+    #[allow(dead_code)]
+    pub(crate) depth_texture: wgpu::Texture,
+    /// Full array view for sampling in the fragment shader.
+    pub(crate) depth_view: wgpu::TextureView,
+    /// Per-face views (24 total) for render-pass depth attachments.
+    pub(crate) face_views: Vec<wgpu::TextureView>,
+    /// Per-face uniform buffers (one light-VP mat4x4 each).
+    face_buffers: Vec<wgpu::Buffer>,
+    /// Per-face bind groups.
+    face_bind_groups: Vec<wgpu::BindGroup>,
+}
+
+impl PointShadowPass {
+    pub fn new(device: &wgpu::Device, shadow_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
+        let total_layers = (MAX_SHADOW_POINT_LIGHTS * 6) as u32; // 24
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("point_shadow_depth_texture"),
+            size: wgpu::Extent3d {
+                width: POINT_SHADOW_MAP_SIZE,
+                height: POINT_SHADOW_MAP_SIZE,
+                depth_or_array_layers: total_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("point_shadow_depth_view_array"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+
+        let mut face_views = Vec::with_capacity(total_layers as usize);
+        let mut face_buffers = Vec::with_capacity(total_layers as usize);
+        let mut face_bind_groups = Vec::with_capacity(total_layers as usize);
+
+        for i in 0..total_layers {
+            face_views.push(depth_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("point_shadow_face_{i}_view")),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: i,
+                array_layer_count: Some(1),
+                ..Default::default()
+            }));
+
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("point_shadow_face_{i}_uniform")),
+                contents: bytemuck::bytes_of(&CascadeUniforms {
+                    light_vp: Mat4::IDENTITY.to_cols_array_2d(),
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("point_shadow_face_{i}_bg")),
+                layout: shadow_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+
+            face_buffers.push(buffer);
+            face_bind_groups.push(bind_group);
+        }
+
+        Self {
+            depth_texture,
+            depth_view,
+            face_views,
+            face_buffers,
+            face_bind_groups,
+        }
+    }
+
+    /// Begin a depth-only render pass for the given face (0..24).
+    pub fn begin_face_pass<'a>(
+        &'a self,
+        encoder: &'a mut wgpu::CommandEncoder,
+        face_idx: usize,
+        pipeline: &'a wgpu::RenderPipeline,
+    ) -> wgpu::RenderPass<'a> {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&format!("point_shadow_face_{face_idx}_pass")),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.face_views[face_idx],
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.face_bind_groups[face_idx], &[]);
+        pass
+    }
+
+    /// Upload the VP matrix for a given face.
+    pub fn update_face(&self, queue: &wgpu::Queue, face_idx: usize, vp: &Mat4) {
+        queue.write_buffer(
+            &self.face_buffers[face_idx],
+            0,
+            bytemuck::bytes_of(&CascadeUniforms {
+                light_vp: vp.to_cols_array_2d(),
+            }),
+        );
+    }
+}
+
+// ── SpotShadowPass ──
+
+/// Depth-only render pass for spot light shadow maps.
+///
+/// Uses a `texture_depth_2d_array` with 4 layers (one per spot light).
+pub struct SpotShadowPass {
+    /// Depth texture array (1024×1024, 4 layers).
+    #[allow(dead_code)]
+    pub(crate) depth_texture: wgpu::Texture,
+    /// Full array view for sampling in the fragment shader.
+    pub(crate) depth_view: wgpu::TextureView,
+    /// Per-light views for render-pass depth attachments.
+    pub(crate) layer_views: Vec<wgpu::TextureView>,
+    /// Per-light uniform buffers.
+    layer_buffers: Vec<wgpu::Buffer>,
+    /// Per-light bind groups.
+    layer_bind_groups: Vec<wgpu::BindGroup>,
+}
+
+impl SpotShadowPass {
+    pub fn new(device: &wgpu::Device, shadow_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
+        let total_layers = MAX_SHADOW_SPOT_LIGHTS as u32; // 4
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("spot_shadow_depth_texture"),
+            size: wgpu::Extent3d {
+                width: SPOT_SHADOW_MAP_SIZE,
+                height: SPOT_SHADOW_MAP_SIZE,
+                depth_or_array_layers: total_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("spot_shadow_depth_view_array"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+
+        let mut layer_views = Vec::with_capacity(total_layers as usize);
+        let mut layer_buffers = Vec::with_capacity(total_layers as usize);
+        let mut layer_bind_groups = Vec::with_capacity(total_layers as usize);
+
+        for i in 0..total_layers {
+            layer_views.push(depth_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("spot_shadow_layer_{i}_view")),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: i,
+                array_layer_count: Some(1),
+                ..Default::default()
+            }));
+
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("spot_shadow_layer_{i}_uniform")),
+                contents: bytemuck::bytes_of(&CascadeUniforms {
+                    light_vp: Mat4::IDENTITY.to_cols_array_2d(),
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("spot_shadow_layer_{i}_bg")),
+                layout: shadow_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+
+            layer_buffers.push(buffer);
+            layer_bind_groups.push(bind_group);
+        }
+
+        Self {
+            depth_texture,
+            depth_view,
+            layer_views,
+            layer_buffers,
+            layer_bind_groups,
+        }
+    }
+
+    /// Begin a depth-only render pass for the given spot light layer.
+    pub fn begin_layer_pass<'a>(
+        &'a self,
+        encoder: &'a mut wgpu::CommandEncoder,
+        layer: usize,
+        pipeline: &'a wgpu::RenderPipeline,
+    ) -> wgpu::RenderPass<'a> {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&format!("spot_shadow_layer_{layer}_pass")),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.layer_views[layer],
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.layer_bind_groups[layer], &[]);
+        pass
+    }
+
+    /// Upload the VP matrix for a given spot light layer.
+    pub fn update_layer(&self, queue: &wgpu::Queue, layer: usize, vp: &Mat4) {
+        queue.write_buffer(
+            &self.layer_buffers[layer],
+            0,
+            bytemuck::bytes_of(&CascadeUniforms {
+                light_vp: vp.to_cols_array_2d(),
+            }),
+        );
+    }
+}
+
 // ── Tests ──
 
 #[cfg(test)]
@@ -563,7 +914,7 @@ mod tests {
         assert_eq!(cfg.cascade_count, 3);
         assert_eq!(cfg.shadow_distance, 100.0);
         assert!((cfg.depth_bias - 0.002).abs() < 1e-9);
-        assert!((cfg.normal_bias - 0.03).abs() < 1e-9);
+        assert!((cfg.normal_bias - 0.02).abs() < 1e-9);
     }
 
     #[test]
@@ -591,5 +942,29 @@ mod tests {
     #[test]
     fn cascade_uniforms_size() {
         assert_eq!(size_of::<CascadeUniforms>(), 64);
+    }
+
+    #[test]
+    fn omni_shadow_uniforms_size() {
+        assert_eq!(size_of::<OmniShadowUniforms>(), 1824);
+    }
+
+    #[test]
+    fn point_light_face_matrices_valid() {
+        let matrices = point_light_face_matrices(Vec3::ZERO, 10.0);
+        for (i, m) in matrices.iter().enumerate() {
+            // Each matrix should be invertible (non-degenerate).
+            let det = m.determinant();
+            assert!(
+                det.abs() > 1e-6,
+                "face {i} matrix has near-zero determinant: {det}",
+            );
+        }
+    }
+
+    #[test]
+    fn spot_light_vp_valid() {
+        let vp = spot_light_vp(Vec3::ZERO, Vec3::NEG_Z, 0.5, 10.0);
+        assert!(vp.determinant().abs() > 1e-6);
     }
 }

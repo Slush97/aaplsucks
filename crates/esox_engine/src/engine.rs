@@ -145,6 +145,8 @@ impl AppDelegate for Engine {
 
         if self.config.shadows {
             renderer.enable_shadows(gpu);
+            renderer.enable_point_shadows(gpu);
+            renderer.enable_spot_shadows(gpu);
         }
 
         #[cfg(feature = "ui")]
@@ -428,6 +430,7 @@ impl AppDelegate for Engine {
                 y: _y,
                 delta_y: _delta_y,
             } => {
+                self.input.handle_scroll(_delta_y);
                 #[cfg(feature = "ui")]
                 self.ui_state.process_scroll(_x as f32, _y as f32, _delta_y);
             }

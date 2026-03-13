@@ -37,14 +37,14 @@ pub mod time;
 
 // Re-export core types.
 pub use animation_graph::{
-    AnimGraphDef, AnimGraphRuntime, AnimParams, AnimState, BlendEntry, Condition, ParamValue,
-    StateSource, Transition,
+    AnimEvent, AnimGraphDef, AnimGraphRuntime, AnimParams, AnimState, BlendEntry, Condition,
+    FiredEvent, ParamValue, StateSource, Transition,
 };
 pub use assets::{AssetHandle, AssetId, AssetManager, MaterialAsset, MeshAsset, TextureAsset};
 pub use ecs::{
     AnimGraphController, Animator, Camera3D, Children, ColliderComponent,
     DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent, ParticleEmitter,
-    PointLightComponent, RigidBodyComponent, SpotLightComponent, Transform3D, TriggerVolume,
+    PointLightComponent, RigidBodyComponent, SpotLightComponent, Tag, Transform3D, TriggerVolume,
     physics_sync_system,
 };
 pub use engine::EngineConfig;

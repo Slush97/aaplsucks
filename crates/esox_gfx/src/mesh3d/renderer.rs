@@ -43,6 +43,8 @@ struct Uniforms {
     viewport: [f32; 4],
     /// Time: [elapsed_seconds, delta_seconds, 0, 0].
     time: [f32; 4],
+    /// Camera forward direction (xyz), w unused.
+    camera_forward: [f32; 4],
 }
 
 // ── Draw command ──
@@ -293,6 +295,17 @@ pub struct Renderer3D {
     #[allow(dead_code)]
     fallback_shadow_depth_texture: wgpu::Texture,
 
+    // Point/spot light shadows.
+    point_shadow_pass: Option<super::shadow::PointShadowPass>,
+    spot_shadow_pass: Option<super::shadow::SpotShadowPass>,
+    omni_shadow_uniform_buffer: wgpu::Buffer,
+    fallback_point_shadow_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    fallback_point_shadow_texture: wgpu::Texture,
+    fallback_spot_shadow_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    fallback_spot_shadow_texture: wgpu::Texture,
+
     // SSAO.
     ssao_pass: Option<SsaoPass>,
     fallback_ssao_view: wgpu::TextureView,
@@ -369,6 +382,41 @@ impl Renderer3D {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                        count: None,
+                    },
+                    // binding 4: omni shadow uniforms (point + spot shadow VP matrices)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(
+                                size_of::<super::shadow::OmniShadowUniforms>() as u64,
+                            ),
+                        },
+                        count: None,
+                    },
+                    // binding 5: point light shadow depth texture array (24 layers)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // binding 6: spot light shadow depth texture array (4 layers)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -577,6 +625,57 @@ impl Renderer3D {
                 ..Default::default()
             });
 
+        // Fallback 1x1 depth texture arrays for point/spot shadows when disabled.
+        let fallback_point_shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_fallback_point_shadow_depth"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: (super::shadow::MAX_SHADOW_POINT_LIGHTS * 6) as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fallback_point_shadow_view =
+            fallback_point_shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("esox_3d_fallback_point_shadow_depth_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+
+        let fallback_spot_shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_fallback_spot_shadow_depth"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: super::shadow::MAX_SHADOW_SPOT_LIGHTS as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fallback_spot_shadow_view =
+            fallback_spot_shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("esox_3d_fallback_spot_shadow_depth_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+
+        // Omni shadow uniform buffer.
+        let omni_shadow_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("esox_3d_omni_shadow_uniforms"),
+            size: size_of::<super::shadow::OmniShadowUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Fallback 1x1 R8Unorm white texture for when SSAO is disabled (AO = 1.0).
         let fallback_ssao_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("esox_3d_fallback_ssao"),
@@ -646,6 +745,18 @@ impl Renderer3D {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&comparison_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: omni_shadow_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&fallback_point_shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&fallback_spot_shadow_view),
                 },
             ],
         });
@@ -855,6 +966,13 @@ impl Renderer3D {
             comparison_sampler,
             fallback_shadow_depth_view,
             fallback_shadow_depth_texture,
+            point_shadow_pass: None,
+            spot_shadow_pass: None,
+            omni_shadow_uniform_buffer,
+            fallback_point_shadow_view,
+            fallback_point_shadow_texture,
+            fallback_spot_shadow_view,
+            fallback_spot_shadow_texture,
             ssao_pass: None,
             fallback_ssao_view,
             fallback_ssao_texture,
@@ -1608,15 +1726,25 @@ impl Renderer3D {
         }
     }
 
-    /// Enable cascaded shadow maps.
-    pub fn enable_shadows(&mut self, gpu: &GpuContext) {
-        if self.shadow_pass.is_some() {
-            return;
-        }
-        let shadow_pass = ShadowPass::new(&gpu.device);
+    /// Rebuild the scene bind group (Group 0) — called when shadow passes change.
+    fn rebuild_scene_bind_group(&mut self, device: &wgpu::Device) {
+        let csm_view = self
+            .shadow_pass
+            .as_ref()
+            .map(|sp| &sp.depth_view)
+            .unwrap_or(&self.fallback_shadow_depth_view);
+        let point_view = self
+            .point_shadow_pass
+            .as_ref()
+            .map(|p| &p.depth_view)
+            .unwrap_or(&self.fallback_point_shadow_view);
+        let spot_view = self
+            .spot_shadow_pass
+            .as_ref()
+            .map(|s| &s.depth_view)
+            .unwrap_or(&self.fallback_spot_shadow_view);
 
-        // Rebuild scene bind group with real shadow depth texture.
-        self.scene_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("esox_3d_scene_bg"),
             layout: &self.scene_bind_group_layout,
             entries: &[
@@ -1630,16 +1758,63 @@ impl Renderer3D {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&shadow_pass.depth_view),
+                    resource: wgpu::BindingResource::TextureView(csm_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.comparison_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.omni_shadow_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(point_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(spot_view),
+                },
             ],
         });
+    }
 
-        self.shadow_pass = Some(shadow_pass);
+    /// Enable cascaded shadow maps.
+    pub fn enable_shadows(&mut self, gpu: &GpuContext) {
+        if self.shadow_pass.is_some() {
+            return;
+        }
+        self.shadow_pass = Some(ShadowPass::new(&gpu.device));
+        self.rebuild_scene_bind_group(&gpu.device);
+    }
+
+    /// Enable point light shadow maps (cube map atlas, up to 4 lights).
+    pub fn enable_point_shadows(&mut self, gpu: &GpuContext) {
+        if self.point_shadow_pass.is_some() {
+            return;
+        }
+        // The shadow pass pipeline shares the same bind group layout as the CSM pass.
+        // We need to get the layout from either the existing shadow pass or create one.
+        let shadow_pass = self
+            .shadow_pass
+            .get_or_insert_with(|| ShadowPass::new(&gpu.device));
+        let layout = &shadow_pass.bind_group_layout;
+        self.point_shadow_pass = Some(super::shadow::PointShadowPass::new(&gpu.device, layout));
+        self.rebuild_scene_bind_group(&gpu.device);
+    }
+
+    /// Enable spot light shadow maps (up to 4 lights).
+    pub fn enable_spot_shadows(&mut self, gpu: &GpuContext) {
+        if self.spot_shadow_pass.is_some() {
+            return;
+        }
+        let shadow_pass = self
+            .shadow_pass
+            .get_or_insert_with(|| ShadowPass::new(&gpu.device));
+        let layout = &shadow_pass.bind_group_layout;
+        self.spot_shadow_pass = Some(super::shadow::SpotShadowPass::new(&gpu.device, layout));
+        self.rebuild_scene_bind_group(&gpu.device);
     }
 
     /// Set the shadow configuration.
@@ -1768,6 +1943,15 @@ impl Renderer3D {
         if let Some(sdf) = &mut self.sdf_pass {
             sdf.set_enabled(handle, enabled);
         }
+    }
+
+    /// Get the local-space AABB for a mesh handle (mega-buffer meshes only).
+    pub fn mesh_local_aabb(&self, handle: MeshHandle) -> Option<Aabb> {
+        let idx = handle.0 as usize;
+        if (handle.0 & SKINNED_MESH_BIT) != 0 || idx >= self.mesh_regions.len() {
+            return None;
+        }
+        Some(self.mesh_regions[idx].aabb)
     }
 
     /// Queue a draw command with a specific material.
@@ -1968,6 +2152,10 @@ impl Renderer3D {
                 1.0 / viewport_height.max(1) as f32,
             ],
             time: [elapsed, delta, 0.0, 0.0],
+            camera_forward: {
+                let fwd = camera.forward();
+                [fwd.x, fwd.y, fwd.z, 0.0]
+            },
         };
         gpu.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -2097,8 +2285,11 @@ impl Renderer3D {
             });
 
         // ── Shadow pass (before scene) ──
+        // Skip shadow rendering when directional light intensity is negligible —
+        // CSM shadows only apply to the directional light, so there's nothing to shadow.
+        let dir_intensity = self.light_env.directional.intensity;
         if let Some(shadow_pass) = &self.shadow_pass {
-            if shadow_pass.config.enabled {
+            if shadow_pass.config.enabled && dir_intensity > 0.001 {
                 let aspect = viewport_width as f32 / viewport_height.max(1) as f32;
                 let shadow_uniforms = shadow_pass.update_cascades(
                     &gpu.queue,
@@ -2167,6 +2358,141 @@ impl Renderer3D {
                 &self.shadow_uniform_buffer,
                 0,
                 bytemuck::bytes_of(&zeroed),
+            );
+        }
+
+        // ── Point / Spot light shadow passes ──
+        {
+            use super::shadow::{
+                OmniShadowUniforms, MAX_SHADOW_POINT_LIGHTS, MAX_SHADOW_SPOT_LIGHTS,
+                point_light_face_matrices, spot_light_vp,
+            };
+
+            let (point_shadow_count, spot_shadow_count) = self.light_env.shadow_casting_counts();
+            let mut omni = OmniShadowUniforms {
+                point_light_vp: [[[0.0; 4]; 4]; 24],
+                spot_light_vp: [[[0.0; 4]; 4]; MAX_SHADOW_SPOT_LIGHTS],
+                omni_config: [0.0; 4],
+                omni_config2: [0.0; 4],
+            };
+
+            let shadow_cfg = self
+                .shadow_pass
+                .as_ref()
+                .map(|sp| sp.config)
+                .unwrap_or_default();
+
+            // Point light shadows.
+            if let Some(point_pass) = &self.point_shadow_pass {
+                // Sort shadow-casters first (to_uniforms already did this).
+                let sorted_points: Vec<_> = self.light_env.point_lights.iter()
+                    .filter(|pl| pl.cast_shadows)
+                    .take(MAX_SHADOW_POINT_LIGHTS)
+                    .collect();
+
+                for (li, pl) in sorted_points.iter().enumerate() {
+                    let pos = glam::Vec3::from(pl.position);
+                    let face_mats = point_light_face_matrices(pos, pl.range);
+
+                    for (fi, mat) in face_mats.iter().enumerate() {
+                        let idx = li * 6 + fi;
+                        omni.point_light_vp[idx] = mat.to_cols_array_2d();
+                        point_pass.update_face(&gpu.queue, idx, mat);
+                    }
+
+                    // Render 6 depth-only passes for this point light.
+                    let pipeline = &self.shadow_pass.as_ref().unwrap().pipeline;
+                    for fi in 0..6 {
+                        let face_idx = li * 6 + fi;
+                        let mut pass = point_pass.begin_face_pass(&mut encoder, face_idx, pipeline);
+
+                        pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.mega_buffer.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+                        for &oi_idx in &opaque_cmds {
+                            let cmd = &self.draw_cmds[oi_idx];
+                            if (cmd.mesh.0 & SKINNED_MESH_BIT) != 0 {
+                                continue;
+                            }
+                            let mesh_idx = cmd.mesh.0 as usize;
+                            if mesh_idx >= self.mesh_regions.len() {
+                                continue;
+                            }
+                            let r = &self.mesh_regions[mesh_idx];
+                            pass.draw_indexed(
+                                r.index_offset..r.index_offset + r.index_count,
+                                r.vertex_offset as i32,
+                                cmd.instance_offset..cmd.instance_offset + cmd.instance_count,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Spot light shadows.
+            if let Some(spot_pass) = &self.spot_shadow_pass {
+                let sorted_spots: Vec<_> = self.light_env.spot_lights.iter()
+                    .filter(|sl| sl.cast_shadows)
+                    .take(MAX_SHADOW_SPOT_LIGHTS)
+                    .collect();
+
+                for (li, sl) in sorted_spots.iter().enumerate() {
+                    let pos = glam::Vec3::from(sl.position);
+                    let dir = glam::Vec3::from(sl.direction);
+                    let vp = spot_light_vp(pos, dir, sl.outer_cone_angle, sl.range);
+                    omni.spot_light_vp[li] = vp.to_cols_array_2d();
+                    spot_pass.update_layer(&gpu.queue, li, &vp);
+
+                    let pipeline = &self.shadow_pass.as_ref().unwrap().pipeline;
+                    let mut pass = spot_pass.begin_layer_pass(&mut encoder, li, pipeline);
+
+                    pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.mega_buffer.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+                    for &oi_idx in &opaque_cmds {
+                        let cmd = &self.draw_cmds[oi_idx];
+                        if (cmd.mesh.0 & SKINNED_MESH_BIT) != 0 {
+                            continue;
+                        }
+                        let mesh_idx = cmd.mesh.0 as usize;
+                        if mesh_idx >= self.mesh_regions.len() {
+                            continue;
+                        }
+                        let r = &self.mesh_regions[mesh_idx];
+                        pass.draw_indexed(
+                            r.index_offset..r.index_offset + r.index_count,
+                            r.vertex_offset as i32,
+                            cmd.instance_offset..cmd.instance_offset + cmd.instance_count,
+                        );
+                    }
+                }
+            }
+
+            omni.omni_config = [
+                point_shadow_count as f32,
+                spot_shadow_count as f32,
+                shadow_cfg.point_depth_bias,
+                shadow_cfg.point_normal_bias,
+            ];
+            omni.omni_config2 = [
+                shadow_cfg.spot_depth_bias,
+                shadow_cfg.spot_normal_bias,
+                0.0,
+                0.0,
+            ];
+
+            gpu.queue.write_buffer(
+                &self.omni_shadow_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&omni),
             );
         }
 
@@ -2863,6 +3189,7 @@ struct Uniforms {
     camera_position: vec4<f32>,
     viewport: vec4<f32>,
     time: vec4<f32>,
+    camera_forward: vec4<f32>,
 }
 
 struct ShadowUniforms {
@@ -2900,11 +3227,21 @@ struct MaterialUniforms {
     extra: vec4<f32>,
 }
 
+struct OmniShadowUniforms {
+    point_light_vp: array<mat4x4<f32>, 24>,
+    spot_light_vp: array<mat4x4<f32>, 4>,
+    omni_config: vec4<f32>,
+    omni_config2: vec4<f32>,
+}
+
 // Group 0: Scene uniforms + shadow.
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<uniform> shadow: ShadowUniforms;
 @group(0) @binding(2) var shadow_depth: texture_depth_2d_array;
 @group(0) @binding(3) var shadow_sampler: sampler_comparison;
+@group(0) @binding(4) var<uniform> omni_shadow: OmniShadowUniforms;
+@group(0) @binding(5) var point_shadow_depth: texture_depth_2d_array;
+@group(0) @binding(6) var spot_shadow_depth: texture_depth_2d_array;
 
 // Group 1: Lights + IBL.
 @group(1) @binding(0) var<uniform> lights: LightUniforms;
@@ -2969,7 +3306,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.color = in.color * in.inst_color;
     out.params = in.inst_params;
-    out.view_depth = length(world_pos.xyz - uniforms.camera_position.xyz);
+    out.view_depth = dot(world_pos.xyz - uniforms.camera_position.xyz, uniforms.camera_forward.xyz);
 
     // Transform tangent to world space (w = bitangent handedness, preserved).
     let wt = normalize(normal_mat * in.tangent.xyz);
@@ -3058,6 +3395,188 @@ fn shadow_factor(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -> f3
 // Spot light attenuation.
 fn spot_attenuation(cos_theta: f32, cos_inner: f32, cos_outer: f32) -> f32 {
     return smoothstep(cos_outer, cos_inner, cos_theta);
+}
+
+// Determine which cube face a direction vector points at and return (u, v, face_index).
+fn cube_face_uv(dir: vec3<f32>) -> vec3<f32> {
+    let abs_dir = abs(dir);
+    var face: f32;
+    var u: f32;
+    var v: f32;
+
+    if abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z {
+        if dir.x > 0.0 {
+            face = 0.0;
+            u = -dir.z / abs_dir.x * 0.5 + 0.5;
+            v = -dir.y / abs_dir.x * 0.5 + 0.5;
+        } else {
+            face = 1.0;
+            u = dir.z / abs_dir.x * 0.5 + 0.5;
+            v = -dir.y / abs_dir.x * 0.5 + 0.5;
+        }
+    } else if abs_dir.y >= abs_dir.x && abs_dir.y >= abs_dir.z {
+        if dir.y > 0.0 {
+            face = 2.0;
+            u = dir.x / abs_dir.y * 0.5 + 0.5;
+            v = dir.z / abs_dir.y * 0.5 + 0.5;
+        } else {
+            face = 3.0;
+            u = dir.x / abs_dir.y * 0.5 + 0.5;
+            v = -dir.z / abs_dir.y * 0.5 + 0.5;
+        }
+    } else {
+        if dir.z > 0.0 {
+            face = 4.0;
+            u = dir.x / abs_dir.z * 0.5 + 0.5;
+            v = -dir.y / abs_dir.z * 0.5 + 0.5;
+        } else {
+            face = 5.0;
+            u = -dir.x / abs_dir.z * 0.5 + 0.5;
+            v = -dir.y / abs_dir.z * 0.5 + 0.5;
+        }
+    }
+
+    return vec3<f32>(u, v, face);
+}
+
+// Sample point shadow for a single cubemap face. Returns 0.0-1.0.
+fn sample_point_shadow_face(light_idx: i32, face: i32, biased_pos: vec3<f32>) -> f32 {
+    let layer = light_idx * 6 + face;
+
+    let light_pos_h = omni_shadow.point_light_vp[layer] * vec4<f32>(biased_pos, 1.0);
+    var proj = light_pos_h.xyz / light_pos_h.w;
+
+    let uv = vec2<f32>(proj.x * 0.5 + 0.5, 1.0 - (proj.y * 0.5 + 0.5));
+
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z < 0.0 || proj.z > 1.0 {
+        return 1.0;
+    }
+
+    let depth_bias = omni_shadow.omni_config.z;
+    let compare_depth = proj.z - depth_bias;
+
+    let tex_size = vec2<f32>(textureDimensions(point_shadow_depth));
+    let texel_size = 1.0 / tex_size;
+    var total = 0.0;
+    for (var dx = 0; dx <= 1; dx = dx + 1) {
+        for (var dy = 0; dy <= 1; dy = dy + 1) {
+            let offset = (vec2<f32>(f32(dx), f32(dy)) - 0.5) * texel_size;
+            total += textureSampleCompareLevel(
+                point_shadow_depth,
+                shadow_sampler,
+                uv + offset,
+                layer,
+                compare_depth,
+            );
+        }
+    }
+
+    return total / 4.0;
+}
+
+fn cube_face_index(dir: vec3<f32>) -> i32 {
+    let a = abs(dir);
+    if a.x >= a.y && a.x >= a.z {
+        return select(1, 0, dir.x > 0.0);
+    } else if a.y >= a.x && a.y >= a.z {
+        return select(3, 2, dir.y > 0.0);
+    } else {
+        return select(5, 4, dir.z > 0.0);
+    }
+}
+
+fn cube_secondary_face(dir: vec3<f32>) -> i32 {
+    let a = abs(dir);
+    var second_axis: i32;
+    if a.x >= a.y && a.x >= a.z {
+        second_axis = select(2, 1, a.z > a.y);
+    } else if a.y >= a.x && a.y >= a.z {
+        second_axis = select(0, 2, a.z > a.x);
+    } else {
+        second_axis = select(0, 1, a.y > a.x);
+    }
+    if second_axis == 0 {
+        return select(1, 0, dir.x > 0.0);
+    } else if second_axis == 1 {
+        return select(3, 2, dir.y > 0.0);
+    } else {
+        return select(5, 4, dir.z > 0.0);
+    }
+}
+
+fn point_shadow_factor(light_idx: i32, world_pos: vec3<f32>, light_pos: vec3<f32>, light_range: f32, normal: vec3<f32>) -> f32 {
+    let point_shadow_count = i32(omni_shadow.omni_config.x);
+    if light_idx >= point_shadow_count {
+        return 1.0;
+    }
+
+    // Normal bias: offset along surface normal to prevent self-shadowing
+    // at grazing angles (e.g. ground seen from side cubemap faces).
+    let to_light = normalize(light_pos - world_pos);
+    let n_dot_l = max(dot(normal, to_light), 0.0);
+    let normal_bias = omni_shadow.omni_config.w;
+    let bias_scale = max(1.0 - n_dot_l, 0.1);
+    let biased_pos = world_pos + normal * normal_bias * bias_scale;
+
+    let to_frag = biased_pos - light_pos;
+    let a = abs(to_frag);
+
+    let primary = cube_face_index(to_frag);
+    let sf_primary = sample_point_shadow_face(light_idx, primary, biased_pos);
+
+    // Blend between adjacent cubemap faces near boundaries to hide seams.
+    let max_comp = max(max(a.x, a.y), a.z);
+    let min_of_xy = min(a.x, a.y);
+    let max_of_xy = max(a.x, a.y);
+    let mid_comp = max(min(max_of_xy, a.z), min_of_xy);
+    let edge_ratio = (max_comp - mid_comp) / max(max_comp, 0.001);
+
+    if edge_ratio > 0.15 {
+        return sf_primary;
+    }
+
+    let secondary = cube_secondary_face(to_frag);
+    let sf_secondary = sample_point_shadow_face(light_idx, secondary, biased_pos);
+
+    let blend = smoothstep(0.0, 0.15, edge_ratio);
+    return mix(sf_secondary, sf_primary, blend);
+}
+
+fn spot_shadow_factor(light_idx: i32, world_pos: vec3<f32>) -> f32 {
+    let spot_shadow_count = i32(omni_shadow.omni_config.y);
+    if light_idx >= spot_shadow_count {
+        return 1.0;
+    }
+
+    let light_pos_h = omni_shadow.spot_light_vp[light_idx] * vec4<f32>(world_pos, 1.0);
+    var proj = light_pos_h.xyz / light_pos_h.w;
+
+    let uv = vec2<f32>(proj.x * 0.5 + 0.5, 1.0 - (proj.y * 0.5 + 0.5));
+
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z < 0.0 || proj.z > 1.0 {
+        return 1.0;
+    }
+
+    let depth_bias = omni_shadow.omni_config2.x;
+    let compare_depth = proj.z - depth_bias;
+
+    let tex_size = vec2<f32>(textureDimensions(spot_shadow_depth));
+    let texel_size = 1.0 / tex_size;
+    var total = 0.0;
+    for (var dx = -1; dx <= 1; dx = dx + 1) {
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            let offset = vec2<f32>(f32(dx), f32(dy)) * texel_size;
+            total += textureSampleCompareLevel(
+                spot_shadow_depth,
+                shadow_sampler,
+                uv + offset,
+                light_idx,
+                compare_depth,
+            );
+        }
+    }
+
+    return total / 9.0;
 }
 
 // Helper: apply normal map using TBN matrix.
@@ -3150,9 +3669,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let dist = length(to_light);
         if dist < pl_range {
             let l = to_light / max(dist, 0.001);
-            let atten = pl_intensity / max(dist * dist, 0.01);
+            let dist_ratio = dist / pl_range;
+            let range_atten = saturate(1.0 - dist_ratio * dist_ratio);
+            let atten = pl_intensity * range_atten * range_atten / max(dist * dist, 0.01);
             let pl_ndotl = max(dot(n, l), 0.0);
-            diffuse = diffuse + pl_color * atten * pl_ndotl;
+            let psf = point_shadow_factor(i, in.world_position, pl_pos, pl_range, n);
+            diffuse = diffuse + pl_color * atten * pl_ndotl * psf;
         }
     }
 
@@ -3174,9 +3696,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let l = to_light / max(dist, 0.001);
             let cos_theta = dot(normalize(-sl_dir), l);
             let spot_atten = spot_attenuation(cos_theta, sl_cos_inner, sl_cos_outer);
-            let dist_atten = sl_intensity / max(dist * dist, 0.01);
+            let dist_ratio = dist / sl_range;
+            let range_atten = saturate(1.0 - dist_ratio * dist_ratio);
+            let dist_atten = sl_intensity * range_atten * range_atten / max(dist * dist, 0.01);
             let sl_ndotl = max(dot(n, l), 0.0);
-            diffuse = diffuse + sl_color * dist_atten * spot_atten * sl_ndotl;
+            let ssf = spot_shadow_factor(i, in.world_position);
+            diffuse = diffuse + sl_color * dist_atten * spot_atten * sl_ndotl * ssf;
         }
     }
 
@@ -3300,8 +3825,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let dist = length(to_light);
         if dist < pl_range {
             let l = to_light / max(dist, 0.001);
-            let atten = pl_intensity / max(dist * dist, 0.01);
-            lo = lo + pl_color * atten * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
+            let dist_ratio = dist / pl_range;
+            let range_atten = saturate(1.0 - dist_ratio * dist_ratio);
+            let atten = pl_intensity * range_atten * range_atten / max(dist * dist, 0.01);
+            let psf = point_shadow_factor(i, in.world_position, pl_pos, pl_range, n);
+            lo = lo + pl_color * atten * psf * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
         }
     }
 
@@ -3323,8 +3851,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let l = to_light / max(dist, 0.001);
             let cos_theta = dot(normalize(-sl_dir), l);
             let s_atten = spot_attenuation(cos_theta, sl_cos_inner, sl_cos_outer);
-            let d_atten = sl_intensity / max(dist * dist, 0.01);
-            lo = lo + sl_color * d_atten * s_atten * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
+            let dist_ratio = dist / sl_range;
+            let range_atten = saturate(1.0 - dist_ratio * dist_ratio);
+            let d_atten = sl_intensity * range_atten * range_atten / max(dist * dist, 0.01);
+            let ssf = spot_shadow_factor(i, in.world_position);
+            lo = lo + sl_color * d_atten * s_atten * ssf * cook_torrance_brdf(n, v, l, albedo, metallic, roughness);
         }
     }
 
@@ -3394,9 +3925,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bloom = textureSample(bloom_tex, linear_samp, in.uv).rgb;
     color = color + bloom * params.bloom_intensity;
 
-    // Apply SSAO.
+    // Apply SSAO (clamped to avoid crushing dark areas to pure black —
+    // full-scene AO multiplication is an approximation; a min floor keeps
+    // ambient-only surfaces visible).
     if params.ssao_enabled > 0.5 {
-        let ao = textureSample(ssao_tex, linear_samp, in.uv).r;
+        let ao = max(textureSample(ssao_tex, linear_samp, in.uv).r, 0.3);
         color = color * ao;
     }
 

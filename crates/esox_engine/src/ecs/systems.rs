@@ -39,8 +39,8 @@ pub fn render_extraction_system(world: &World, renderer: &mut Renderer3D) {
 /// Collect light components and build a LightEnvironment for the renderer.
 pub fn light_collection_system(world: &World) -> LightEnvironment {
     let mut env = LightEnvironment {
-        ambient_color: [0.1, 0.1, 0.1],
-        ambient_intensity: 1.0,
+        ambient_color: [0.08, 0.08, 0.1],
+        ambient_intensity: 0.25,
         directional: DirectionalLight {
             direction: [0.0, -1.0, 0.0],
             color: [0.0; 3],
@@ -76,6 +76,7 @@ pub fn light_collection_system(world: &World) -> LightEnvironment {
             color: pl.color,
             intensity: pl.intensity,
             range: pl.range,
+            cast_shadows: pl.cast_shadows,
         });
     }
 
@@ -94,6 +95,7 @@ pub fn light_collection_system(world: &World) -> LightEnvironment {
             range: sl.range,
             inner_cone_angle: sl.inner_cone_angle,
             outer_cone_angle: sl.outer_cone_angle,
+            cast_shadows: sl.cast_shadows,
         });
     }
 
@@ -234,6 +236,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0],
                 intensity: 5.0,
                 range: 10.0,
+                cast_shadows: false,
             },
         ));
 

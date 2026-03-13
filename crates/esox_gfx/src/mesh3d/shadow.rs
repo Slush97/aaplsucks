@@ -21,7 +21,7 @@ const SHADOW_MAP_SIZE: u32 = 2048;
 
 // ── Shadow vertex shader ──
 
-const SHADOW_VERTEX_SHADER: &str = r#"
+pub(crate) const SHADOW_VERTEX_SHADER: &str = r#"
 struct ShadowUniforms {
     light_vp: mat4x4<f32>,
 }
@@ -394,6 +394,56 @@ impl ShadowPass {
             cascade_bind_groups,
             config,
         }
+    }
+
+    /// Rebuild the shadow pipeline with new shader source.
+    #[cfg(feature = "hot-reload")]
+    pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, src: &str) {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_vertex_shader"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow_pipeline_layout"),
+            bind_group_layouts: &[&self.bind_group_layout],
+            immediate_size: 0,
+        });
+
+        self.pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[vertex_buffer_layout(), instance_buffer_layout()],
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Front),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 4,
+                    slope_scale: 3.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
     }
 
     /// Compute cascade splits and light-space matrices for this frame, upload

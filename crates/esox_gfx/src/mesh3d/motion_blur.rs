@@ -60,7 +60,7 @@ pub struct BlurParams {
 
 // ── Shaders ──
 
-const VELOCITY_SHADER: &str = r#"
+pub(crate) const VELOCITY_SHADER: &str = r#"
 // Fullscreen triangle + velocity reconstruction from depth.
 
 struct VelocityParams {
@@ -113,7 +113,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-const MOTION_BLUR_SHADER: &str = r#"
+pub(crate) const MOTION_BLUR_SHADER: &str = r#"
 // Fullscreen triangle + directional blur along velocity.
 
 struct BlurParams {
@@ -422,6 +422,25 @@ impl MotionBlurPass {
             width,
             height,
         }
+    }
+
+    /// Rebuild velocity and blur pipelines with new shader sources.
+    #[cfg(feature = "hot-reload")]
+    pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, velocity_src: &str, blur_src: &str) {
+        self.velocity_pipeline = create_fullscreen_pipeline(
+            device,
+            &self.velocity_bind_group_layout,
+            velocity_src,
+            "motion_blur_velocity",
+            wgpu::TextureFormat::Rg16Float,
+        );
+        self.blur_pipeline = create_fullscreen_pipeline(
+            device,
+            &self.blur_bind_group_layout,
+            blur_src,
+            "motion_blur_blur",
+            wgpu::TextureFormat::Rgba16Float,
+        );
     }
 
     /// Recreate velocity and blur textures after a window resize.

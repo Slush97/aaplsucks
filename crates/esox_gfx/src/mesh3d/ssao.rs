@@ -398,6 +398,45 @@ impl SsaoPass {
         }
     }
 
+    /// Rebuild SSAO and blur pipelines with new shader sources.
+    #[cfg(feature = "hot-reload")]
+    pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, ssao_src: &str, blur_src: &str) {
+        let ssao_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("esox_ssao_shader"),
+            source: wgpu::ShaderSource::Wgsl(ssao_src.into()),
+        });
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("esox_ssao_blur_shader"),
+            source: wgpu::ShaderSource::Wgsl(blur_src.into()),
+        });
+
+        let ssao_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("esox_ssao_pipeline_layout"),
+            bind_group_layouts: &[&self.ssao_bind_group_layout],
+            immediate_size: 0,
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("esox_ssao_blur_pipeline_layout"),
+            bind_group_layouts: &[&self.blur_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        self.ssao_pipeline = create_fullscreen_pipeline(
+            device,
+            &ssao_pipeline_layout,
+            &ssao_shader,
+            wgpu::TextureFormat::R8Unorm,
+            "esox_ssao_pipeline",
+        );
+        self.blur_pipeline = create_fullscreen_pipeline(
+            device,
+            &blur_pipeline_layout,
+            &blur_shader,
+            wgpu::TextureFormat::R8Unorm,
+            "esox_ssao_blur_pipeline",
+        );
+    }
+
     /// Recreate textures and bind groups for a new viewport size.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         let w = width.max(1);
@@ -813,7 +852,7 @@ fn generate_noise() -> Vec<u8> {
 ///
 /// Fullscreen triangle vertex shader + hemisphere kernel sampling with
 /// depth-reconstructed normals.
-const SSAO_SHADER: &str = r#"
+pub(crate) const SSAO_SHADER: &str = r#"
 // ── Bindings ──
 
 @group(0) @binding(0) var t_depth: texture_depth_2d;
@@ -929,7 +968,7 @@ fn fs_main(in: VsOutput) -> @location(0) f32 {
 "#;
 
 /// SSAO blur shader (WGSL) — 4x4 box blur on the R8 occlusion texture.
-const SSAO_BLUR_SHADER: &str = r#"
+pub(crate) const SSAO_BLUR_SHADER: &str = r#"
 // ── Bindings ──
 
 @group(0) @binding(0) var t_occlusion: texture_2d<f32>;

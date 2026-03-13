@@ -8,7 +8,7 @@ license.workspace = true
 default = []
 audio = ["dep:kira"]
 gamepad = ["dep:gilrs"]
-hot-reload = ["dep:notify"]
+hot-reload = ["dep:notify", "esox_gfx/hot-reload"]
 ui = ["dep:esox_ui", "dep:esox_font"]
 
 [dependencies]

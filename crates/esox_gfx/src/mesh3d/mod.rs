@@ -21,6 +21,7 @@
 pub mod bounds;
 pub mod bvh;
 pub mod camera;
+pub mod depth_resolve;
 pub mod gltf_loader;
 pub mod ibl;
 pub mod instance;
@@ -31,6 +32,7 @@ pub mod mesh;
 pub mod motion_blur;
 pub mod renderer;
 pub mod scene;
+pub mod shader_library;
 pub mod sdf_pass;
 pub mod shadow;
 pub mod ssao;

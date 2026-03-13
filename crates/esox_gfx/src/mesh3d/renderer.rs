@@ -1,6 +1,7 @@
 //! 3D mesh renderer — pipeline, depth buffer, frame encoding.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::bloom::BloomPass;
 use crate::pipeline::GpuContext;
@@ -17,8 +18,12 @@ use super::material::{
     PipelineKey, create_pipeline, create_pipeline_with_shader,
 };
 use super::mesh::{MegaBuffer, Mesh, MeshData, MeshHandle, MeshRegion};
+use super::depth_resolve::DepthResolvePass;
 use super::motion_blur::MotionBlurPass;
 use super::sdf_pass::{SdfEffectDescriptor, SdfEffectHandle, SdfPass};
+#[cfg(feature = "hot-reload")]
+use super::shader_library::ShaderSlot;
+use super::shader_library::ShaderLibrary;
 use super::shadow::{ShadowConfig, ShadowPass, ShadowUniforms};
 use super::skinning::{SkinningPipeline, SkinnedMesh};
 use super::ssao::SsaoPass;
@@ -211,6 +216,8 @@ pub struct Renderer3D {
     pipeline_cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     shader_modules: HashMap<MaterialType, wgpu::ShaderModule>,
     surface_format: wgpu::TextureFormat,
+    #[cfg_attr(not(feature = "hot-reload"), allow(dead_code))]
+    shader_library: ShaderLibrary,
 
     // Materials.
     materials: Vec<Material>,
@@ -289,6 +296,9 @@ pub struct Renderer3D {
     // IBL (image-based lighting).
     ibl_state: IblState,
     ibl_sampler: wgpu::Sampler,
+
+    // MSAA depth resolve.
+    depth_resolve_pass: Option<DepthResolvePass>,
 
     // Motion blur.
     motion_blur_pass: Option<MotionBlurPass>,
@@ -661,9 +671,12 @@ impl Renderer3D {
             ],
         });
 
-        // ── Shader modules ──
+        // ── Shader library + modules ──
 
-        let shader_modules = compile_shader_modules(device);
+        let shader_dir = option_env!("CARGO_MANIFEST_DIR")
+            .map(|d| PathBuf::from(d).join("shaders"));
+        let shader_library = ShaderLibrary::new(shader_dir);
+        let shader_modules = compile_shader_modules(device, &shader_library);
 
         // ── Pipeline cache — eagerly create 3 opaque pipelines ──
 
@@ -768,6 +781,13 @@ impl Renderer3D {
             (None, v)
         };
 
+        // ── MSAA depth resolve pass ──
+        let depth_resolve_pass = if gpu.sample_count > 1 {
+            Some(DepthResolvePass::new(device, &depth_view, gpu.sample_count))
+        } else {
+            None
+        };
+
         // ── Mega-buffer ──
 
         let mega_buffer = MegaBuffer::new(device);
@@ -790,6 +810,7 @@ impl Renderer3D {
             pipeline_cache,
             shader_modules,
             surface_format: format,
+            shader_library,
             materials,
             textures: Vec::new(),
             fallback_albedo,
@@ -829,6 +850,7 @@ impl Renderer3D {
             fallback_ssao_texture,
             ibl_state,
             ibl_sampler,
+            depth_resolve_pass,
             motion_blur_pass: None,
             prev_view_projection: None,
             sdf_pass: None,
@@ -1164,14 +1186,6 @@ impl Renderer3D {
         if self.postprocess.is_some() {
             return;
         }
-        if self.sample_count > 1 {
-            tracing::warn!(
-                "MSAA ({}x) is active but no depth resolve pass exists — \
-                 depth-dependent post-processing (SSAO, motion blur) will \
-                 read a blank depth buffer",
-                self.sample_count,
-            );
-        }
         let device = &*gpu.device;
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
@@ -1376,6 +1390,186 @@ impl Renderer3D {
         self.rebuild_pipeline_cache(device);
     }
 
+    /// Poll for shader file changes and rebuild affected pipelines.
+    #[cfg(feature = "hot-reload")]
+    pub fn poll_shader_reload(&mut self, gpu: &GpuContext) {
+        let changed = self.shader_library.poll_changes();
+        if changed.is_empty() {
+            return;
+        }
+
+        let device = &*gpu.device;
+
+        // Determine what needs rebuilding.
+        let mut rebuild_materials = false;
+        let mut rebuild_composite = false;
+        let mut rebuild_shadow = false;
+        let mut rebuild_ssao = false;
+        let mut rebuild_motion_blur = false;
+        let mut rebuild_skinning = false;
+        let mut rebuild_depth_resolve = false;
+        let mut rebuild_bloom = false;
+
+        for slot in &changed {
+            match slot {
+                ShaderSlot::Preamble | ShaderSlot::FsUnlit | ShaderSlot::FsLit | ShaderSlot::FsPbr => {
+                    rebuild_materials = true;
+                }
+                ShaderSlot::Composite => rebuild_composite = true,
+                ShaderSlot::ShadowVertex => rebuild_shadow = true,
+                ShaderSlot::Ssao | ShaderSlot::SsaoBlur => rebuild_ssao = true,
+                ShaderSlot::Velocity | ShaderSlot::MotionBlur => rebuild_motion_blur = true,
+                ShaderSlot::Skinning => rebuild_skinning = true,
+                ShaderSlot::DepthResolve => rebuild_depth_resolve = true,
+                ShaderSlot::BloomDownsample | ShaderSlot::BloomUpsample => rebuild_bloom = true,
+            }
+        }
+
+        if rebuild_materials {
+            self.shader_modules = compile_shader_modules(device, &self.shader_library);
+            self.rebuild_pipeline_cache(device);
+            tracing::info!("Rebuilt material shader pipelines");
+        }
+
+        if rebuild_composite {
+            if let Some(pp) = &mut self.postprocess {
+                let src = self.shader_library.get(ShaderSlot::Composite);
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("esox_3d_composite_shader"),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                });
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("esox_3d_composite_pipeline_layout"),
+                    bind_group_layouts: &[&pp.composite_bind_group_layout],
+                    immediate_size: 0,
+                });
+                pp.composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("esox_3d_composite_pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: gpu.config.format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                tracing::info!("Rebuilt composite pipeline");
+            }
+        }
+
+        if rebuild_shadow {
+            if let Some(sp) = &mut self.shadow_pass {
+                let src = self.shader_library.get(ShaderSlot::ShadowVertex);
+                sp.rebuild_pipeline(device, src);
+                tracing::info!("Rebuilt shadow pipeline");
+            }
+        }
+
+        if rebuild_ssao {
+            if let Some(ssao) = &mut self.ssao_pass {
+                let ssao_src = self.shader_library.get(ShaderSlot::Ssao);
+                let blur_src = self.shader_library.get(ShaderSlot::SsaoBlur);
+                ssao.rebuild_pipelines(device, ssao_src, blur_src);
+                tracing::info!("Rebuilt SSAO pipelines");
+            }
+        }
+
+        if rebuild_motion_blur {
+            if let Some(mb) = &mut self.motion_blur_pass {
+                let vel_src = self.shader_library.get(ShaderSlot::Velocity);
+                let blur_src = self.shader_library.get(ShaderSlot::MotionBlur);
+                mb.rebuild_pipelines(device, vel_src, blur_src);
+                tracing::info!("Rebuilt motion blur pipelines");
+            }
+        }
+
+        if rebuild_skinning {
+            if let Some(sp) = &mut self.skinning_pipeline {
+                let src = self.shader_library.get(ShaderSlot::Skinning);
+                sp.rebuild_pipeline(device, src);
+                tracing::info!("Rebuilt skinning pipeline");
+            }
+        }
+
+        if rebuild_depth_resolve {
+            if let Some(resolve) = &mut self.depth_resolve_pass {
+                let src = self.shader_library.get(ShaderSlot::DepthResolve);
+                resolve.rebuild_pipeline(device, src, self.sample_count);
+                tracing::info!("Rebuilt depth resolve pipeline");
+            }
+        }
+
+        if rebuild_bloom {
+            if let Some(pp) = &mut self.postprocess {
+                let down_src = self.shader_library.get(ShaderSlot::BloomDownsample);
+                let up_src = self.shader_library.get(ShaderSlot::BloomUpsample);
+                let bloom_bgl = pp.bloom_pass.bind_group_layout();
+                let bloom_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("esox_3d_bloom_pipeline_layout"),
+                    bind_group_layouts: &[bloom_bgl],
+                    immediate_size: 0,
+                });
+                let create_bloom = |src: &str, label: &str| -> wgpu::RenderPipeline {
+                    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(label),
+                        source: wgpu::ShaderSource::Wgsl(src.into()),
+                    });
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some(label),
+                        layout: Some(&bloom_pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            buffers: &[],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some("fs_main"),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: HDR_FORMAT,
+                                blend: None,
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleList,
+                            cull_mode: None,
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                        multiview_mask: None,
+                        cache: None,
+                    })
+                };
+                pp.bloom_down_pipeline = create_bloom(down_src, "esox_3d_bloom_down");
+                pp.bloom_up_pipeline = create_bloom(up_src, "esox_3d_bloom_up");
+                tracing::info!("Rebuilt bloom pipelines");
+            }
+        }
+    }
+
     /// Rebuild all cached material pipelines for the current `surface_format`.
     fn rebuild_pipeline_cache(&mut self, device: &wgpu::Device) {
         let sample_count = self.sample_count;
@@ -1449,13 +1643,6 @@ impl Renderer3D {
     pub fn enable_ssao(&mut self, gpu: &GpuContext) {
         if self.ssao_pass.is_some() {
             return;
-        }
-        if self.sample_count > 1 {
-            tracing::warn!(
-                "enabling SSAO with MSAA ({}x) — depth buffer is unresolved, \
-                 SSAO will produce incorrect results",
-                self.sample_count,
-            );
         }
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
@@ -1542,13 +1729,6 @@ impl Renderer3D {
     pub fn enable_motion_blur(&mut self, gpu: &GpuContext) {
         if self.motion_blur_pass.is_some() {
             return;
-        }
-        if self.sample_count > 1 {
-            tracing::warn!(
-                "enabling motion blur with MSAA ({}x) — depth buffer is \
-                 unresolved, motion blur will produce incorrect results",
-                self.sample_count,
-            );
         }
         let w = gpu.config.width.max(1);
         let h = gpu.config.height.max(1);
@@ -1697,6 +1877,11 @@ impl Renderer3D {
             }
             self.depth_width = viewport_width;
             self.depth_height = viewport_height;
+
+            // Rebuild depth resolve bind group with new MSAA depth view.
+            if let Some(resolve) = &mut self.depth_resolve_pass {
+                resolve.rebuild_bind_group(&gpu.device, &self.depth_view);
+            }
 
             // Resize post-process passes that depend on viewport dimensions.
             if let Some(ssao) = &mut self.ssao_pass {
@@ -2275,6 +2460,11 @@ impl Renderer3D {
 
         // ── Post-processing chain ──
 
+        // MSAA depth resolve (writes resolved 1x depth for SSAO/motion blur/SDF).
+        if let Some(resolve) = &self.depth_resolve_pass {
+            resolve.encode(&mut encoder, &self.depth_sample_view);
+        }
+
         // SDF effects (render onto the scene color target with LoadOp::Load).
         if let Some(sdf) = &self.sdf_pass {
             let inv_vp = vp.inverse();
@@ -2462,12 +2652,7 @@ fn create_depth_texture(
     height: u32,
     sample_count: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    // MSAA depth textures cannot have TEXTURE_BINDING usage.
-    let usage = if sample_count > 1 {
-        wgpu::TextureUsages::RENDER_ATTACHMENT
-    } else {
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
-    };
+    let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("esox_3d_depth"),
         size: wgpu::Extent3d {
@@ -2552,12 +2737,12 @@ fn create_hdr_texture(
 
 // ── Shader sources ──
 
-fn compile_shader_modules(device: &wgpu::Device) -> HashMap<MaterialType, wgpu::ShaderModule> {
+fn compile_shader_modules(device: &wgpu::Device, library: &ShaderLibrary) -> HashMap<MaterialType, wgpu::ShaderModule> {
     let mut modules = HashMap::new();
 
-    let unlit_src = format!("{SHADER_PREAMBLE}\n{FS_UNLIT}");
-    let lit_src = format!("{SHADER_PREAMBLE}\n{FS_LIT}");
-    let pbr_src = format!("{SHADER_PREAMBLE}\n{FS_PBR}");
+    let unlit_src = library.compose_material_shader(MaterialType::Unlit);
+    let lit_src = library.compose_material_shader(MaterialType::Lit);
+    let pbr_src = library.compose_material_shader(MaterialType::PBR);
 
     modules.insert(
         MaterialType::Unlit,
@@ -2585,7 +2770,7 @@ fn compile_shader_modules(device: &wgpu::Device) -> HashMap<MaterialType, wgpu::
 }
 
 /// Shared shader preamble: struct definitions, bind groups, vertex shader.
-const SHADER_PREAMBLE: &str = r"
+pub(crate) const SHADER_PREAMBLE: &str = r"
 struct Uniforms {
     view_projection: mat4x4<f32>,
     camera_position: vec4<f32>,
@@ -2813,7 +2998,7 @@ fn apply_normal_map(geo_normal: vec3<f32>, world_tangent: vec4<f32>, uv: vec2<f3
 ";
 
 /// Fragment shader: Unlit — flat color + emissive.
-const FS_UNLIT: &str = r"
+pub(crate) const FS_UNLIT: &str = r"
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSample(albedo_tex, mat_sampler, in.uv);
@@ -2833,7 +3018,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 ";
 
 /// Fragment shader: Lit — Lambertian diffuse + ambient + point lights + spot lights + shadows + normal mapping.
-const FS_LIT: &str = r"
+pub(crate) const FS_LIT: &str = r"
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSample(albedo_tex, mat_sampler, in.uv);
@@ -2914,7 +3099,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 ";
 
 /// Fragment shader: PBR — Cook-Torrance microfacet BRDF with shadows, spot lights, IBL.
-const FS_PBR: &str = r"
+pub(crate) const FS_PBR: &str = r"
 const PI: f32 = 3.14159265358979323846;
 
 fn distribution_ggx(n_dot_h: f32, roughness: f32) -> f32 {
@@ -3075,7 +3260,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 ";
 
 /// Composite shader: fullscreen triangle blending scene HDR + bloom + SSAO, with ACES tone mapping.
-const COMPOSITE_SHADER_3D: &str = r"
+pub(crate) const COMPOSITE_SHADER_3D: &str = r"
 struct CompositeParams {
     bloom_intensity: f32,
     tone_map: f32,

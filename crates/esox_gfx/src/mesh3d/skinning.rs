@@ -124,6 +124,32 @@ impl SkinningPipeline {
     }
 }
 
+impl SkinningPipeline {
+    /// Rebuild the compute pipeline with new shader source.
+    #[cfg(feature = "hot-reload")]
+    pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, src: &str) {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("esox_3d_skinning_pipeline_layout"),
+            bind_group_layouts: &[&self.bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("esox_3d_skinning_shader"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+
+        self.compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("esox_3d_skinning_pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("skin_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+    }
+}
+
 impl SkinnedMesh {
     /// Create a skinned mesh from vertex data and skinning weights.
     pub fn new(
@@ -313,7 +339,7 @@ impl super::renderer::Renderer3D {
 
 // ── Compute shader ──
 
-const SKINNING_SHADER: &str = r"
+pub(crate) const SKINNING_SHADER: &str = r"
 // Vertex3D: position(3f), normal(3f), uv(2f), color(4f), tangent(4f) = 16 floats = 64 bytes
 // Stored as array<vec4<f32>, 4> for alignment.
 

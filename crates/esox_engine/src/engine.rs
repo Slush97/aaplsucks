@@ -67,6 +67,12 @@ pub(crate) struct Engine {
     physics: Box<dyn PhysicsBackend>,
     viewport: (u32, u32),
     initialized: bool,
+    #[cfg(feature = "ui")]
+    ui_state: esox_ui::UiState,
+    #[cfg(feature = "ui")]
+    text_renderer: Option<esox_ui::TextRenderer>,
+    #[cfg(feature = "ui")]
+    theme: esox_ui::Theme,
 }
 
 impl Engine {
@@ -83,6 +89,12 @@ impl Engine {
             physics: Box::new(NullPhysics),
             viewport: (1280, 720),
             initialized: false,
+            #[cfg(feature = "ui")]
+            ui_state: esox_ui::UiState::new(),
+            #[cfg(feature = "ui")]
+            text_renderer: None,
+            #[cfg(feature = "ui")]
+            theme: esox_ui::Theme::dark(),
         }
     }
 
@@ -114,6 +126,14 @@ impl AppDelegate for Engine {
             renderer.enable_shadows(gpu);
         }
 
+        #[cfg(feature = "ui")]
+        {
+            match esox_ui::TextRenderer::new(gpu) {
+                Ok(tr) => self.text_renderer = Some(tr),
+                Err(e) => tracing::warn!("Failed to init TextRenderer: {e}"),
+            }
+        }
+
         // Call game init.
         self.timestep.time_state_cache = self.timestep.time_state(0);
         let mut ctx = Ctx {
@@ -140,6 +160,10 @@ impl AppDelegate for Engine {
             Some(r) => r,
             None => return vec![],
         };
+
+        // 0. Poll shader hot-reload.
+        #[cfg(feature = "hot-reload")]
+        renderer.poll_shader_reload(gpu);
 
         // 1. Advance timestep.
         let (tick_count, alpha) = self.timestep.advance();
@@ -234,7 +258,44 @@ impl AppDelegate for Engine {
         _frame: &mut Frame,
         _perf: &PerfMonitor,
     ) {
-        // 2D overlay rendering via the `ui` feature would go here.
+        #[cfg(feature = "ui")]
+        {
+            let text = match self.text_renderer.as_mut() {
+                Some(t) => t,
+                None => return,
+            };
+
+            self.ui_state.update_blink(self.theme.cursor_blink_ms);
+
+            let vp = esox_ui::Rect::new(
+                0.0,
+                0.0,
+                self.viewport.0 as f32,
+                self.viewport.1 as f32,
+            );
+
+            let renderer = self.renderer.as_mut().unwrap();
+            let time_state = &self.timestep.time_state_cache;
+
+            let ctx = Ctx {
+                world: &mut self.world,
+                input: &mut self.input,
+                time: time_state,
+                renderer,
+                gpu: _gpu,
+                assets: &mut self.assets,
+                viewport: self.viewport,
+            };
+
+            let mut ui = esox_ui::Ui::begin(
+                _frame, _gpu, _resources, text,
+                &mut self.ui_state, &self.theme, vp,
+            );
+
+            self.game.ui(&mut ui, &ctx);
+
+            ui.finish();
+        }
     }
 
     fn on_key(
@@ -243,6 +304,8 @@ impl AppDelegate for Engine {
         _modifiers: winit::keyboard::ModifiersState,
     ) {
         self.input.handle_key_event(event);
+        #[cfg(feature = "ui")]
+        self.ui_state.process_key(event.clone(), _modifiers);
     }
 
     fn on_resize(&mut self, width: u32, height: u32, _gpu: &GpuContext) {
@@ -251,12 +314,43 @@ impl AppDelegate for Engine {
 
     fn on_mouse(&mut self, event: MouseInputEvent) {
         match event {
-            MouseInputEvent::Moved { x, y } => self.input.handle_mouse_move(x, y),
-            MouseInputEvent::Press { button, .. } => self.input.handle_mouse_button(button, true),
-            MouseInputEvent::Release { button, .. } => {
-                self.input.handle_mouse_button(button, false)
+            MouseInputEvent::Moved { x, y } => {
+                self.input.handle_mouse_move(x, y);
+                #[cfg(feature = "ui")]
+                self.ui_state.process_mouse_move(
+                    x as f32,
+                    y as f32,
+                    self.theme.item_height,
+                    self.theme.dropdown_gap,
+                );
             }
-            MouseInputEvent::Scroll { .. } | MouseInputEvent::Left => {}
+            MouseInputEvent::Press {
+                button,
+                x: _x,
+                y: _y,
+            } => {
+                self.input.handle_mouse_button(button, true);
+                #[cfg(feature = "ui")]
+                if button == 0 {
+                    self.ui_state.process_mouse_click(_x as f32, _y as f32);
+                } else if button == 2 {
+                    self.ui_state.process_right_click(_x as f32, _y as f32);
+                }
+            }
+            MouseInputEvent::Release { button, .. } => {
+                self.input.handle_mouse_button(button, false);
+                #[cfg(feature = "ui")]
+                self.ui_state.process_mouse_release();
+            }
+            MouseInputEvent::Scroll {
+                x: _x,
+                y: _y,
+                delta_y: _delta_y,
+            } => {
+                #[cfg(feature = "ui")]
+                self.ui_state.process_scroll(_x as f32, _y as f32, _delta_y);
+            }
+            MouseInputEvent::Left => {}
         }
     }
 
@@ -267,8 +361,27 @@ impl AppDelegate for Engine {
     }
 
     fn on_scale_changed(&mut self, _scale_factor: f64, _gpu: &GpuContext) {}
-    fn on_paste(&mut self, _text: &str) {}
-    fn on_ime_commit(&mut self, _text: &str) {}
+
+    fn on_paste(&mut self, _text: &str) {
+        #[cfg(feature = "ui")]
+        self.ui_state.on_ime_commit(_text.to_string());
+    }
+
+    fn on_ime_commit(&mut self, _text: &str) {
+        #[cfg(feature = "ui")]
+        self.ui_state.on_ime_commit(_text.to_string());
+    }
+
+    fn on_ime_preedit(&mut self, _text: String, _cursor: Option<(usize, usize)>) {
+        #[cfg(feature = "ui")]
+        self.ui_state.on_ime_preedit(_text, _cursor);
+    }
+
+    fn on_ime_enabled(&mut self, _enabled: bool) {
+        #[cfg(feature = "ui")]
+        self.ui_state.on_ime_enabled(_enabled);
+    }
+
     fn on_copy(&mut self) -> Option<String> {
         None
     }

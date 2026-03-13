@@ -863,18 +863,25 @@ impl FrameEncoder {
                 pass.set_vertex_buffer(0, resources.quad_vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, resources.current_instance_buffer().slice(..));
 
+                // When MSAA is configured but skipped (3D pre-render path),
+                // remap pipeline IDs to the non-MSAA variants.
+                let no_msaa_remap = !use_msaa && msaa_view.is_some();
+
                 let vp_w = gpu.config.width;
                 let vp_h = gpu.config.height;
                 let mut current_pipeline_id: Option<u32> = None;
 
                 for batch in frame.batches() {
-                    let pip_id = if batch.phase == RenderPhase::OpaqueBackground
+                    let mut pip_id = if batch.phase == RenderPhase::OpaqueBackground
                         && batch.pipeline_id == crate::primitive::PIPELINE_SDF_2D.0
                     {
                         crate::primitive::PIPELINE_SDF_2D_OPAQUE.0
                     } else {
                         batch.pipeline_id
                     };
+                    if no_msaa_remap && pip_id < crate::primitive::NO_MSAA_PIPELINE_OFFSET {
+                        pip_id += crate::primitive::NO_MSAA_PIPELINE_OFFSET;
+                    }
                     if current_pipeline_id != Some(pip_id) {
                         let sid = crate::primitive::ShaderId(pip_id);
                         let pipeline = match registry.get(sid) {

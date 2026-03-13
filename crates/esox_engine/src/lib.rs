@@ -48,6 +48,8 @@ pub use esox_platform;
 pub use glam;
 pub use hecs;
 pub use winit;
+#[cfg(feature = "ui")]
+pub use esox_ui;
 
 /// Fat context providing access to all engine subsystems.
 pub struct Ctx<'a> {

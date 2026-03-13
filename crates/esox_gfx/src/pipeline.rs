@@ -851,7 +851,9 @@ pub fn spawn_pipeline_compilation(
             let compile_scene = |frag_source: &str,
                                  label: &str,
                                  blend: Option<wgpu::BlendState>,
-                                 depth_write: bool|
+                                 depth_write: bool,
+                                 sc: u32,
+                                 use_depth: bool|
              -> wgpu::RenderPipeline {
                 let full_source = format!("{SHADER_PREAMBLE}\n{frag_source}");
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -859,10 +861,14 @@ pub fn spawn_pipeline_compilation(
                     source: wgpu::ShaderSource::Wgsl(full_source.into()),
                 });
 
-                let ds = if depth_write {
-                    depth_stencil_state_write()
+                let ds = if use_depth {
+                    Some(if depth_write {
+                        depth_stencil_state_write()
+                    } else {
+                        depth_stencil_state_read_only()
+                    })
                 } else {
-                    depth_stencil_state_read_only()
+                    None
                 };
 
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -889,9 +895,9 @@ pub fn spawn_pipeline_compilation(
                         strip_index_format: None,
                         ..Default::default()
                     },
-                    depth_stencil: Some(ds),
+                    depth_stencil: ds,
                     multisample: wgpu::MultisampleState {
-                        count: sample_count,
+                        count: sc,
                         mask: !0,
                         alpha_to_coverage_enabled: false,
                     },
@@ -930,14 +936,14 @@ pub fn spawn_pipeline_compilation(
                     "quad_3d",
                 ),
             ] {
-                let p = compile_scene(frag, label, alpha_blend, false);
+                let p = compile_scene(frag, label, alpha_blend, false, sample_count, true);
                 send(id, label, p);
             }
 
             // Opaque SDF 2D (no blend, depth write).
             {
                 let label = "quad_sdf_2d_opaque";
-                let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, label, None, true);
+                let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, label, None, true, sample_count, true);
                 send(crate::primitive::PIPELINE_SDF_2D_OPAQUE, label, p);
             }
 
@@ -992,9 +998,53 @@ pub fn spawn_pipeline_compilation(
                     },
                 ),
             ];
-            for (id, label, blend) in blend_variants {
-                let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, label, Some(blend), false);
-                send(id, label, p);
+            for (id, label, blend) in &blend_variants {
+                let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, label, Some(blend.clone()), false, sample_count, true);
+                send(*id, label, p);
+            }
+
+            // Non-MSAA variants (sample_count=1, no depth) for compositing 2D UI
+            // on top of a 3D pre-render pass, where the 2D render pass runs
+            // without MSAA and without a depth attachment.
+            if sample_count > 1 {
+                use crate::primitive::NO_MSAA_PIPELINE_OFFSET;
+
+                for (id, frag, label) in [
+                    (
+                        crate::primitive::PIPELINE_SDF_2D,
+                        SDF_2D_FRAGMENT_SOURCE,
+                        "quad_sdf_2d_no_msaa",
+                    ),
+                    (
+                        crate::primitive::PIPELINE_TEXT,
+                        TEXT_FRAGMENT_SOURCE,
+                        "quad_text_no_msaa",
+                    ),
+                    (
+                        crate::primitive::PIPELINE_3D,
+                        RAYMARCHED_3D_FRAGMENT_SOURCE,
+                        "quad_3d_no_msaa",
+                    ),
+                ] {
+                    let p = compile_scene(frag, label, alpha_blend, false, 1, false);
+                    send(ShaderId(id.0 + NO_MSAA_PIPELINE_OFFSET), label, p);
+                }
+
+                {
+                    let label = "quad_sdf_2d_opaque_no_msaa";
+                    let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, label, None, false, 1, false);
+                    send(
+                        ShaderId(crate::primitive::PIPELINE_SDF_2D_OPAQUE.0 + NO_MSAA_PIPELINE_OFFSET),
+                        label,
+                        p,
+                    );
+                }
+
+                for (id, label, blend) in &blend_variants {
+                    let no_msaa_label = format!("{label}_no_msaa");
+                    let p = compile_scene(SDF_2D_FRAGMENT_SOURCE, &no_msaa_label, Some(blend.clone()), false, 1, false);
+                    send(ShaderId(id.0 + NO_MSAA_PIPELINE_OFFSET), &no_msaa_label, p);
+                }
             }
 
             // Post-process pipeline (if layout provided).

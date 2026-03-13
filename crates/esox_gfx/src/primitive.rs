@@ -86,7 +86,12 @@ pub const PIPELINE_SDF_2D_SCREEN: ShaderId = ShaderId(5);
 /// Pipeline ID for multiply-blend 2D SDF shapes (src * dst — darkens).
 pub const PIPELINE_SDF_2D_MULTIPLY: ShaderId = ShaderId(6);
 
-/// Minimum shader ID for user-registered pipelines. IDs 0–9 are reserved for
+/// Offset added to scene pipeline IDs to get the non-MSAA (sample_count=1)
+/// variant. Used when the 2D render pass falls back to sample_count=1 (e.g.
+/// compositing 2D UI on top of a 3D pre-render pass).
+pub const NO_MSAA_PIPELINE_OFFSET: u32 = 50;
+
+/// Minimum shader ID for user-registered pipelines. IDs 0–99 are reserved for
 /// built-in pipelines.
 pub const USER_SHADER_ID_MIN: u32 = 10;
 

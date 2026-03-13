@@ -616,6 +616,35 @@ impl Game for Platformer {
         }
     }
 
+    fn ui(&mut self, ui: &mut esox_engine::esox_ui::Ui, ctx: &Ctx) {
+        use esox_gfx::Color;
+
+        // ── Collect counter (top-left) ──
+        ui.padding(16.0, |ui| {
+            ui.label_colored(
+                &format!("{} / {}", self.collected, self.total),
+                Color::WHITE,
+            );
+        });
+
+        // ── Win message (centered) ──
+        if self.won {
+            let vp_h = ctx.viewport.1 as f32;
+            let target_y = vp_h * 0.4;
+            let current_y = ui.cursor_y();
+            if target_y > current_y {
+                ui.add_space(target_y - current_y);
+            }
+
+            let text = "YOU WIN!";
+            // Approximate heading width (~14px per char at heading size).
+            let approx_w = text.len() as f32 * 14.0;
+            ui.center_horizontal(approx_w, |ui| {
+                ui.label_colored(text, Color::new(1.0, 0.85, 0.2, 1.0));
+            });
+        }
+    }
+
     fn should_exit(&self) -> bool {
         self.exit
     }

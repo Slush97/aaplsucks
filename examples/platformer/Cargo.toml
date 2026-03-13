@@ -3,6 +3,9 @@ name = "platformer"
 version.workspace = true
 edition.workspace = true
 
+[features]
+hot-reload = ["esox_engine/hot-reload"]
+
 [dependencies]
-esox_engine = { workspace = true, features = ["audio"] }
+esox_engine = { workspace = true, features = ["audio", "ui"] }
 tracing-subscriber = { workspace = true }

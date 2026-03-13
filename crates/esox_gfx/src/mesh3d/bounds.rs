@@ -71,6 +71,16 @@ impl Aabb {
             && p.z <= self.max.z
     }
 
+    /// Test whether this AABB overlaps another AABB.
+    pub fn intersects(&self, other: &Aabb) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
+    }
+
     /// Transform the AABB by a 4x4 matrix using Arvo's fast method.
     ///
     /// Transforms center, then computes new half-extents from the absolute values
@@ -291,6 +301,45 @@ mod tests {
         assert!(aabb.contains_point(Vec3::ZERO)); // edge
         assert!(!aabb.contains_point(Vec3::new(-0.1, 0.0, 0.0)));
         assert!(!aabb.contains_point(Vec3::new(3.0, 1.0, 1.0)));
+    }
+
+    #[test]
+    fn aabb_intersects_overlap() {
+        let a = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        let b = Aabb::new(Vec3::new(1.0, 1.0, 1.0), Vec3::new(3.0, 3.0, 3.0));
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+    }
+
+    #[test]
+    fn aabb_intersects_touching() {
+        let a = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+        let b = Aabb::new(Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0));
+        assert!(a.intersects(&b)); // touching edge counts as intersection
+    }
+
+    #[test]
+    fn aabb_intersects_disjoint() {
+        let a = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+        let b = Aabb::new(Vec3::new(5.0, 5.0, 5.0), Vec3::new(6.0, 6.0, 6.0));
+        assert!(!a.intersects(&b));
+        assert!(!b.intersects(&a));
+    }
+
+    #[test]
+    fn aabb_intersects_contained() {
+        let outer = Aabb::new(Vec3::new(-5.0, -5.0, -5.0), Vec3::new(5.0, 5.0, 5.0));
+        let inner = Aabb::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        assert!(outer.intersects(&inner));
+        assert!(inner.intersects(&outer));
+    }
+
+    #[test]
+    fn aabb_intersects_one_axis_miss() {
+        let a = Aabb::new(Vec3::ZERO, Vec3::new(2.0, 2.0, 2.0));
+        // Overlaps on X and Y but not Z
+        let b = Aabb::new(Vec3::new(0.5, 0.5, 5.0), Vec3::new(1.5, 1.5, 6.0));
+        assert!(!a.intersects(&b));
     }
 
     #[test]

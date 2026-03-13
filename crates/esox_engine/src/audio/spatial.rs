@@ -53,10 +53,16 @@ impl AudioManager {
     /// Set master volume (0.0 = mute, 1.0 = full).
     pub fn set_volume(&mut self, volume: f64) {
         self.volume = volume;
+        // Convert amplitude to decibels: dB = 20 * log10(amplitude)
+        let db = if volume <= 0.0 {
+            kira::Decibels::SILENCE
+        } else {
+            kira::Decibels((20.0 * (volume as f32).log10()).max(-60.0))
+        };
         let _ = self
             .manager
             .main_track()
-            .set_volume(kira::Volume::Amplitude(volume));
+            .set_volume(db, kira::Tween::default());
     }
 
     /// Update listener position (synced from active camera each frame).

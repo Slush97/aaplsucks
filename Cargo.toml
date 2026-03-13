@@ -10,6 +10,7 @@ members = [
     "examples/demo3d",
     "examples/bench3d",
     "examples/engine_demo",
+    "examples/platformer",
     "apps/dwnldr-gui",
 ]
 

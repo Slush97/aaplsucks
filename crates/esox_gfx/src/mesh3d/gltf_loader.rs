@@ -102,6 +102,8 @@ pub struct GltfSkin {
     pub parent_indices: Vec<i32>,
     /// Inverse bind matrices (one per joint).
     pub inverse_bind_matrices: Vec<Mat4>,
+    /// Bind-pose local transforms per joint (rest pose from glTF nodes).
+    pub bind_pose_transforms: Vec<Transform>,
     /// Number of joints.
     pub joint_count: usize,
 }
@@ -591,10 +593,14 @@ fn convert_skin(
         .map(|iter| iter.map(|m| Mat4::from_cols_array_2d(&m)).collect())
         .unwrap_or_else(|| vec![Mat4::IDENTITY; joint_count]);
 
+    // Capture bind-pose local transforms from the glTF node tree.
+    let bind_pose_transforms: Vec<Transform> = joints.iter().map(|j| convert_transform(j)).collect();
+
     GltfSkin {
         joint_names,
         parent_indices,
         inverse_bind_matrices,
+        bind_pose_transforms,
         joint_count,
     }
 }
@@ -630,7 +636,7 @@ fn convert_animation(
 
         let joint_index = match joint_map.get(&node_idx) {
             Some(&ji) => ji,
-            None => node_idx, // fallback: use node index directly
+            None => continue, // skip channels targeting non-joint nodes
         };
 
         let property = match target.property() {

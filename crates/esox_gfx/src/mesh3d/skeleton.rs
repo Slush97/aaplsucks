@@ -13,6 +13,8 @@ pub struct AnimationPlayer {
     parent_indices: Vec<i32>,
     /// Inverse bind matrices (one per joint).
     inverse_bind_matrices: Vec<Mat4>,
+    /// Bind-pose local transforms (rest pose, used for reset/clone).
+    bind_pose_transforms: Vec<Transform>,
     /// Current local transforms per joint.
     local_transforms: Vec<Transform>,
     /// Computed world matrices per joint (root-to-leaf order).
@@ -35,11 +37,12 @@ impl AnimationPlayer {
     /// Create a new animation player from a glTF skin.
     pub fn new(skin: &GltfSkin) -> Self {
         let joint_count = skin.joint_count;
-        Self {
+        let mut player = Self {
             joint_names: skin.joint_names.clone(),
             parent_indices: skin.parent_indices.clone(),
             inverse_bind_matrices: skin.inverse_bind_matrices.clone(),
-            local_transforms: vec![Transform::IDENTITY; joint_count],
+            bind_pose_transforms: skin.bind_pose_transforms.clone(),
+            local_transforms: skin.bind_pose_transforms.clone(),
             world_matrices: vec![Mat4::IDENTITY; joint_count],
             skinning_matrices: vec![Mat4::IDENTITY; joint_count],
             joint_count,
@@ -47,7 +50,10 @@ impl AnimationPlayer {
             time: 0.0,
             speed: 1.0,
             looping: true,
-        }
+        };
+        // Compute initial hierarchy so skinning matrices are valid before first advance().
+        player.compute_hierarchy();
+        player
     }
 
     /// Start playing an animation clip by index.
@@ -145,6 +151,26 @@ impl AnimationPlayer {
     /// ready to be uploaded to the GPU.
     pub fn skinning_matrices(&self) -> &[Mat4] {
         &self.skinning_matrices
+    }
+
+    /// Create a fresh player sharing the same skeleton data but with reset playback state.
+    pub fn clone_skeleton(&self) -> Self {
+        let mut cloned = Self {
+            joint_names: self.joint_names.clone(),
+            parent_indices: self.parent_indices.clone(),
+            inverse_bind_matrices: self.inverse_bind_matrices.clone(),
+            bind_pose_transforms: self.bind_pose_transforms.clone(),
+            local_transforms: self.bind_pose_transforms.clone(),
+            world_matrices: vec![Mat4::IDENTITY; self.joint_count],
+            skinning_matrices: vec![Mat4::IDENTITY; self.joint_count],
+            joint_count: self.joint_count,
+            current_clip: None,
+            time: 0.0,
+            speed: 1.0,
+            looping: true,
+        };
+        cloned.compute_hierarchy();
+        cloned
     }
 
     /// Get a joint name by index.
@@ -275,6 +301,7 @@ mod tests {
                 .map(|i| if i == 0 { -1 } else { i - 1 })
                 .collect(),
             inverse_bind_matrices: vec![Mat4::IDENTITY; joint_count],
+            bind_pose_transforms: vec![Transform::IDENTITY; joint_count],
             joint_count,
         }
     }
@@ -385,6 +412,37 @@ mod tests {
         player.play(0, false);
         player.advance(5.0, &[clip]);
         assert!((player.time() - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn clone_skeleton_resets_playback() {
+        let skin = make_test_skin(3);
+        let mut original = AnimationPlayer::new(&skin);
+
+        let clip = AnimationClip {
+            name: None,
+            duration: 2.0,
+            channels: vec![AnimChannel {
+                joint_index: 0,
+                property: AnimProperty::Translation,
+                interpolation: Interpolation::Linear,
+                times: vec![0.0, 2.0],
+                values: vec![[0.0, 0.0, 0.0, 0.0], [4.0, 0.0, 0.0, 0.0]],
+            }],
+        };
+
+        original.play(0, true);
+        original.advance(1.0, &[clip]);
+        assert!(original.time() > 0.0);
+        assert!(original.current_clip().is_some());
+
+        let cloned = original.clone_skeleton();
+        assert_eq!(cloned.joint_count(), original.joint_count());
+        assert!(cloned.current_clip().is_none());
+        assert!((cloned.time() - 0.0).abs() < 1e-5);
+        for m in cloned.skinning_matrices() {
+            assert_eq!(*m, Mat4::IDENTITY);
+        }
     }
 
     #[test]

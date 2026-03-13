@@ -2,12 +2,19 @@
 //!
 //! One small level, ~12 platforms (3 moving), 6 collectibles, third-person camera,
 //! gravity + AABB collision, jump SFX + collect SFX. Win condition: collect all items.
+//!
+//! Uses trigger volumes for collectible pickup detection and GPU particles for
+//! jump dust, collect sparkle, and win fireworks effects.
 
 use esox_engine::*;
 use esox_engine::glam::{Quat, Vec3};
-use esox_gfx::mesh3d::{Aabb, MaterialDescriptor, MaterialType, MeshData, PostProcess3DConfig, ShadowConfig};
+use esox_gfx::mesh3d::{
+    Aabb, AnimationPlayer, GltfScene, MaterialDescriptor, MaterialType,
+    MeshData, ParticlePoolHandle, PostProcess3DConfig, ShadowConfig,
+};
 
 use std::f32::consts::{FRAC_PI_4, TAU};
+use std::path::Path;
 
 // ── Constants ──
 
@@ -79,6 +86,8 @@ impl PlatformRuntime {
 
 struct CollectibleState {
     entity: hecs::Entity,
+    /// Physics body handle for the trigger sensor.
+    body_handle: BodyHandle,
     base_pos: Vec3,
     collected: bool,
 }
@@ -94,13 +103,30 @@ struct GameAudio {
     collect_sfx: esox_engine::audio::spatial::SoundHandle,
 }
 
+// ── Particles ──
+
+struct ParticleEffects {
+    particle_mat: esox_gfx::mesh3d::MaterialHandle,
+    jump_pool: ParticlePoolHandle,
+    collect_pool: ParticlePoolHandle,
+    win_pool: ParticlePoolHandle,
+    /// Entity for the jump dust emitter (burst-only, dormant).
+    jump_emitter: hecs::Entity,
+    /// Entity for the collect sparkle emitter (burst-only, dormant).
+    collect_emitter: hecs::Entity,
+    /// Entity for the win fireworks emitter (continuous, dormant).
+    win_emitter: hecs::Entity,
+}
+
 // ── Game ──
 
 struct Platformer {
     player_entity: Option<hecs::Entity>,
+    player_body: Option<BodyHandle>,
     player_pos: Vec3,
     prev_player_pos: Vec3,
     player_vel: Vec3,
+    player_facing: Quat,
     grounded: bool,
     jump_buffer: u32,
     coyote_timer: u32,
@@ -118,15 +144,18 @@ struct Platformer {
     exit: bool,
 
     audio: Option<GameAudio>,
+    particles: Option<ParticleEffects>,
 }
 
 impl Platformer {
     fn new() -> Self {
         Self {
             player_entity: None,
+            player_body: None,
             player_pos: SPAWN_POS,
             prev_player_pos: SPAWN_POS,
             player_vel: Vec3::ZERO,
+            player_facing: Quat::IDENTITY,
             grounded: false,
             jump_buffer: 0,
             coyote_timer: 0,
@@ -144,6 +173,7 @@ impl Platformer {
             exit: false,
 
             audio: None,
+            particles: None,
         }
     }
 
@@ -198,13 +228,7 @@ impl Game for Platformer {
             ..MaterialDescriptor::default()
         });
 
-        let player_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
-            material_type: MaterialType::PBR,
-            albedo: [1.0, 0.5, 0.1, 1.0],
-            roughness: 0.4,
-            metallic: 0.2,
-            ..MaterialDescriptor::default()
-        });
+        // player_mat is no longer needed — Fox.glb brings its own materials.
 
         let collectible_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
@@ -223,6 +247,21 @@ impl Game for Platformer {
         let torus_data = MeshData::torus(0.3, 0.1, 16, 8);
         let torus_mesh = ctx.renderer.upload_mesh(ctx.gpu, &torus_data);
         ctx.assets.register_mesh(torus_mesh);
+
+        // ── Player kinematic body (for trigger detection) ──
+        // Solid collider (not sensor) so Rapier generates intersection events
+        // when it overlaps sensor colliders on collectibles.
+        let player_handle = ctx.physics.add_body(BodyDesc {
+            position: self.player_pos,
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Kinematic,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Box { half_extents: PLAYER_HALF },
+                is_sensor: false,
+                ..ColliderDesc::default()
+            }),
+        });
+        self.player_body = Some(player_handle);
 
         // ── Spawn platforms ──
         let defs = level_platforms();
@@ -260,6 +299,19 @@ impl Game for Platformer {
 
             if def.collectible {
                 let coll_pos = Vec3::new(def.center.x, def.center.y + def.half_extents.y + 0.5, def.center.z);
+
+                // Create a sensor body for trigger-based pickup detection.
+                let coll_handle = ctx.physics.add_body(BodyDesc {
+                    position: coll_pos,
+                    rotation: Quat::IDENTITY,
+                    body_type: BodyType::Static,
+                    collider: Some(ColliderDesc {
+                        shape: ColliderShape::Box { half_extents: COLLECTIBLE_HALF },
+                        is_sensor: true,
+                        ..ColliderDesc::default()
+                    }),
+                });
+
                 let coll_entity = ctx.world.spawn((
                     Transform3D {
                         position: coll_pos,
@@ -272,33 +324,141 @@ impl Game for Platformer {
                         tint: [1.0; 4],
                         visible: true,
                     },
+                    TriggerVolume { tag: Some("collectible") },
+                    RigidBodyComponent {
+                        handle: coll_handle,
+                        body_type: BodyType::Static,
+                    },
                 ));
+
+                // Register in entity map so trigger events can resolve to entities.
+                ctx.entity_map.insert(coll_handle, coll_entity);
+
                 self.collectibles.push(CollectibleState {
                     entity: coll_entity,
+                    body_handle: coll_handle,
                     base_pos: coll_pos,
                     collected: false,
                 });
             }
         }
 
+        // Register player in entity map too.
+        if let Some(pe) = self.player_entity {
+            ctx.entity_map.insert(player_handle, pe);
+        }
+        // We need the player entity first — spawn it now.
+
         self.total = self.collectibles.len() as u32;
 
-        // ── Spawn player ──
+        // ── Load Fox model ──
+        let fox_scene = GltfScene::load(Path::new("assets/models/Fox.glb"))
+            .expect("failed to load Fox.glb");
+        let fox_handles = ctx.renderer.upload_gltf_scene(ctx.gpu, fox_scene);
+
+        eprintln!("[platformer] fox: {} meshes, {} materials, {} skins, {} anims",
+            fox_handles.meshes.len(), fox_handles.materials.len(),
+            fox_handles.skins.len(), fox_handles.animations.len());
+        for (i, si) in fox_handles.skinned_mesh_indices.iter().enumerate() {
+            eprintln!("[platformer]   mesh[{}] handle={:?} skinned={:?}", i, fox_handles.meshes[i], si);
+        }
+        for (i, a) in fox_handles.animations.iter().enumerate() {
+            eprintln!("[platformer]   anim[{}] name={:?} dur={:.2}s", i, a.name, a.duration);
+        }
+
+        // Find clip indices by name. Fox has: Survey (0), Walk (1), Run (2).
+        let mut survey_idx = 0;
+        let mut walk_idx = 1;
+        let mut run_idx = 2;
+        for (i, clip) in fox_handles.animations.iter().enumerate() {
+            match clip.name.as_deref() {
+                Some("Survey") => survey_idx = i,
+                Some("Walk") => walk_idx = i,
+                Some("Run") => run_idx = i,
+                _ => {}
+            }
+        }
+
+        // Build animation graph: Idle (Survey) <-> Locomotion (Walk/Run blend tree)
+        let anim_graph_def = AnimGraphDef {
+            states: vec![
+                AnimState {
+                    name: "Idle".into(),
+                    source: StateSource::Clip { clip_index: survey_idx },
+                    looping: true,
+                    speed: 1.0,
+                    transitions: vec![Transition {
+                        target_state: 1,
+                        conditions: vec![Condition::FloatGt {
+                            param: "speed".into(),
+                            threshold: 0.5,
+                        }],
+                        duration: 0.25,
+                        priority: 0,
+                    }],
+                },
+                AnimState {
+                    name: "Locomotion".into(),
+                    source: StateSource::BlendTree1D {
+                        param: "speed".into(),
+                        entries: vec![
+                            BlendEntry { clip_index: walk_idx, threshold: 0.0 },
+                            BlendEntry { clip_index: run_idx, threshold: 1.0 },
+                        ],
+                    },
+                    looping: true,
+                    speed: 1.0,
+                    transitions: vec![Transition {
+                        target_state: 0,
+                        conditions: vec![Condition::FloatLt {
+                            param: "speed".into(),
+                            threshold: 0.5,
+                        }],
+                        duration: 0.3,
+                        priority: 0,
+                    }],
+                },
+            ],
+            default_state: 0,
+        };
+
+        // Find the skinned mesh handle and its index.
+        let fox_mesh = fox_handles.meshes[0];
+        let fox_material = fox_handles.materials[0];
+        let skinned_mesh_index = fox_handles.skinned_mesh_indices[0]
+            .expect("Fox mesh should be skinned");
+
+        // Build animation graph runtime.
+        let player_anim = AnimationPlayer::new(&fox_handles.skins[0]);
+        let anim_graph = AnimGraphRuntime::new(anim_graph_def, player_anim);
+
+        // ── Spawn player (Fox model) ──
+        // Fox model is large, scale down. The fox faces +Z by default.
         let player_entity = ctx.world.spawn((
             Transform3D {
                 position: self.player_pos,
-                scale: PLAYER_HALF * 2.0,
+                scale: Vec3::splat(0.02),
                 ..Transform3D::default()
             },
             GlobalTransform::default(),
             MeshRenderer {
-                mesh: cube_mesh,
-                material: player_mat,
+                mesh: fox_mesh,
+                material: fox_material,
                 tint: [1.0; 4],
                 visible: true,
             },
+            RigidBodyComponent {
+                handle: player_handle,
+                body_type: BodyType::Kinematic,
+            },
+            AnimGraphController {
+                graph: anim_graph,
+                clips: fox_handles.animations,
+                skinned_mesh_index,
+            },
         ));
         self.player_entity = Some(player_entity);
+        ctx.entity_map.insert(player_handle, player_entity);
 
         // ── Lights ──
         ctx.world.spawn((
@@ -366,6 +526,90 @@ impl Game for Platformer {
             motion_blur_enabled: false,
         });
 
+        // ── Particles ──
+        let particle_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
+            material_type: MaterialType::Unlit,
+            albedo: [1.0, 1.0, 1.0, 1.0],
+            ..MaterialDescriptor::default()
+        });
+
+        let jump_pool = ctx.renderer.create_particle_pool(ctx.gpu, 256);
+        let collect_pool = ctx.renderer.create_particle_pool(ctx.gpu, 512);
+        let win_pool = ctx.renderer.create_particle_pool(ctx.gpu, 2048);
+
+        // Jump dust emitter — burst-only, activated on jump.
+        let jump_emitter = ctx.world.spawn((
+            Transform3D { position: SPAWN_POS, ..Transform3D::default() },
+            GlobalTransform::default(),
+            ParticleEmitter {
+                pool: jump_pool,
+                material: particle_mat,
+                spawn_rate: 0.0,
+                burst_count: 0,
+                velocity_min: Vec3::new(-1.5, 0.2, -1.5),
+                velocity_max: Vec3::new(1.5, 1.0, 1.5),
+                gravity: Vec3::new(0.0, -5.0, 0.0),
+                lifetime: [0.2, 0.5],
+                size: [0.08, 0.02],
+                color_start: [0.8, 0.75, 0.65, 0.8],
+                color_end: [0.6, 0.55, 0.5, 0.0],
+                active: false,
+                ..Default::default()
+            },
+        ));
+
+        // Collect sparkle emitter — burst-only, activated on pickup.
+        let collect_emitter = ctx.world.spawn((
+            Transform3D { position: Vec3::ZERO, ..Transform3D::default() },
+            GlobalTransform::default(),
+            ParticleEmitter {
+                pool: collect_pool,
+                material: particle_mat,
+                spawn_rate: 0.0,
+                burst_count: 0,
+                velocity_min: Vec3::new(-2.0, 1.0, -2.0),
+                velocity_max: Vec3::new(2.0, 4.0, 2.0),
+                gravity: Vec3::new(0.0, -3.0, 0.0),
+                lifetime: [0.4, 1.0],
+                size: [0.1, 0.01],
+                color_start: [1.0, 0.9, 0.3, 1.0],
+                color_end: [1.0, 0.6, 0.1, 0.0],
+                active: false,
+                ..Default::default()
+            },
+        ));
+
+        // Win fireworks emitter — continuous spray, activated on win.
+        let win_emitter = ctx.world.spawn((
+            Transform3D { position: Vec3::ZERO, ..Transform3D::default() },
+            GlobalTransform::default(),
+            ParticleEmitter {
+                pool: win_pool,
+                material: particle_mat,
+                spawn_rate: 0.0,
+                burst_count: 0,
+                velocity_min: Vec3::new(-4.0, 5.0, -4.0),
+                velocity_max: Vec3::new(4.0, 12.0, 4.0),
+                gravity: Vec3::new(0.0, -8.0, 0.0),
+                lifetime: [1.0, 2.5],
+                size: [0.12, 0.03],
+                color_start: [1.0, 0.85, 0.2, 1.0],
+                color_end: [1.0, 0.3, 0.1, 0.0],
+                active: false,
+                ..Default::default()
+            },
+        ));
+
+        self.particles = Some(ParticleEffects {
+            particle_mat,
+            jump_pool,
+            collect_pool,
+            win_pool,
+            jump_emitter,
+            collect_emitter,
+            win_emitter,
+        });
+
         // ── Audio (graceful fallback if files missing) ──
         if let Some(mut mgr) = esox_engine::audio::AudioManager::new() {
             let jump = mgr.load("assets/jump.ogg");
@@ -396,6 +640,73 @@ impl Game for Platformer {
         let dt = ctx.time.tick_dt;
         let elapsed = ctx.time.elapsed;
 
+        // ── Process trigger events (collectible pickup via physics sensors) ──
+        if !self.won {
+            let triggers = ctx.physics.drain_triggers();
+            for event in &triggers {
+                if event.phase != TriggerPhase::Enter {
+                    continue;
+                }
+                // Check if either body in the pair is the player and the other is a collectible.
+                if let Some((entity_a, entity_b)) = ctx.entity_map.resolve_trigger(event) {
+                    let (player_e, other_e) = if Some(entity_a) == self.player_entity {
+                        (entity_a, entity_b)
+                    } else if Some(entity_b) == self.player_entity {
+                        (entity_b, entity_a)
+                    } else {
+                        continue;
+                    };
+
+                    // Find the matching collectible.
+                    let _ = player_e;
+                    for coll in &mut self.collectibles {
+                        if coll.collected || coll.entity != other_e {
+                            continue;
+                        }
+                        coll.collected = true;
+                        if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(coll.entity) {
+                            mr.visible = false;
+                        }
+                        self.collected += 1;
+                        eprintln!("[platformer] collected {}/{}", self.collected, self.total);
+
+                        if let Some(audio) = &mut self.audio {
+                            audio.manager.play(audio.collect_sfx);
+                        }
+
+                        // Burst collect particles at the collectible position.
+                        if let Some(particles) = &self.particles {
+                            if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(particles.collect_emitter) {
+                                t.position = coll.base_pos;
+                            }
+                            if let Ok(mut em) = ctx.world.get::<&mut ParticleEmitter>(particles.collect_emitter) {
+                                em.active = true;
+                                em.burst_count = 64;
+                            }
+                        }
+
+                        if self.collected == self.total {
+                            self.won = true;
+                            eprintln!("[platformer] YOU WIN! All {} items collected!", self.total);
+
+                            // Start win fireworks at the player position.
+                            if let Some(particles) = &self.particles {
+                                if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(particles.win_emitter) {
+                                    t.position = self.player_pos;
+                                }
+                                if let Ok(mut em) = ctx.world.get::<&mut ParticleEmitter>(particles.win_emitter) {
+                                    em.active = true;
+                                    em.spawn_rate = 200.0;
+                                    em.burst_count = 256;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         // ── Moving platforms ──
         for plat in &mut self.platforms {
             if let Some(mover) = plat.mover {
@@ -417,6 +728,9 @@ impl Game for Platformer {
                 t.rotation = Quat::from_rotation_y(elapsed * 2.0);
                 t.position.y = coll.base_pos.y + 0.15 * (elapsed * 3.0).sin();
             }
+            // Sync the sensor body position to match the visual.
+            let pos = Vec3::new(coll.base_pos.x, coll.base_pos.y + 0.15 * (elapsed * 3.0).sin(), coll.base_pos.z);
+            ctx.physics.set_transform(coll.body_handle, pos, Quat::IDENTITY);
         }
 
         // ── Player input ──
@@ -444,15 +758,9 @@ impl Game for Platformer {
         }
 
         // ── Integrate & collide (split-axis: XZ then Y) ──
-        // Resolving each axis group independently prevents the classic bug
-        // where landing on a platform edge is resolved horizontally instead
-        // of vertically, and eliminates jitter at corners where two
-        // platforms meet.
         self.prev_player_pos = self.player_pos;
 
         // Horizontal movement + collision.
-        // Shrink Y by COLLISION_SKIN so vertical surface contacts (standing
-        // on a platform) don't trigger false horizontal resolution.
         self.player_pos.x += self.player_vel.x * dt;
         self.player_pos.z += self.player_vel.z * dt;
 
@@ -490,8 +798,6 @@ impl Game for Platformer {
         }
 
         // Vertical movement + collision.
-        // Shrink XZ by COLLISION_SKIN so horizontal surface contacts (flush
-        // against a wall) don't trigger false vertical resolution.
         self.player_pos.y += self.player_vel.y * dt;
         let mut landed = false;
 
@@ -535,6 +841,18 @@ impl Game for Platformer {
             if let Some(audio) = &mut self.audio {
                 audio.manager.play(audio.jump_sfx);
             }
+
+            // Burst jump dust particles at the player's feet.
+            if let Some(particles) = &self.particles {
+                let foot_pos = self.player_pos - Vec3::Y * PLAYER_HALF.y;
+                if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(particles.jump_emitter) {
+                    t.position = foot_pos;
+                }
+                if let Ok(mut em) = ctx.world.get::<&mut ParticleEmitter>(particles.jump_emitter) {
+                    em.active = true;
+                    em.burst_count = 24;
+                }
+            }
         }
         self.jump_buffer = self.jump_buffer.saturating_sub(1);
 
@@ -545,36 +863,21 @@ impl Game for Platformer {
             self.grounded = false;
         }
 
-        // ── Collectible pickup ──
-        if !self.won {
-            let player_aabb = self.player_aabb();
-            for coll in &mut self.collectibles {
-                if coll.collected {
-                    continue;
-                }
-                let coll_pos = if let Ok(t) = ctx.world.get::<&Transform3D>(coll.entity) {
-                    t.position
-                } else {
-                    coll.base_pos
-                };
-                let coll_aabb = Aabb::new(coll_pos - COLLECTIBLE_HALF, coll_pos + COLLECTIBLE_HALF);
-                if player_aabb.intersects(&coll_aabb) {
-                    coll.collected = true;
-                    if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(coll.entity) {
-                        mr.visible = false;
-                    }
-                    self.collected += 1;
-                    eprintln!("[platformer] collected {}/{}", self.collected, self.total);
+        // ── Update player facing and animation params ──
+        let horiz_speed = Vec3::new(self.player_vel.x, 0.0, self.player_vel.z).length();
 
-                    if let Some(audio) = &mut self.audio {
-                        audio.manager.play(audio.collect_sfx);
-                    }
+        // Face movement direction (smooth slerp).
+        if horiz_speed > 0.1 {
+            let move_dir = Vec3::new(self.player_vel.x, 0.0, self.player_vel.z).normalize();
+            let target_facing = Quat::from_rotation_arc(Vec3::Z, move_dir);
+            self.player_facing = self.player_facing.slerp(target_facing, (10.0 * dt).min(1.0));
+        }
 
-                    if self.collected == self.total {
-                        self.won = true;
-                        eprintln!("[platformer] YOU WIN! All {} items collected!", self.total);
-                    }
-                }
+        // Drive animation graph: normalize speed to [0, 1] for walk/run blend.
+        if let Some(pe) = self.player_entity {
+            if let Ok(mut ctrl) = ctx.world.get::<&mut AnimGraphController>(pe) {
+                let normalized = (horiz_speed / MOVE_SPEED).clamp(0.0, 1.0);
+                ctrl.graph.params.set_float("speed", normalized);
             }
         }
 
@@ -582,6 +885,21 @@ impl Game for Platformer {
         if let Some(pe) = self.player_entity {
             if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(pe) {
                 t.position = self.player_pos;
+                t.rotation = self.player_facing;
+            }
+        }
+
+        // ── Sync player kinematic sensor to physics world ──
+        if let Some(body) = self.player_body {
+            ctx.physics.set_transform(body, self.player_pos, self.player_facing);
+        }
+
+        // ── Keep win emitter tracking the player ──
+        if self.won {
+            if let Some(particles) = &self.particles {
+                if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(particles.win_emitter) {
+                    t.position = self.player_pos + Vec3::Y * 2.0;
+                }
             }
         }
 
@@ -602,6 +920,7 @@ impl Game for Platformer {
         if let Some(pe) = self.player_entity {
             if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(pe) {
                 t.position = visual_pos;
+                t.rotation = self.player_facing;
             }
         }
 
@@ -680,6 +999,7 @@ fn main() {
             msaa: 4,
             ..Default::default()
         },
+        physics: Some(Box::new(RapierPhysics::new(Vec3::new(0.0, -20.0, 0.0)))),
         ..EngineConfig::default()
     };
 

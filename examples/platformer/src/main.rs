@@ -151,12 +151,12 @@ impl Platformer {
         Aabb::new(self.player_pos - PLAYER_HALF, self.player_pos + PLAYER_HALF)
     }
 
-    fn camera_position(&self) -> Vec3 {
+    fn camera_position(&self, target: Vec3) -> Vec3 {
         let (sin_o, cos_o) = self.orbit_angle.sin_cos();
         Vec3::new(
-            self.player_pos.x + CAM_DISTANCE * CAM_PITCH.cos() * sin_o,
-            self.player_pos.y + CAM_HEIGHT_OFFSET + CAM_DISTANCE * CAM_PITCH.sin(),
-            self.player_pos.z + CAM_DISTANCE * CAM_PITCH.cos() * cos_o,
+            target.x + CAM_DISTANCE * CAM_PITCH.cos() * sin_o,
+            target.y + CAM_HEIGHT_OFFSET + CAM_DISTANCE * CAM_PITCH.sin(),
+            target.z + CAM_DISTANCE * CAM_PITCH.cos() * cos_o,
         )
     }
 }
@@ -209,9 +209,9 @@ impl Game for Platformer {
         let collectible_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
             albedo: [1.0, 0.85, 0.2, 1.0],
-            roughness: 0.3,
-            metallic: 0.9,
-            emissive: [0.3, 0.22, 0.04],
+            roughness: 0.35,
+            metallic: 0.8,
+            emissive: [0.08, 0.06, 0.01],
             ..MaterialDescriptor::default()
         });
 
@@ -322,13 +322,13 @@ impl Game for Platformer {
             GlobalTransform::default(),
             PointLightComponent {
                 color: [0.6, 0.7, 1.0],
-                intensity: 15.0,
+                intensity: 5.0,
                 range: 30.0,
             },
         ));
 
         // ── Camera ──
-        let cam_pos = self.camera_position();
+        let cam_pos = self.camera_position(self.player_pos);
         let cam_entity = ctx.world.spawn((
             Transform3D {
                 position: cam_pos,
@@ -358,9 +358,9 @@ impl Game for Platformer {
 
         ctx.renderer.set_postprocess(PostProcess3DConfig {
             bloom_enabled: true,
-            bloom_intensity: 0.15,
-            bloom_threshold: 1.5,
-            bloom_soft_knee: 0.3,
+            bloom_intensity: 0.04,
+            bloom_threshold: 3.5,
+            bloom_soft_knee: 0.1,
             tone_map_enabled: true,
             ssao_enabled: false,
             motion_blur_enabled: false,
@@ -585,7 +585,7 @@ impl Game for Platformer {
             }
         }
 
-        // ── Camera ──
+        // ── Camera orbit input ──
         if ctx.input.just_pressed("orbit_left") {
             self.orbit_target -= ORBIT_SNAP;
         }
@@ -595,14 +595,6 @@ impl Game for Platformer {
         // Smooth lerp toward target angle.
         let diff = self.orbit_target - self.orbit_angle;
         self.orbit_angle += diff * (ORBIT_LERP_SPEED * dt).min(1.0);
-
-        let cam_pos = self.camera_position();
-        if let Some(ce) = self.camera_entity {
-            if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(ce) {
-                t.position = cam_pos;
-                t.rotation = look_at_quat(cam_pos, self.player_pos + Vec3::Y * 0.5);
-            }
-        }
     }
 
     fn render(&mut self, ctx: &mut Ctx, alpha: f32) {
@@ -610,6 +602,16 @@ impl Game for Platformer {
         if let Some(pe) = self.player_entity {
             if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(pe) {
                 t.position = visual_pos;
+            }
+        }
+
+        // Camera tracks the interpolated visual position to avoid jitter
+        // between fixed-rate physics ticks and variable-rate rendering.
+        let cam_pos = self.camera_position(visual_pos);
+        if let Some(ce) = self.camera_entity {
+            if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(ce) {
+                t.position = cam_pos;
+                t.rotation = look_at_quat(cam_pos, visual_pos + Vec3::Y * 0.5);
             }
         }
     }
@@ -646,6 +648,7 @@ fn main() {
                 height: Some(720),
                 ..Default::default()
             },
+            msaa: 4,
             ..Default::default()
         },
         ..EngineConfig::default()

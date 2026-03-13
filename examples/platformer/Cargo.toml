@@ -1,0 +1,8 @@
+[package]
+name = "platformer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_engine = { workspace = true, features = ["audio"] }
+tracing-subscriber = { workspace = true }

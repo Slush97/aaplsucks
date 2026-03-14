@@ -3,6 +3,14 @@ use esox_engine::glam::{Mat4, Vec3, Vec4};
 use esox_engine::hecs;
 use esox_engine::{Ctx, GlobalTransform, MeshRenderer};
 
+/// Axis for gizmo interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GizmoAxis {
+    X,
+    Y,
+    Z,
+}
+
 /// Compute a world-space ray from the camera through the given screen pixel.
 pub fn screen_to_ray(
     mouse_x: f64,
@@ -97,4 +105,66 @@ pub fn pick_entity(
     }
 
     closest
+}
+
+/// Test the ray against gizmo arrow AABBs at `gizmo_origin` with given `gizmo_scale`.
+/// Returns the closest hit axis, if any.
+pub fn pick_gizmo_axis(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    gizmo_origin: Vec3,
+    gizmo_scale: f32,
+) -> Option<GizmoAxis> {
+    let half_len = gizmo_scale * 0.5;
+    let half_thick = gizmo_scale * 0.06; // slightly wider than the visual cylinder for easier picking
+
+    let axes = [
+        (GizmoAxis::X, Vec3::X),
+        (GizmoAxis::Y, Vec3::Y),
+        (GizmoAxis::Z, Vec3::Z),
+    ];
+
+    let mut best: Option<(GizmoAxis, f32)> = None;
+    for (axis, dir) in axes {
+        let center = gizmo_origin + dir * half_len;
+        // Build an AABB for the arrow along this axis
+        let extent = dir * half_len + (Vec3::ONE - dir.abs()) * half_thick;
+        let aabb = Aabb::new(center - extent, center + extent);
+        if let Some(dist) = ray_aabb(ray_origin, ray_dir, &aabb) {
+            if best.is_none() || dist < best.unwrap().1 {
+                best = Some((axis, dist));
+            }
+        }
+    }
+
+    best.map(|(axis, _)| axis)
+}
+
+/// Compute the parameter along an axis line where a ray is closest.
+///
+/// Given a ray (ray_origin, ray_dir) and an axis line (axis_origin, axis_dir),
+/// returns `t` such that `axis_origin + axis_dir * t` is the closest point on
+/// the axis to the ray.
+pub fn closest_point_on_axis(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    axis_origin: Vec3,
+    axis_dir: Vec3,
+) -> f32 {
+    // Solve for the closest point between two lines using the standard formula.
+    let w = ray_origin - axis_origin;
+    let a = ray_dir.dot(ray_dir);
+    let b = ray_dir.dot(axis_dir);
+    let c = axis_dir.dot(axis_dir);
+    let d = ray_dir.dot(w);
+    let e = axis_dir.dot(w);
+
+    let denom = a * c - b * b;
+    if denom.abs() < 1e-10 {
+        // Lines are nearly parallel; just project origin difference.
+        return -e / c;
+    }
+
+    // t along axis_dir
+    (b * d - a * e) / denom
 }

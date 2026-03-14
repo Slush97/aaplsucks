@@ -4,4 +4,4 @@
 pub mod spatial;
 
 #[cfg(feature = "audio")]
-pub use spatial::AudioManager;
+pub use spatial::{AudioManager, SoundHandle, SpatialSoundHandle};

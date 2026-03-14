@@ -9,3 +9,4 @@ hot-reload = ["esox_engine/hot-reload"]
 [dependencies]
 esox_engine = { workspace = true, features = ["ui", "rapier", "serialization"] }
 tracing-subscriber = { workspace = true }
+rfd = "0.15"

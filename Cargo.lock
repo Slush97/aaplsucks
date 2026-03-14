@@ -1317,6 +1317,7 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "esox_engine",
+ "rfd",
  "tracing-subscriber",
 ]
 
@@ -1439,6 +1440,7 @@ dependencies = [
  "glam 0.29.3",
  "hecs",
  "kira",
+ "mint",
  "notify",
  "rapier3d",
  "ron",

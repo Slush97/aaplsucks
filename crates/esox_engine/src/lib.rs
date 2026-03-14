@@ -79,6 +79,8 @@ pub struct Ctx<'a> {
     pub physics: &'a mut dyn PhysicsBackend,
     pub entity_map: &'a mut PhysicsEntityMap,
     pub viewport: (u32, u32),
+    #[cfg(feature = "audio")]
+    pub audio: Option<&'a mut audio::AudioManager>,
 }
 
 /// Run the engine with the given config and game implementation.

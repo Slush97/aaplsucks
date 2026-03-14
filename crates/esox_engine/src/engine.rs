@@ -74,6 +74,8 @@ pub(crate) struct Engine {
     entity_map: PhysicsEntityMap,
     viewport: (u32, u32),
     initialized: bool,
+    #[cfg(feature = "audio")]
+    audio: Option<crate::audio::AudioManager>,
     #[cfg(feature = "ui")]
     debug_overlay_visible: bool,
     #[cfg(feature = "ui")]
@@ -104,6 +106,8 @@ impl Engine {
             entity_map: PhysicsEntityMap::new(),
             viewport: (1280, 720),
             initialized: false,
+            #[cfg(feature = "audio")]
+            audio: crate::audio::AudioManager::new(),
             #[cfg(feature = "ui")]
             debug_overlay_visible: false,
             #[cfg(feature = "ui")]
@@ -169,6 +173,8 @@ impl AppDelegate for Engine {
             physics: &mut *self.physics,
             entity_map: &mut self.entity_map,
             viewport: self.viewport,
+            #[cfg(feature = "audio")]
+            audio: self.audio.as_mut(),
         };
         self.game.init(&mut ctx);
 
@@ -216,6 +222,8 @@ impl AppDelegate for Engine {
                     physics: &mut *self.physics,
                     entity_map: &mut self.entity_map,
                     viewport: self.viewport,
+                    #[cfg(feature = "audio")]
+                    audio: self.audio.as_mut(),
                 };
                 self.game.update(&mut ctx);
             }
@@ -251,6 +259,8 @@ impl AppDelegate for Engine {
                 physics: &mut *self.physics,
                 entity_map: &mut self.entity_map,
                 viewport: self.viewport,
+                #[cfg(feature = "audio")]
+                audio: self.audio.as_mut(),
             };
             self.game.render(&mut ctx, alpha);
         }
@@ -285,6 +295,13 @@ impl AppDelegate for Engine {
 
         // 9. Camera sync.
         let camera = camera_sync_system(&self.world).unwrap_or_default();
+
+        // 9.1. Sync audio listener from camera.
+        #[cfg(feature = "audio")]
+        if let Some(ref mut audio) = self.audio {
+            let cam_forward = (camera.target - camera.position).normalize_or_zero();
+            audio.set_listener(camera.position, cam_forward, camera.up);
+        }
 
         // 10. Encode 3D render pass.
         let elapsed = self.timestep.time_state_cache.elapsed;
@@ -346,6 +363,8 @@ impl AppDelegate for Engine {
                 physics: &mut *self.physics,
                 entity_map: &mut self.entity_map,
                 viewport: self.viewport,
+                #[cfg(feature = "audio")]
+                audio: self.audio.as_mut(),
             };
 
             let mut ui = esox_ui::Ui::begin(

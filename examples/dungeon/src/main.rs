@@ -492,7 +492,7 @@ impl Game for Dungeon {
                             let all: Vec<_> = ctx.world.iter().map(|e| e.entity()).collect();
                             for e in all { let _ = ctx.world.despawn(e); }
 
-                            let id_map = esox_engine::scene::load_scene(&scene, ctx.world, ctx.assets);
+                            let id_map = esox_engine::scene::load_scene(&scene, ctx.world, ctx.assets, None, None);
                             eprintln!("[dungeon] scene loaded ({} entities)", id_map.len());
 
                             // Re-find camera entity

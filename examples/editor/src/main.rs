@@ -6,9 +6,10 @@ use esox_engine::esox_gfx::mesh3d::{
 use esox_engine::glam::{self, Mat4, Quat, Vec3};
 use esox_engine::hecs;
 use esox_engine::winit::keyboard::KeyCode;
+use esox_engine::esox_ui::ToastKind;
 use esox_engine::{
     ActionBinding, Camera3D, Ctx, DirectionalLightComponent, EngineConfig, Game, GlobalTransform,
-    MeshRenderer, Tag, Transform3D,
+    MeshRenderer, PointLightComponent, SpotLightComponent, Tag, Transform3D,
 };
 
 mod hierarchy;
@@ -16,7 +17,18 @@ mod inspector;
 mod picking;
 mod undo;
 
-use undo::{EntitySnapshot, UndoAction, UndoStack};
+use undo::{ComponentSnapshot, EntitySnapshot, UndoAction, UndoStack};
+
+// ── Component kinds for add/remove ──
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComponentKind {
+    PointLight,
+    SpotLight,
+    DirLight,
+    Camera,
+    MeshRenderer,
+}
 
 // ── Editor camera ──
 
@@ -203,6 +215,13 @@ enum PendingEdit {
     SetCameraNear(hecs::Entity, f32),
     SetCameraFar(hecs::Entity, f32),
     SetMeshVisible(hecs::Entity, bool),
+    SetMeshTint(hecs::Entity, [f32; 4]),
+    SetPointLightShadows(hecs::Entity, bool),
+    SetSpotLightShadows(hecs::Entity, bool),
+    AddComponent(hecs::Entity, ComponentKind),
+    RemoveComponent(hecs::Entity, ComponentKind),
+    SetMesh(hecs::Entity, MeshHandle),
+    SetMaterial(hecs::Entity, MaterialHandle),
 }
 
 // ── Gizmo mode ──
@@ -253,6 +272,16 @@ struct EditorApp {
     gizmo_drag: Option<GizmoDrag>,
     // Undo/redo
     undo_stack: UndoStack,
+    // Toast notification
+    toast_pending: Option<(ToastKind, String)>,
+    // Unsaved changes modal
+    unsaved_modal_open: bool,
+    unsaved_modal_deferred_action: Option<u64>,
+    // Keyboard shortcuts modal
+    shortcuts_modal_open: bool,
+    // Default mesh+material for adding MeshRenderer components
+    default_mesh: Option<MeshHandle>,
+    default_material: Option<MaterialHandle>,
 }
 
 #[allow(dead_code)]
@@ -290,6 +319,12 @@ impl EditorApp {
             pending_menu_action: None,
             gizmo_drag: None,
             undo_stack: UndoStack::new(),
+            toast_pending: None,
+            unsaved_modal_open: false,
+            unsaved_modal_deferred_action: None,
+            shortcuts_modal_open: false,
+            default_mesh: None,
+            default_material: None,
         }
     }
 
@@ -428,6 +463,21 @@ impl Game for EditorApp {
         self.grid_mesh = Some(grid_mesh);
         self.grid_mat = Some(grid_mat);
 
+        // Default mesh+material for "Add MeshRenderer" component
+        let default_mesh = ctx.renderer.upload_mesh(ctx.gpu, &MeshData::cube(1.0));
+        let default_material = ctx.renderer.create_material(
+            ctx.gpu,
+            &MaterialDescriptor {
+                material_type: MaterialType::PBR,
+                albedo: [0.7, 0.7, 0.7, 1.0],
+                roughness: 0.5,
+                metallic: 0.0,
+                ..Default::default()
+            },
+        );
+        self.default_mesh = Some(default_mesh);
+        self.default_material = Some(default_material);
+
         // Spawn a few default objects so the scene isn't empty
         let floor_mesh = ctx.renderer.upload_mesh(ctx.gpu, &MeshData::cube(1.0));
         let floor_mat = ctx.renderer.create_material(
@@ -476,7 +526,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetPointLightIntensity(entity, v) => {
-                    if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                    if let Ok(mut pl) = ctx.world.get::<&mut PointLightComponent>(entity) {
                         let old = pl.intensity;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditPointLightIntensity { entity, old, new: v },
@@ -486,7 +536,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetPointLightRange(entity, v) => {
-                    if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                    if let Ok(mut pl) = ctx.world.get::<&mut PointLightComponent>(entity) {
                         let old = pl.range;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditPointLightRange { entity, old, new: v },
@@ -496,7 +546,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetSpotLightIntensity(entity, v) => {
-                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
                         let old = sl.intensity;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditSpotLightIntensity { entity, old, new: v },
@@ -506,7 +556,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetSpotLightRange(entity, v) => {
-                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
                         let old = sl.range;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditSpotLightRange { entity, old, new: v },
@@ -526,7 +576,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetPointLightColor(entity, v) => {
-                    if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                    if let Ok(mut pl) = ctx.world.get::<&mut PointLightComponent>(entity) {
                         let old = pl.color;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditPointLightColor { entity, old, new: v },
@@ -536,7 +586,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetSpotLightColor(entity, v) => {
-                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
                         let old = sl.color;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditSpotLightColor { entity, old, new: v },
@@ -546,7 +596,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetSpotLightInnerCone(entity, v) => {
-                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
                         let old = sl.inner_cone_angle;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditSpotLightInnerCone { entity, old, new: v },
@@ -556,7 +606,7 @@ impl Game for EditorApp {
                     }
                 }
                 PendingEdit::SetSpotLightOuterCone(entity, v) => {
-                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
                         let old = sl.outer_cone_angle;
                         self.undo_stack.push_or_merge(
                             UndoAction::EditSpotLightOuterCone { entity, old, new: v },
@@ -622,6 +672,129 @@ impl Game for EditorApp {
                             UndoAction::EditMeshVisible { entity, old, new: v },
                         );
                         mr.visible = v;
+                    }
+                }
+                PendingEdit::SetMeshTint(entity, v) => {
+                    if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(entity) {
+                        let old = mr.tint;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditMeshTint { entity, old, new: v },
+                            elapsed,
+                        );
+                        mr.tint = v;
+                    }
+                }
+                PendingEdit::SetPointLightShadows(entity, v) => {
+                    if let Ok(mut pl) = ctx.world.get::<&mut PointLightComponent>(entity) {
+                        let old = pl.cast_shadows;
+                        self.undo_stack.push(
+                            UndoAction::EditPointLightShadows { entity, old, new: v },
+                        );
+                        pl.cast_shadows = v;
+                    }
+                }
+                PendingEdit::SetSpotLightShadows(entity, v) => {
+                    if let Ok(mut sl) = ctx.world.get::<&mut SpotLightComponent>(entity) {
+                        let old = sl.cast_shadows;
+                        self.undo_stack.push(
+                            UndoAction::EditSpotLightShadows { entity, old, new: v },
+                        );
+                        sl.cast_shadows = v;
+                    }
+                }
+                PendingEdit::AddComponent(entity, kind) => {
+                    if ctx.world.contains(entity) {
+                        match kind {
+                            ComponentKind::PointLight => {
+                                let comp = PointLightComponent {
+                                    color: [1.0, 0.9, 0.8], intensity: 10.0,
+                                    range: 15.0, cast_shadows: false,
+                                };
+                                let _ = ctx.world.insert_one(entity, comp);
+                                self.undo_stack.push(UndoAction::AddComponent {
+                                    entity, kind,
+                                    snapshot: ComponentSnapshot::PointLight(comp),
+                                });
+                            }
+                            ComponentKind::SpotLight => {
+                                let comp = SpotLightComponent {
+                                    color: [1.0, 1.0, 1.0], intensity: 20.0,
+                                    range: 20.0, inner_cone_angle: 0.3,
+                                    outer_cone_angle: 0.5, cast_shadows: false,
+                                };
+                                let _ = ctx.world.insert_one(entity, comp);
+                                self.undo_stack.push(UndoAction::AddComponent {
+                                    entity, kind,
+                                    snapshot: ComponentSnapshot::SpotLight(comp),
+                                });
+                            }
+                            ComponentKind::DirLight => {
+                                let comp = DirectionalLightComponent {
+                                    color: [1.0, 1.0, 1.0], intensity: 2.0,
+                                };
+                                let _ = ctx.world.insert_one(entity, comp);
+                                self.undo_stack.push(UndoAction::AddComponent {
+                                    entity, kind,
+                                    snapshot: ComponentSnapshot::DirLight(comp),
+                                });
+                            }
+                            ComponentKind::Camera => {
+                                let comp = Camera3D::default();
+                                let _ = ctx.world.insert_one(entity, comp);
+                                self.undo_stack.push(UndoAction::AddComponent {
+                                    entity, kind,
+                                    snapshot: ComponentSnapshot::Camera(comp),
+                                });
+                            }
+                            ComponentKind::MeshRenderer => {
+                                if let (Some(mesh), Some(material)) = (self.default_mesh, self.default_material) {
+                                    let comp = MeshRenderer {
+                                        mesh, material,
+                                        tint: [1.0; 4], visible: true,
+                                    };
+                                    let _ = ctx.world.insert_one(entity, comp);
+                                    self.undo_stack.push(UndoAction::AddComponent {
+                                        entity, kind,
+                                        snapshot: ComponentSnapshot::MeshRenderer(comp),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                PendingEdit::RemoveComponent(entity, kind) => {
+                    if ctx.world.contains(entity) {
+                        let snapshot = match kind {
+                            ComponentKind::PointLight => ctx.world.get::<&PointLightComponent>(entity).ok().map(|c| ComponentSnapshot::PointLight(*c)),
+                            ComponentKind::SpotLight => ctx.world.get::<&SpotLightComponent>(entity).ok().map(|c| ComponentSnapshot::SpotLight(*c)),
+                            ComponentKind::DirLight => ctx.world.get::<&DirectionalLightComponent>(entity).ok().map(|c| ComponentSnapshot::DirLight(*c)),
+                            ComponentKind::Camera => ctx.world.get::<&Camera3D>(entity).ok().map(|c| ComponentSnapshot::Camera(*c)),
+                            ComponentKind::MeshRenderer => ctx.world.get::<&MeshRenderer>(entity).ok().map(|c| ComponentSnapshot::MeshRenderer(*c)),
+                        };
+                        if let Some(snapshot) = snapshot {
+                            match kind {
+                                ComponentKind::PointLight => { let _ = ctx.world.remove_one::<PointLightComponent>(entity); }
+                                ComponentKind::SpotLight => { let _ = ctx.world.remove_one::<SpotLightComponent>(entity); }
+                                ComponentKind::DirLight => { let _ = ctx.world.remove_one::<DirectionalLightComponent>(entity); }
+                                ComponentKind::Camera => { let _ = ctx.world.remove_one::<Camera3D>(entity); }
+                                ComponentKind::MeshRenderer => { let _ = ctx.world.remove_one::<MeshRenderer>(entity); }
+                            }
+                            self.undo_stack.push(UndoAction::RemoveComponent { entity, kind, snapshot });
+                        }
+                    }
+                }
+                PendingEdit::SetMesh(entity, handle) => {
+                    if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(entity) {
+                        let old = mr.mesh;
+                        self.undo_stack.push(UndoAction::EditMesh { entity, old, new: handle });
+                        mr.mesh = handle;
+                    }
+                }
+                PendingEdit::SetMaterial(entity, handle) => {
+                    if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(entity) {
+                        let old = mr.material;
+                        self.undo_stack.push(UndoAction::EditMaterial { entity, old, new: handle });
+                        mr.material = handle;
                     }
                 }
             }
@@ -1104,7 +1277,17 @@ impl Game for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut esox_engine::esox_ui::Ui, ctx: &Ctx) {
-        use esox_engine::esox_ui::{Menu, MenuEntry, MenuItem};
+        use esox_engine::esox_ui::{Menu, MenuEntry, MenuItem, ModalAction};
+
+        // Fire pending toast
+        if let Some((kind, msg)) = self.toast_pending.take() {
+            match kind {
+                ToastKind::Success => ui.toast_success(&msg),
+                ToastKind::Error => ui.toast_error(&msg),
+                ToastKind::Info => ui.toast_info(&msg),
+                ToastKind::Warning => ui.toast_warning(&msg),
+            }
+        }
 
         // Menu bar
         let file_label = if self.dirty { "File *" } else { "File" };
@@ -1146,6 +1329,8 @@ impl Game for EditorApp {
                 vec![
                     MenuEntry::Item(MenuItem::new("Reset Camera", 20)),
                     MenuEntry::Item(MenuItem::new("Focus Selected", 21).with_shortcut("F")),
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuItem::new("Keyboard Shortcuts", 22)),
                 ],
             ),
             Menu::new(
@@ -1154,14 +1339,84 @@ impl Game for EditorApp {
                     MenuEntry::Item(MenuItem::new("Add Empty", 30)),
                     MenuEntry::Item(MenuItem::new("Add Cube", 31)),
                     MenuEntry::Item(MenuItem::new("Add Sphere", 32)),
+                    MenuEntry::Separator,
                     MenuEntry::Item(MenuItem::new("Add Point Light", 33)),
                     MenuEntry::Item(MenuItem::new("Add Spot Light", 34)),
+                    MenuEntry::Item(MenuItem::new("Add Directional Light", 35)),
+                    MenuEntry::Separator,
+                    MenuEntry::Item(MenuItem::new("Add Camera", 36)),
                 ],
             ),
         ];
 
         if let Some(action) = ui.menu_bar(menus) {
-            self.pending_menu_action = Some(action);
+            // For destructive actions (new/open/quit), check unsaved changes
+            if self.dirty && matches!(action, 1 | 2 | 9) {
+                self.unsaved_modal_deferred_action = Some(action);
+                self.unsaved_modal_open = true;
+            } else {
+                self.pending_menu_action = Some(action);
+            }
+        }
+
+        // Unsaved changes modal
+        if self.unsaved_modal_open {
+            match ui.modal_confirm(
+                hash("unsaved_modal"),
+                &mut self.unsaved_modal_open,
+                "Unsaved Changes",
+                "You have unsaved changes. Continue without saving?",
+            ) {
+                ModalAction::Confirm => {
+                    if let Some(action) = self.unsaved_modal_deferred_action.take() {
+                        self.pending_menu_action = Some(action);
+                    }
+                }
+                ModalAction::Cancel => {
+                    self.unsaved_modal_deferred_action = None;
+                }
+                ModalAction::None => {}
+            }
+        }
+
+        // Keyboard shortcuts modal
+        if self.shortcuts_modal_open {
+            ui.modal(
+                hash("shortcuts_modal"),
+                &mut self.shortcuts_modal_open,
+                "Keyboard Shortcuts",
+                400.0,
+                |ui| {
+                    let shortcuts = [
+                        ("W", "Translate gizmo"),
+                        ("E", "Rotate gizmo"),
+                        ("R", "Scale gizmo"),
+                        ("F", "Focus selected"),
+                        ("Delete", "Delete entity"),
+                        ("Ctrl+Z", "Undo"),
+                        ("Ctrl+Shift+Z", "Redo"),
+                        ("Ctrl+Y", "Redo (alt)"),
+                        ("Ctrl+D", "Duplicate"),
+                        ("Ctrl+S", "Save"),
+                        ("Ctrl+Shift+S", "Save As"),
+                        ("Ctrl+N", "New Scene"),
+                        ("Ctrl+O", "Open Scene"),
+                        ("MMB drag", "Orbit camera"),
+                        ("Shift+MMB", "Pan camera"),
+                        ("RMB hold", "Fly camera (WASD+QE)"),
+                        ("Scroll", "Zoom"),
+                        ("Ctrl+drag", "Grid snap"),
+                        ("Esc", "Quit"),
+                    ];
+                    for (key, desc) in &shortcuts {
+                        ui.columns(&[0.35, 0.65], |ui, col| match col {
+                            0 => { ui.label(key); }
+                            1 => { ui.muted_label(desc); }
+                            _ => {}
+                        });
+                    }
+                },
+            );
         }
 
         // Main layout: hierarchy | viewport | inspector
@@ -1192,6 +1447,26 @@ impl Game for EditorApp {
                 });
             });
         });
+
+        // Status bar
+        let left = match &self.scene_path {
+            Some(p) => {
+                if self.dirty { format!("{p} *") } else { p.clone() }
+            }
+            None => {
+                if self.dirty { "(untitled) *".to_string() } else { "(untitled)".to_string() }
+            }
+        };
+        let gizmo_str = match self.gizmo_mode {
+            GizmoMode::Translate => "Translate (W)",
+            GizmoMode::Rotate => "Rotate (E)",
+            GizmoMode::Scale => "Scale (R)",
+        };
+        let right = match self.selected {
+            Some(e) => format!("Entity {} | {}", e.to_bits().get(), gizmo_str),
+            None => gizmo_str.to_string(),
+        };
+        ui.status_bar(&left, &right);
     }
 
     fn should_exit(&self) -> bool {
@@ -1216,6 +1491,7 @@ impl EditorApp {
                 self.scene_path = None;
                 self.dirty = false;
                 self.undo_stack.clear();
+                self.toast_pending = Some((ToastKind::Info, "New scene created".into()));
             }
             // Open Scene
             2 => {
@@ -1246,11 +1522,15 @@ impl EditorApp {
                                 self.dirty = false;
                                 self.selected = None;
                                 self.undo_stack.clear();
-                                eprintln!("[editor] opened scene: {}", path.display());
+                                self.toast_pending = Some((ToastKind::Success, format!("Opened: {}", path.display())));
                             }
-                            Err(e) => eprintln!("[editor] failed to parse scene: {e}"),
+                            Err(e) => {
+                                self.toast_pending = Some((ToastKind::Error, format!("Parse error: {e}")));
+                            }
                         },
-                        Err(e) => eprintln!("[editor] failed to read file: {e}"),
+                        Err(e) => {
+                            self.toast_pending = Some((ToastKind::Error, format!("Read error: {e}")));
+                        }
                     }
                 }
             }
@@ -1295,6 +1575,9 @@ impl EditorApp {
                         self.camera.focus_on(pos);
                     }
                 }
+            }
+            22 => {
+                self.shortcuts_modal_open = true;
             }
             12 => {
                 // Delete selected entity
@@ -1416,7 +1699,7 @@ impl EditorApp {
                         ..Default::default()
                     },
                     GlobalTransform::default(),
-                    esox_engine::PointLightComponent {
+                    PointLightComponent {
                         color: [1.0, 0.9, 0.8],
                         intensity: 10.0,
                         range: 15.0,
@@ -1438,7 +1721,7 @@ impl EditorApp {
                         ..Default::default()
                     },
                     GlobalTransform::default(),
-                    esox_engine::SpotLightComponent {
+                    SpotLightComponent {
                         color: [1.0, 1.0, 1.0],
                         intensity: 20.0,
                         range: 20.0,
@@ -1447,6 +1730,51 @@ impl EditorApp {
                         cast_shadows: false,
                     },
                     Tag("Spot Light".to_string()),
+                ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
+                self.selected = Some(entity);
+                self.dirty = true;
+            }
+            35 => {
+                // Add directional light
+                let entity = ctx.world.spawn((
+                    Transform3D {
+                        rotation: Quat::from_euler(
+                            glam::EulerRot::XYZ,
+                            -0.8,
+                            0.5,
+                            0.0,
+                        ),
+                        ..Default::default()
+                    },
+                    GlobalTransform::default(),
+                    DirectionalLightComponent {
+                        color: [1.0, 1.0, 1.0],
+                        intensity: 2.0,
+                    },
+                    Tag("Dir Light".to_string()),
+                ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
+                self.selected = Some(entity);
+                self.dirty = true;
+            }
+            36 => {
+                // Add camera
+                let entity = ctx.world.spawn((
+                    Transform3D {
+                        position: Vec3::new(0.0, 2.0, 5.0),
+                        ..Default::default()
+                    },
+                    GlobalTransform::default(),
+                    Camera3D {
+                        fov_y: FRAC_PI_4,
+                        near: 0.1,
+                        far: 500.0,
+                        active: false,
+                    },
+                    Tag("Camera".to_string()),
                 ));
                 let snapshot = EntitySnapshot::capture(ctx.world, entity);
                 self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
@@ -1463,11 +1791,15 @@ impl EditorApp {
             Ok(ron_str) => match std::fs::write(path, &ron_str) {
                 Ok(()) => {
                     self.dirty = false;
-                    eprintln!("[editor] saved scene: {path}");
+                    self.toast_pending = Some((ToastKind::Success, format!("Saved: {path}")));
                 }
-                Err(e) => eprintln!("[editor] failed to write scene: {e}"),
+                Err(e) => {
+                    self.toast_pending = Some((ToastKind::Error, format!("Write error: {e}")));
+                }
             },
-            Err(e) => eprintln!("[editor] failed to serialize scene: {e}"),
+            Err(e) => {
+                self.toast_pending = Some((ToastKind::Error, format!("Serialize error: {e}")));
+            }
         }
     }
 

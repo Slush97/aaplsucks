@@ -1,9 +1,12 @@
+use esox_engine::esox_gfx::mesh3d::{MaterialHandle, MeshHandle};
 use esox_engine::glam::{Quat, Vec3};
 use esox_engine::hecs::{self, Entity};
 use esox_engine::{
     Camera3D, DirectionalLightComponent, GlobalTransform, MeshRenderer, PointLightComponent,
     SpotLightComponent, Tag, Transform3D,
 };
+
+use crate::ComponentKind;
 
 const MAX_UNDO: usize = 100;
 const MERGE_WINDOW: f32 = 0.5;
@@ -177,6 +180,50 @@ pub enum UndoAction {
         old_rot: Quat,
         new_rot: Quat,
     },
+    EditMeshTint {
+        entity: Entity,
+        old: [f32; 4],
+        new: [f32; 4],
+    },
+    EditPointLightShadows {
+        entity: Entity,
+        old: bool,
+        new: bool,
+    },
+    EditSpotLightShadows {
+        entity: Entity,
+        old: bool,
+        new: bool,
+    },
+    AddComponent {
+        entity: Entity,
+        kind: ComponentKind,
+        snapshot: ComponentSnapshot,
+    },
+    RemoveComponent {
+        entity: Entity,
+        kind: ComponentKind,
+        snapshot: ComponentSnapshot,
+    },
+    EditMesh {
+        entity: Entity,
+        old: MeshHandle,
+        new: MeshHandle,
+    },
+    EditMaterial {
+        entity: Entity,
+        old: MaterialHandle,
+        new: MaterialHandle,
+    },
+}
+
+/// Snapshot of a single removed component for undo restoration.
+pub enum ComponentSnapshot {
+    PointLight(PointLightComponent),
+    SpotLight(SpotLightComponent),
+    DirLight(DirectionalLightComponent),
+    Camera(Camera3D),
+    MeshRenderer(MeshRenderer),
 }
 
 pub struct UndoResult {
@@ -379,7 +426,19 @@ fn try_merge(top: &mut UndoAction, incoming: &UndoAction) -> bool {
             UndoAction::GizmoRotate { entity: e1, new_rot: n, .. },
             UndoAction::GizmoRotate { entity: e2, new_rot: n2, .. },
         ) if *e1 == *e2 => { *n = *n2; true }
-        // Bool toggles don't merge
+        (
+            UndoAction::EditMeshTint { entity: e1, new: n, .. },
+            UndoAction::EditMeshTint { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditMesh { entity: e1, new: n, .. },
+            UndoAction::EditMesh { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditMaterial { entity: e1, new: n, .. },
+            UndoAction::EditMaterial { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        // Bool toggles and add/remove don't merge
         _ => false,
     }
 }
@@ -510,6 +569,18 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.visible = old; }
             (no_select, UndoAction::EditMeshVisible { entity, old, new })
         }
+        UndoAction::EditMeshTint { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.tint = old; }
+            (no_select, UndoAction::EditMeshTint { entity, old, new })
+        }
+        UndoAction::EditPointLightShadows { entity, old, new } => {
+            if let Ok(mut pl) = world.get::<&mut PointLightComponent>(entity) { pl.cast_shadows = old; }
+            (no_select, UndoAction::EditPointLightShadows { entity, old, new })
+        }
+        UndoAction::EditSpotLightShadows { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.cast_shadows = old; }
+            (no_select, UndoAction::EditSpotLightShadows { entity, old, new })
+        }
         UndoAction::GizmoDrag {
             entity,
             old_pos,
@@ -561,6 +632,83 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                 },
             )
         }
+        UndoAction::AddComponent { entity, kind, snapshot: _ } => {
+            // Undo add = remove the component (snapshot current state first)
+            let cur_snapshot = snapshot_component(world, entity, &kind);
+            remove_component(world, entity, &kind);
+            (
+                no_select,
+                UndoAction::AddComponent { entity, kind, snapshot: cur_snapshot },
+            )
+        }
+        UndoAction::RemoveComponent { entity, kind, snapshot } => {
+            // Undo remove = re-add the component from snapshot
+            restore_component(world, entity, snapshot);
+            let cur_snapshot = snapshot_component(world, entity, &kind);
+            (
+                no_select,
+                UndoAction::RemoveComponent {
+                    entity,
+                    kind,
+                    snapshot: cur_snapshot,
+                },
+            )
+        }
+        UndoAction::EditMesh { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.mesh = old; }
+            (no_select, UndoAction::EditMesh { entity, old, new })
+        }
+        UndoAction::EditMaterial { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.material = old; }
+            (no_select, UndoAction::EditMaterial { entity, old, new })
+        }
+    }
+}
+
+fn snapshot_component(world: &hecs::World, entity: Entity, kind: &ComponentKind) -> ComponentSnapshot {
+    match kind {
+        ComponentKind::PointLight => ComponentSnapshot::PointLight(
+            world.get::<&PointLightComponent>(entity).map(|c| *c).unwrap_or(PointLightComponent {
+                color: [1.0, 0.9, 0.8], intensity: 10.0, range: 15.0, cast_shadows: false,
+            }),
+        ),
+        ComponentKind::SpotLight => ComponentSnapshot::SpotLight(
+            world.get::<&SpotLightComponent>(entity).map(|c| *c).unwrap_or(SpotLightComponent {
+                color: [1.0, 1.0, 1.0], intensity: 20.0, range: 20.0,
+                inner_cone_angle: 0.3, outer_cone_angle: 0.5, cast_shadows: false,
+            }),
+        ),
+        ComponentKind::DirLight => ComponentSnapshot::DirLight(
+            world.get::<&DirectionalLightComponent>(entity).map(|c| *c).unwrap_or(DirectionalLightComponent {
+                color: [1.0, 1.0, 1.0], intensity: 2.0,
+            }),
+        ),
+        ComponentKind::Camera => ComponentSnapshot::Camera(
+            world.get::<&Camera3D>(entity).map(|c| *c).unwrap_or_default(),
+        ),
+        ComponentKind::MeshRenderer => ComponentSnapshot::MeshRenderer(
+            *world.get::<&MeshRenderer>(entity).expect("MeshRenderer must exist to snapshot"),
+        ),
+    }
+}
+
+fn remove_component(world: &mut hecs::World, entity: Entity, kind: &ComponentKind) {
+    match kind {
+        ComponentKind::PointLight => { let _ = world.remove_one::<PointLightComponent>(entity); }
+        ComponentKind::SpotLight => { let _ = world.remove_one::<SpotLightComponent>(entity); }
+        ComponentKind::DirLight => { let _ = world.remove_one::<DirectionalLightComponent>(entity); }
+        ComponentKind::Camera => { let _ = world.remove_one::<Camera3D>(entity); }
+        ComponentKind::MeshRenderer => { let _ = world.remove_one::<MeshRenderer>(entity); }
+    }
+}
+
+fn restore_component(world: &mut hecs::World, entity: Entity, snapshot: ComponentSnapshot) {
+    match snapshot {
+        ComponentSnapshot::PointLight(c) => { let _ = world.insert_one(entity, c); }
+        ComponentSnapshot::SpotLight(c) => { let _ = world.insert_one(entity, c); }
+        ComponentSnapshot::DirLight(c) => { let _ = world.insert_one(entity, c); }
+        ComponentSnapshot::Camera(c) => { let _ = world.insert_one(entity, c); }
+        ComponentSnapshot::MeshRenderer(c) => { let _ = world.insert_one(entity, c); }
     }
 }
 
@@ -693,6 +841,18 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.visible = new; }
             (no_select, UndoAction::EditMeshVisible { entity, old, new })
         }
+        UndoAction::EditMeshTint { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.tint = new; }
+            (no_select, UndoAction::EditMeshTint { entity, old, new })
+        }
+        UndoAction::EditPointLightShadows { entity, old, new } => {
+            if let Ok(mut pl) = world.get::<&mut PointLightComponent>(entity) { pl.cast_shadows = new; }
+            (no_select, UndoAction::EditPointLightShadows { entity, old, new })
+        }
+        UndoAction::EditSpotLightShadows { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.cast_shadows = new; }
+            (no_select, UndoAction::EditSpotLightShadows { entity, old, new })
+        }
         UndoAction::GizmoDrag {
             entity,
             old_pos,
@@ -743,6 +903,32 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                     new_rot,
                 },
             )
+        }
+        UndoAction::AddComponent { entity, kind, snapshot } => {
+            // Redo add = re-add from snapshot
+            restore_component(world, entity, snapshot);
+            let cur_snapshot = snapshot_component(world, entity, &kind);
+            (
+                no_select,
+                UndoAction::AddComponent { entity, kind, snapshot: cur_snapshot },
+            )
+        }
+        UndoAction::RemoveComponent { entity, kind, snapshot: _ } => {
+            // Redo remove = remove again (snapshot current first)
+            let cur_snapshot = snapshot_component(world, entity, &kind);
+            remove_component(world, entity, &kind);
+            (
+                no_select,
+                UndoAction::RemoveComponent { entity, kind, snapshot: cur_snapshot },
+            )
+        }
+        UndoAction::EditMesh { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.mesh = new; }
+            (no_select, UndoAction::EditMesh { entity, old, new })
+        }
+        UndoAction::EditMaterial { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.material = new; }
+            (no_select, UndoAction::EditMaterial { entity, old, new })
         }
     }
 }

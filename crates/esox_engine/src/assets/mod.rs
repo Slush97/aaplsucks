@@ -169,6 +169,20 @@ impl AssetManager {
             .map(|s| s.as_str())
     }
 
+    /// Return a sorted list of all registered mesh names.
+    pub fn mesh_name_list(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.mesh_names.values().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Return a sorted list of all registered material names.
+    pub fn material_name_list(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.material_names.values().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// Load a mesh from MeshData synchronously (upload immediately).
     pub fn load_mesh_sync(
         &mut self,

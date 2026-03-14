@@ -38,6 +38,13 @@ impl AssetWatcher {
         })
     }
 
+    /// Watch a directory recursively for file changes.
+    pub fn watch(&mut self, path: &std::path::Path) -> Result<(), notify::Error> {
+        use notify::Watcher;
+        self._watcher
+            .watch(path, notify::RecursiveMode::Recursive)
+    }
+
     /// Drain changed paths since last poll.
     pub fn poll_changes(&self) -> Vec<PathBuf> {
         let mut changed = Vec::new();

@@ -2,6 +2,7 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use esox_engine::esox_gfx::mesh3d::{
     InstanceData, MaterialDescriptor, MaterialHandle, MaterialType, MeshData, MeshHandle,
+    PostProcess3DConfig, ShadowConfig,
 };
 use esox_engine::glam::{self, Mat4, Quat, Vec3};
 use esox_engine::hecs;
@@ -222,6 +223,7 @@ enum PendingEdit {
     RemoveComponent(hecs::Entity, ComponentKind),
     SetMesh(hecs::Entity, MeshHandle),
     SetMaterial(hecs::Entity, MaterialHandle),
+    SetMaterialDescriptor(hecs::Entity, MaterialDescriptor),
 }
 
 // ── Gizmo mode ──
@@ -282,6 +284,11 @@ struct EditorApp {
     // Default mesh+material for adding MeshRenderer components
     default_mesh: Option<MeshHandle>,
     default_material: Option<MaterialHandle>,
+    // Render settings
+    render_settings_open: bool,
+    postprocess_config: PostProcess3DConfig,
+    shadow_config: ShadowConfig,
+    render_config_dirty: bool,
 }
 
 #[allow(dead_code)]
@@ -325,6 +332,10 @@ impl EditorApp {
             shortcuts_modal_open: false,
             default_mesh: None,
             default_material: None,
+            render_settings_open: false,
+            postprocess_config: PostProcess3DConfig::default(),
+            shadow_config: ShadowConfig::default(),
+            render_config_dirty: false,
         }
     }
 
@@ -388,10 +399,20 @@ impl Game for EditorApp {
 
         // Enable post-processing and shadows
         ctx.renderer.enable_postprocess(ctx.gpu);
+        ctx.renderer.enable_ssao(ctx.gpu);
+        ctx.renderer.enable_motion_blur(ctx.gpu);
         ctx.renderer.enable_shadows(ctx.gpu);
         ctx.renderer.enable_point_shadows(ctx.gpu);
         ctx.renderer.enable_spot_shadows(ctx.gpu);
         ctx.renderer.generate_procedural_ibl(ctx.gpu);
+
+        // Initialize render config from engine defaults
+        if let Some(pp) = ctx.renderer.postprocess_config() {
+            self.postprocess_config = pp;
+        }
+        if let Some(sc) = ctx.renderer.shadow_config() {
+            self.shadow_config = sc;
+        }
 
         // Create gizmo materials (unlit, bright colors)
         let red = ctx.renderer.create_material(
@@ -797,7 +818,29 @@ impl Game for EditorApp {
                         mr.material = handle;
                     }
                 }
+                PendingEdit::SetMaterialDescriptor(entity, new_desc) => {
+                    if let Ok(mr) = ctx.world.get::<&MeshRenderer>(entity) {
+                        let handle = mr.material;
+                        if let Some(old_desc) = ctx.renderer.material_descriptor(handle) {
+                            let old_desc = old_desc.clone();
+                            self.undo_stack.push_or_merge(
+                                UndoAction::EditMaterialDescriptor {
+                                    entity, handle, old: old_desc, new: new_desc.clone(),
+                                },
+                                elapsed,
+                            );
+                            ctx.renderer.update_material(ctx.gpu, handle, &new_desc);
+                        }
+                    }
+                }
             }
+        }
+
+        // Apply render config changes
+        if self.render_config_dirty {
+            ctx.renderer.set_postprocess(self.postprocess_config);
+            ctx.renderer.set_shadow_config(self.shadow_config);
+            self.render_config_dirty = false;
         }
 
         // Handle pending menu actions
@@ -1078,6 +1121,9 @@ impl Game for EditorApp {
                         if let Some(sel) = result.select {
                             self.selected = sel;
                         }
+                        if let Some((handle, desc)) = result.material_update {
+                            ctx.renderer.update_material(ctx.gpu, handle, &desc);
+                        }
                         self.dirty = true;
                     }
                 } else {
@@ -1085,6 +1131,9 @@ impl Game for EditorApp {
                     if let Some(result) = self.undo_stack.undo(ctx.world) {
                         if let Some(sel) = result.select {
                             self.selected = sel;
+                        }
+                        if let Some((handle, desc)) = result.material_update {
+                            ctx.renderer.update_material(ctx.gpu, handle, &desc);
                         }
                         self.dirty = true;
                     }
@@ -1277,7 +1326,7 @@ impl Game for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut esox_engine::esox_ui::Ui, ctx: &Ctx) {
-        use esox_engine::esox_ui::{Menu, MenuEntry, MenuItem, ModalAction};
+        use esox_engine::esox_ui::{InputState, Menu, MenuEntry, MenuItem, ModalAction};
 
         // Fire pending toast
         if let Some((kind, msg)) = self.toast_pending.take() {
@@ -1331,6 +1380,12 @@ impl Game for EditorApp {
                     MenuEntry::Item(MenuItem::new("Focus Selected", 21).with_shortcut("F")),
                     MenuEntry::Separator,
                     MenuEntry::Item(MenuItem::new("Keyboard Shortcuts", 22)),
+                ],
+            ),
+            Menu::new(
+                "Render",
+                vec![
+                    MenuEntry::Item(MenuItem::new("Render Settings", 40)),
                 ],
             ),
             Menu::new(
@@ -1415,6 +1470,127 @@ impl Game for EditorApp {
                             _ => {}
                         });
                     }
+                },
+            );
+        }
+
+        // Render settings panel
+        if self.render_settings_open {
+            ui.modal(
+                hash("render_settings_modal"),
+                &mut self.render_settings_open,
+                "Render Settings",
+                350.0,
+                |ui| {
+                    let pp = &mut self.postprocess_config;
+                    let sc = &mut self.shadow_config;
+                    let dirty = &mut self.render_config_dirty;
+
+                    ui.collapsing_header(hash("rs_postprocess"), "Post-Processing", true, |ui| {
+                        // Bloom
+                        let bloom_label = if pp.bloom_enabled { "Bloom: ON" } else { "Bloom: OFF" };
+                        if ui.button(hash("rs_bloom"), bloom_label).clicked {
+                            pp.bloom_enabled = !pp.bloom_enabled;
+                            *dirty = true;
+                        }
+                        if pp.bloom_enabled {
+                            ui.muted_label("Intensity");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.2}", pp.bloom_intensity);
+                            if ui.slider(hash("rs_bloom_int"), &mut input, 0.0, 2.0).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    pp.bloom_intensity = v.clamp(0.0, 2.0);
+                                    *dirty = true;
+                                }
+                            }
+                            ui.muted_label("Threshold");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.2}", pp.bloom_threshold);
+                            if ui.slider(hash("rs_bloom_thr"), &mut input, 0.0, 5.0).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    pp.bloom_threshold = v.clamp(0.0, 5.0);
+                                    *dirty = true;
+                                }
+                            }
+                            ui.muted_label("Soft Knee");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.2}", pp.bloom_soft_knee);
+                            if ui.slider(hash("rs_bloom_knee"), &mut input, 0.0, 1.0).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    pp.bloom_soft_knee = v.clamp(0.0, 1.0);
+                                    *dirty = true;
+                                }
+                            }
+                        }
+
+                        // Tone mapping
+                        let tm_label = if pp.tone_map_enabled { "Tone Mapping: ON" } else { "Tone Mapping: OFF" };
+                        if ui.button(hash("rs_tonemap"), tm_label).clicked {
+                            pp.tone_map_enabled = !pp.tone_map_enabled;
+                            *dirty = true;
+                        }
+
+                        // SSAO
+                        let ssao_label = if pp.ssao_enabled { "SSAO: ON" } else { "SSAO: OFF" };
+                        if ui.button(hash("rs_ssao"), ssao_label).clicked {
+                            pp.ssao_enabled = !pp.ssao_enabled;
+                            *dirty = true;
+                        }
+
+                        // Motion blur
+                        let mb_label = if pp.motion_blur_enabled { "Motion Blur: ON" } else { "Motion Blur: OFF" };
+                        if ui.button(hash("rs_motionblur"), mb_label).clicked {
+                            pp.motion_blur_enabled = !pp.motion_blur_enabled;
+                            *dirty = true;
+                        }
+                    });
+
+                    ui.collapsing_header(hash("rs_shadows"), "Shadows", true, |ui| {
+                        let sh_label = if sc.enabled { "Shadows: ON" } else { "Shadows: OFF" };
+                        if ui.button(hash("rs_shadow_en"), sh_label).clicked {
+                            sc.enabled = !sc.enabled;
+                            *dirty = true;
+                        }
+
+                        if sc.enabled {
+                            ui.muted_label("Cascade Count");
+                            let mut cc = sc.cascade_count as f64;
+                            if ui.number_input_clamped(hash("rs_cascades"), &mut cc, 1.0, 2.0, 4.0).changed {
+                                sc.cascade_count = cc as usize;
+                                *dirty = true;
+                            }
+
+                            ui.muted_label("Shadow Distance");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.0}", sc.shadow_distance);
+                            if ui.slider(hash("rs_shadow_dist"), &mut input, 10.0, 500.0).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    sc.shadow_distance = v.clamp(10.0, 500.0);
+                                    *dirty = true;
+                                }
+                            }
+
+                            ui.muted_label("Depth Bias");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.4}", sc.depth_bias);
+                            if ui.slider(hash("rs_depth_bias"), &mut input, 0.0, 0.01).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    sc.depth_bias = v.clamp(0.0, 0.01);
+                                    *dirty = true;
+                                }
+                            }
+
+                            ui.muted_label("Normal Bias");
+                            let mut input = InputState::new();
+                            input.text = format!("{:.4}", sc.normal_bias);
+                            if ui.slider(hash("rs_normal_bias"), &mut input, 0.0, 0.1).changed {
+                                if let Ok(v) = input.text.parse::<f32>() {
+                                    sc.normal_bias = v.clamp(0.0, 0.1);
+                                    *dirty = true;
+                                }
+                            }
+                        }
+                    });
                 },
             );
         }
@@ -1578,6 +1754,9 @@ impl EditorApp {
             }
             22 => {
                 self.shortcuts_modal_open = true;
+            }
+            40 => {
+                self.render_settings_open = !self.render_settings_open;
             }
             12 => {
                 // Delete selected entity

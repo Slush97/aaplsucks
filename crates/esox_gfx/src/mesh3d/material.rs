@@ -183,6 +183,7 @@ pub(crate) struct Material {
     pub normal_texture: Option<TextureHandle>,
     pub metallic_roughness_texture: Option<TextureHandle>,
     pub emissive_texture: Option<TextureHandle>,
+    pub descriptor: MaterialDescriptor,
 }
 
 /// Convert [`BlendMode3D`] to wgpu blend state.

@@ -119,6 +119,7 @@ pub struct SkinningData {
 // ── Animation types ──
 
 /// A complete animation clip.
+#[derive(Clone)]
 pub struct AnimationClip {
     /// Name from glTF (if present).
     pub name: Option<String>,
@@ -129,6 +130,7 @@ pub struct AnimationClip {
 }
 
 /// A single animation channel targeting one joint's property.
+#[derive(Clone)]
 pub struct AnimChannel {
     /// Index of the targeted joint in the skeleton.
     pub joint_index: usize,

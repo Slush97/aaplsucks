@@ -56,6 +56,8 @@ pub struct AssetManager {
     texture_names: HashMap<AssetId, String>,
     parse_tx: mpsc::Sender<loader::ParseResult>,
     parse_rx: mpsc::Receiver<loader::ParseResult>,
+    #[cfg(feature = "hot-reload")]
+    watcher: Option<watcher::AssetWatcher>,
 }
 
 impl AssetManager {
@@ -71,6 +73,8 @@ impl AssetManager {
             texture_names: HashMap::new(),
             parse_tx: tx,
             parse_rx: rx,
+            #[cfg(feature = "hot-reload")]
+            watcher: watcher::AssetWatcher::new(),
         }
     }
 
@@ -194,9 +198,20 @@ impl AssetManager {
         self.register_mesh(gpu_handle)
     }
 
+    /// Watch a directory for asset changes (hot-reload).
+    #[cfg(feature = "hot-reload")]
+    pub fn watch_directory(&mut self, path: &Path) {
+        if let Some(ref mut watcher) = self.watcher {
+            if let Err(e) = watcher.watch(path) {
+                tracing::warn!("failed to watch directory {}: {e}", path.display());
+            }
+        }
+    }
+
     /// Load a glTF scene asynchronously. Returns an AssetId for tracking.
     pub fn load_gltf_async(&mut self, path: impl AsRef<Path>) -> AssetId {
-        let path = path.as_ref().to_owned();
+        let raw_path = path.as_ref();
+        let path = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_owned());
         if let Some(&id) = self.path_map.get(&path) {
             return id;
         }
@@ -228,6 +243,24 @@ impl AssetManager {
                 }
             }
         }
+    }
+
+    /// Poll for asset file changes and re-load modified assets.
+    #[cfg(feature = "hot-reload")]
+    pub fn poll_asset_reload(&mut self, gpu: &GpuContext, renderer: &mut Renderer3D) {
+        let changed_paths = match self.watcher {
+            Some(ref w) => w.poll_changes(),
+            None => return,
+        };
+        for changed_path in changed_paths {
+            let canonical = changed_path.canonicalize().unwrap_or(changed_path);
+            if let Some(&id) = self.path_map.get(&canonical) {
+                tracing::info!("hot-reloading asset: {}", canonical.display());
+                loader::spawn_gltf_parse(self.parse_tx.clone(), id, canonical);
+            }
+        }
+        // Process any immediately available reload results
+        self.process_uploads(gpu, renderer);
     }
 
     /// Resolve a mesh asset handle to a GPU handle.

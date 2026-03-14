@@ -1,3 +1,4 @@
+use esox_engine::esox_gfx::mesh3d::{BlendMode3D, MaterialType};
 use esox_engine::esox_ui::{InputState, SelectState, Ui};
 use esox_engine::glam::{EulerRot, Quat, Vec3};
 use esox_engine::hecs;
@@ -39,6 +40,7 @@ pub fn draw_inspector(
         draw_transform_section(ui, ctx, entity, edits);
         draw_camera_section(ui, ctx, entity, edits);
         draw_mesh_renderer_section(ui, ctx, entity, edits);
+        draw_material_section(ui, ctx, entity, edits);
         draw_point_light_section(ui, ctx, entity, edits);
         draw_spot_light_section(ui, ctx, entity, edits);
         draw_dir_light_section(ui, ctx, entity, edits);
@@ -255,6 +257,130 @@ fn draw_mesh_renderer_section(
         }
         if tint_changed {
             edits.push(PendingEdit::SetMeshTint(entity, tint));
+        }
+    });
+}
+
+fn draw_material_section(
+    ui: &mut Ui,
+    ctx: &Ctx,
+    entity: hecs::Entity,
+    edits: &mut Vec<PendingEdit>,
+) {
+    let handle = match ctx.world.get::<&MeshRenderer>(entity) {
+        Ok(mr) => mr.material,
+        Err(_) => return,
+    };
+
+    let desc = match ctx.renderer.material_descriptor(handle) {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    ui.collapsing_header(super::hash("sec_material"), "Material Properties", false, |ui| {
+        let mut new_desc = desc.clone();
+        let mut changed = false;
+
+        // Material type select
+        ui.muted_label("Type");
+        let type_choices = ["Unlit", "Lit", "PBR"];
+        let mut sel = SelectState::new();
+        sel.selected_index = match desc.material_type {
+            MaterialType::Unlit => 0,
+            MaterialType::Lit => 1,
+            MaterialType::PBR => 2,
+            _ => 2,
+        };
+        if ui.select(super::hash("mat_type"), &mut sel, &type_choices).changed {
+            new_desc.material_type = match sel.selected_index {
+                0 => MaterialType::Unlit,
+                1 => MaterialType::Lit,
+                _ => MaterialType::PBR,
+            };
+            changed = true;
+        }
+
+        // Albedo RGBA sliders
+        ui.muted_label("Albedo");
+        let labels = ["R", "G", "B", "A"];
+        for i in 0..4 {
+            ui.muted_label(labels[i]);
+            let mut input = InputState::new();
+            input.text = format!("{:.2}", new_desc.albedo[i]);
+            if ui.slider(super::hash(&format!("mat_alb_{i}")), &mut input, 0.0, 1.0).changed {
+                if let Ok(v) = input.text.parse::<f32>() {
+                    new_desc.albedo[i] = v.clamp(0.0, 1.0);
+                    changed = true;
+                }
+            }
+        }
+
+        // Emissive RGB sliders (HDR range)
+        ui.muted_label("Emissive");
+        let em_labels = ["R", "G", "B"];
+        for i in 0..3 {
+            ui.muted_label(em_labels[i]);
+            let mut input = InputState::new();
+            input.text = format!("{:.2}", new_desc.emissive[i]);
+            if ui.slider(super::hash(&format!("mat_em_{i}")), &mut input, 0.0, 10.0).changed {
+                if let Ok(v) = input.text.parse::<f32>() {
+                    new_desc.emissive[i] = v.clamp(0.0, 10.0);
+                    changed = true;
+                }
+            }
+        }
+
+        // PBR-only: metallic + roughness
+        if new_desc.material_type == MaterialType::PBR {
+            ui.muted_label("Metallic");
+            let mut input = InputState::new();
+            input.text = format!("{:.2}", new_desc.metallic);
+            if ui.slider(super::hash("mat_metallic"), &mut input, 0.0, 1.0).changed {
+                if let Ok(v) = input.text.parse::<f32>() {
+                    new_desc.metallic = v.clamp(0.0, 1.0);
+                    changed = true;
+                }
+            }
+
+            ui.muted_label("Roughness");
+            let mut input = InputState::new();
+            input.text = format!("{:.2}", new_desc.roughness);
+            if ui.slider(super::hash("mat_roughness"), &mut input, 0.0, 1.0).changed {
+                if let Ok(v) = input.text.parse::<f32>() {
+                    new_desc.roughness = v.clamp(0.0, 1.0);
+                    changed = true;
+                }
+            }
+        }
+
+        // Blend mode select
+        ui.muted_label("Blend Mode");
+        let blend_choices = ["Opaque", "Alpha Blend", "Additive"];
+        let mut sel = SelectState::new();
+        sel.selected_index = match desc.blend_mode {
+            BlendMode3D::Opaque => 0,
+            BlendMode3D::AlphaBlend => 1,
+            BlendMode3D::Additive => 2,
+            _ => 0,
+        };
+        if ui.select(super::hash("mat_blend"), &mut sel, &blend_choices).changed {
+            new_desc.blend_mode = match sel.selected_index {
+                0 => BlendMode3D::Opaque,
+                1 => BlendMode3D::AlphaBlend,
+                _ => BlendMode3D::Additive,
+            };
+            changed = true;
+        }
+
+        // Double-sided toggle
+        let ds_label = if new_desc.double_sided { "Double Sided: ON" } else { "Double Sided: OFF" };
+        if ui.button(super::hash("mat_double_sided"), ds_label).clicked {
+            new_desc.double_sided = !new_desc.double_sided;
+            changed = true;
+        }
+
+        if changed {
+            edits.push(PendingEdit::SetMaterialDescriptor(entity, new_desc));
         }
     });
 }

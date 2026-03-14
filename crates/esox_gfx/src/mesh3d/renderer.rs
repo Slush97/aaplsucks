@@ -883,6 +883,7 @@ impl Renderer3D {
             normal_texture: None,
             metallic_roughness_texture: None,
             emissive_texture: None,
+            descriptor: default_desc.clone(),
         }];
 
         // ── Depth texture ──
@@ -1179,6 +1180,7 @@ impl Renderer3D {
             normal_texture: desc.normal_texture,
             metallic_roughness_texture: desc.metallic_roughness_texture,
             emissive_texture: desc.emissive_texture,
+            descriptor: desc.clone(),
         });
         handle
     }
@@ -1234,6 +1236,13 @@ impl Renderer3D {
             self.materials[idx].metallic_roughness_texture = desc.metallic_roughness_texture;
             self.materials[idx].emissive_texture = desc.emissive_texture;
         }
+
+        self.materials[idx].descriptor = desc.clone();
+    }
+
+    /// Get the descriptor for an existing material.
+    pub fn material_descriptor(&self, handle: MaterialHandle) -> Option<&MaterialDescriptor> {
+        self.materials.get(handle.0 as usize).map(|m| &m.descriptor)
     }
 
     /// Create a material with a custom WGSL fragment shader.
@@ -1296,6 +1305,7 @@ impl Renderer3D {
             normal_texture: desc.normal_texture,
             metallic_roughness_texture: desc.metallic_roughness_texture,
             emissive_texture: desc.emissive_texture,
+            descriptor: desc.clone(),
         });
         Ok(handle)
     }
@@ -1717,6 +1727,16 @@ impl Renderer3D {
             })
             .collect();
         self.pipeline_cache = new_cache;
+    }
+
+    /// Get the current post-process configuration.
+    pub fn postprocess_config(&self) -> Option<PostProcess3DConfig> {
+        self.postprocess.as_ref().map(|pp| pp.config)
+    }
+
+    /// Get the current shadow configuration.
+    pub fn shadow_config(&self) -> Option<ShadowConfig> {
+        self.shadow_pass.as_ref().map(|sp| sp.config)
     }
 
     /// Set the post-process configuration.

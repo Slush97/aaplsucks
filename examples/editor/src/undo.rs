@@ -1,4 +1,4 @@
-use esox_engine::esox_gfx::mesh3d::{MaterialHandle, MeshHandle};
+use esox_engine::esox_gfx::mesh3d::{MaterialDescriptor, MaterialHandle, MeshHandle};
 use esox_engine::glam::{Quat, Vec3};
 use esox_engine::hecs::{self, Entity};
 use esox_engine::{
@@ -215,6 +215,12 @@ pub enum UndoAction {
         old: MaterialHandle,
         new: MaterialHandle,
     },
+    EditMaterialDescriptor {
+        entity: Entity,
+        handle: MaterialHandle,
+        old: MaterialDescriptor,
+        new: MaterialDescriptor,
+    },
 }
 
 /// Snapshot of a single removed component for undo restoration.
@@ -228,6 +234,7 @@ pub enum ComponentSnapshot {
 
 pub struct UndoResult {
     pub select: Option<Option<Entity>>,
+    pub material_update: Option<(MaterialHandle, MaterialDescriptor)>,
 }
 
 pub struct UndoStack {
@@ -438,6 +445,10 @@ fn try_merge(top: &mut UndoAction, incoming: &UndoAction) -> bool {
             UndoAction::EditMaterial { entity: e1, new: n, .. },
             UndoAction::EditMaterial { entity: e2, new: n2, .. },
         ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditMaterialDescriptor { entity: e1, handle: h1, new: n, .. },
+            UndoAction::EditMaterialDescriptor { entity: e2, handle: h2, new: n2, .. },
+        ) if *e1 == *e2 && *h1 == *h2 => { *n = n2.clone(); true }
         // Bool toggles and add/remove don't merge
         _ => false,
     }
@@ -445,7 +456,7 @@ fn try_merge(top: &mut UndoAction, incoming: &UndoAction) -> bool {
 
 /// Apply the inverse of an action. Returns (result, forward_action_for_redo).
 fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, UndoAction) {
-    let no_select = UndoResult { select: None };
+    let no_select = UndoResult { select: None, material_update: None };
     match action {
         UndoAction::EditTransform { entity, old, new } => {
             if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
@@ -505,6 +516,7 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             (
                 UndoResult {
                     select: Some(None),
+                    material_update: None,
                 },
                 UndoAction::SpawnEntity {
                     entity,
@@ -522,6 +534,7 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             (
                 UndoResult {
                     select: Some(Some(new_entity)),
+                    material_update: None,
                 },
                 UndoAction::DeleteEntity {
                     stale_entity: new_entity,
@@ -662,6 +675,13 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.material = old; }
             (no_select, UndoAction::EditMaterial { entity, old, new })
         }
+        UndoAction::EditMaterialDescriptor { entity, handle, old, new } => {
+            let result = UndoResult {
+                select: None,
+                material_update: Some((handle, old.clone())),
+            };
+            (result, UndoAction::EditMaterialDescriptor { entity, handle, old, new })
+        }
     }
 }
 
@@ -714,7 +734,7 @@ fn restore_component(world: &mut hecs::World, entity: Entity, snapshot: Componen
 
 /// Apply an action forward. Returns (result, same_action_for_undo).
 fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, UndoAction) {
-    let no_select = UndoResult { select: None };
+    let no_select = UndoResult { select: None, material_update: None };
     match action {
         UndoAction::EditTransform { entity, old, new } => {
             if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
@@ -777,6 +797,7 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             (
                 UndoResult {
                     select: Some(Some(new_entity)),
+                    material_update: None,
                 },
                 UndoAction::SpawnEntity {
                     entity: new_entity,
@@ -794,6 +815,7 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
             (
                 UndoResult {
                     select: Some(None),
+                    material_update: None,
                 },
                 UndoAction::DeleteEntity {
                     stale_entity,
@@ -929,6 +951,13 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
         UndoAction::EditMaterial { entity, old, new } => {
             if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.material = new; }
             (no_select, UndoAction::EditMaterial { entity, old, new })
+        }
+        UndoAction::EditMaterialDescriptor { entity, handle, old, new } => {
+            let result = UndoResult {
+                select: None,
+                material_update: Some((handle, new.clone())),
+            };
+            (result, UndoAction::EditMaterialDescriptor { entity, handle, old, new })
         }
     }
 }

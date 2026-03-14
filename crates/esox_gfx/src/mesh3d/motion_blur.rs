@@ -384,10 +384,22 @@ impl MotionBlurPass {
 
         // ── Initial bind groups (placeholder — will be rebuilt before first use) ──
 
+        let placeholder_depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("motion_blur_placeholder_depth"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let placeholder_depth_view = placeholder_depth.create_view(&wgpu::TextureViewDescriptor::default());
+
         let velocity_bind_group = create_velocity_bind_group(
             device,
             &velocity_bind_group_layout,
-            &velocity_view, // depth placeholder — use velocity_view as a dummy depth-compatible view
+            &placeholder_depth_view,
             &point_sampler,
             &velocity_params_buffer,
         );

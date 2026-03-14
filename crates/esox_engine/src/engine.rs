@@ -203,6 +203,10 @@ impl AppDelegate for Engine {
         // 2. Process completed asset uploads.
         self.assets.process_uploads(gpu, renderer);
 
+        // 2.1. Poll asset hot-reload.
+        #[cfg(feature = "hot-reload")]
+        self.assets.poll_asset_reload(gpu, renderer);
+
         // 3. Fixed-rate update loop.
         #[cfg(feature = "ui")]
         let mut physics_us: u64 = 0;

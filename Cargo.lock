@@ -1261,6 +1261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dungeon_explorer"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dwnldr"
 version = "0.1.0"
 dependencies = [

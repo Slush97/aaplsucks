@@ -219,11 +219,6 @@ pub trait AppDelegate {
         None
     }
 
-    /// Maximum frames per second for continuous animations (0 = monitor refresh rate).
-    fn max_fps(&self) -> u32 {
-        0
-    }
-
     /// Whether the application should exit (e.g., child shell has exited).
     fn should_exit(&self) -> bool {
         false
@@ -1597,12 +1592,12 @@ impl ApplicationHandler<AppUserEvent> for App {
             return;
         }
         if self.delegate.needs_continuous_redraw() {
-            let max_fps = self.delegate.max_fps();
-            let effective_fps = if max_fps == 0 {
-                self.monitor_refresh_hz
-            } else {
-                max_fps.min(self.monitor_refresh_hz)
-            };
+            let effective_fps = self
+                .config
+                .frame
+                .max_fps
+                .map(|fps| fps.min(self.monitor_refresh_hz))
+                .unwrap_or(self.monitor_refresh_hz);
             let target_interval =
                 std::time::Duration::from_secs_f64(1.0 / effective_fps.max(1) as f64);
             let now = std::time::Instant::now();

@@ -3,6 +3,9 @@
 //! One small level, ~12 platforms (3 moving), 6 collectibles, third-person camera,
 //! gravity + AABB collision, jump SFX + collect SFX. Win condition: collect all items.
 //!
+//! Player character: Hedgehog (falls back to Fox if Hedgehog.glb not found).
+//! Scattered grass clumps decorate the ground plane.
+//!
 //! Uses trigger volumes for collectible pickup detection and GPU particles for
 //! jump dust, collect sparkle, and win fireworks effects.
 
@@ -10,7 +13,7 @@ use esox_engine::*;
 use esox_engine::glam::{Quat, Vec3};
 use esox_gfx::mesh3d::{
     Aabb, AnimationPlayer, GltfScene, MaterialDescriptor, MaterialType,
-    MeshData, ParticlePoolHandle, PostProcess3DConfig, ShadowConfig,
+    MeshData, ParticlePoolHandle, PostProcess3DConfig, ShadowConfig, SsaoConfig,
 };
 
 use std::f32::consts::{FRAC_PI_4, TAU};
@@ -207,36 +210,44 @@ impl Game for Platformer {
         // ── Materials ──
         let ground_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
-            albedo: [0.4, 0.4, 0.35, 1.0],
-            roughness: 0.9,
+            albedo: [0.28, 0.38, 0.18, 1.0], // earthy green
+            roughness: 0.95,
             metallic: 0.0,
             ..MaterialDescriptor::default()
         });
 
         let platform_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
-            albedo: [0.5, 0.48, 0.42, 1.0],
-            roughness: 0.7,
-            metallic: 0.1,
+            albedo: [0.45, 0.38, 0.28, 1.0], // warm sandstone
+            roughness: 0.75,
+            metallic: 0.05,
             ..MaterialDescriptor::default()
         });
 
         let moving_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
-            albedo: [0.3, 0.45, 0.7, 1.0],
-            roughness: 0.5,
-            metallic: 0.3,
+            albedo: [0.25, 0.50, 0.65, 1.0], // sky blue
+            roughness: 0.45,
+            metallic: 0.25,
+            emissive: [0.02, 0.04, 0.06],
             ..MaterialDescriptor::default()
         });
-
-        // player_mat is no longer needed — Fox.glb brings its own materials.
 
         let collectible_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::PBR,
             albedo: [1.0, 0.85, 0.2, 1.0],
-            roughness: 0.35,
-            metallic: 0.8,
-            emissive: [0.08, 0.06, 0.01],
+            roughness: 0.3,
+            metallic: 0.85,
+            emissive: [0.12, 0.09, 0.02],
+            ..MaterialDescriptor::default()
+        });
+
+        let grass_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
+            material_type: MaterialType::PBR,
+            albedo: [0.22, 0.45, 0.12, 1.0], // bright grass green
+            roughness: 0.85,
+            metallic: 0.0,
+            double_sided: true,
             ..MaterialDescriptor::default()
         });
 
@@ -248,6 +259,11 @@ impl Game for Platformer {
         let torus_data = MeshData::torus(0.3, 0.1, 16, 8);
         let torus_mesh = ctx.renderer.upload_mesh(ctx.gpu, &torus_data);
         ctx.assets.register_mesh(torus_mesh);
+
+        // Grass clump: a small cone to represent a tuft of grass.
+        let grass_data = MeshData::cone(0.15, 0.5, 5);
+        let grass_mesh = ctx.renderer.upload_mesh(ctx.gpu, &grass_data);
+        ctx.assets.register_mesh(grass_mesh);
 
         // ── Player kinematic body (for trigger detection) ──
         // Solid collider (not sensor) so Rapier generates intersection events
@@ -352,40 +368,51 @@ impl Game for Platformer {
 
         self.total = self.collectibles.len() as u32;
 
-        // ── Load Fox model ──
-        let fox_scene = GltfScene::load(Path::new("assets/models/Fox.glb"))
-            .expect("failed to load Fox.glb");
-        let fox_handles = ctx.renderer.upload_gltf_scene(ctx.gpu, fox_scene);
+        // ── Load character model (prefer Hedgehog, fall back to Fox) ──
+        let (model_path, model_label) = if Path::new("assets/models/Hedgehog.glb").exists() {
+            ("assets/models/Hedgehog.glb", "hedgehog")
+        } else {
+            eprintln!("[platformer] Hedgehog.glb not found, falling back to Fox.glb");
+            eprintln!("[platformer] Download a hedgehog GLB from https://poly.pizza/search/hedgehog");
+            ("assets/models/Fox.glb", "fox")
+        };
+        let char_scene = GltfScene::load(Path::new(model_path))
+            .unwrap_or_else(|e| panic!("failed to load {model_path}: {e}"));
+        let char_handles = ctx.renderer.upload_gltf_scene(ctx.gpu, char_scene);
 
-        eprintln!("[platformer] fox: {} meshes, {} materials, {} skins, {} anims",
-            fox_handles.meshes.len(), fox_handles.materials.len(),
-            fox_handles.skins.len(), fox_handles.animations.len());
-        for (i, si) in fox_handles.skinned_mesh_indices.iter().enumerate() {
-            eprintln!("[platformer]   mesh[{}] handle={:?} skinned={:?}", i, fox_handles.meshes[i], si);
+        eprintln!("[platformer] {model_label}: {} meshes, {} materials, {} skins, {} anims",
+            char_handles.meshes.len(), char_handles.materials.len(),
+            char_handles.skins.len(), char_handles.animations.len());
+        for (i, si) in char_handles.skinned_mesh_indices.iter().enumerate() {
+            eprintln!("[platformer]   mesh[{}] handle={:?} skinned={:?}", i, char_handles.meshes[i], si);
         }
-        for (i, a) in fox_handles.animations.iter().enumerate() {
+        for (i, a) in char_handles.animations.iter().enumerate() {
             eprintln!("[platformer]   anim[{}] name={:?} dur={:.2}s", i, a.name, a.duration);
         }
 
-        // Find clip indices by name. Fox has: Survey (0), Walk (1), Run (2).
-        let mut survey_idx = 0;
-        let mut walk_idx = 1;
-        let mut run_idx = 2;
-        for (i, clip) in fox_handles.animations.iter().enumerate() {
-            match clip.name.as_deref() {
-                Some("Survey") => survey_idx = i,
-                Some("Walk") => walk_idx = i,
-                Some("Run") => run_idx = i,
-                _ => {}
+        // Find clip indices by name.
+        // Fox has: Survey (0), Walk (1), Run (2).
+        // Generic models: pick first idle-like and walk/run clips by name heuristics.
+        let mut idle_idx = 0;
+        let mut walk_idx = 1.min(char_handles.animations.len().saturating_sub(1));
+        let mut run_idx = 2.min(char_handles.animations.len().saturating_sub(1));
+        for (i, clip) in char_handles.animations.iter().enumerate() {
+            let name = clip.name.as_deref().unwrap_or("").to_lowercase();
+            if name.contains("survey") || name.contains("idle") {
+                idle_idx = i;
+            } else if name.contains("walk") {
+                walk_idx = i;
+            } else if name.contains("run") {
+                run_idx = i;
             }
         }
 
-        // Build animation graph: Idle (Survey) <-> Locomotion (Walk/Run blend tree)
+        // Build animation graph: Idle <-> Locomotion (Walk/Run blend tree)
         let anim_graph_def = AnimGraphDef {
             states: vec![
                 AnimState {
                     name: "Idle".into(),
-                    source: StateSource::Clip { clip_index: survey_idx },
+                    source: StateSource::Clip { clip_index: idle_idx },
                     looping: true,
                     speed: 1.0,
                     transitions: vec![Transition {
@@ -428,45 +455,106 @@ impl Game for Platformer {
             default_state: 0,
         };
 
+        // Determine model scale — hedgehog models are typically smaller than Fox.
+        let model_scale = if model_label == "hedgehog" { 0.5 } else { 0.02 };
+
         // Find the skinned mesh handle and its index.
-        let fox_mesh = fox_handles.meshes[0];
-        let fox_material = fox_handles.materials[0];
-        let skinned_mesh_index = fox_handles.skinned_mesh_indices[0]
-            .expect("Fox mesh should be skinned");
+        let char_mesh = char_handles.meshes[0];
+        let char_material = char_handles.materials[0];
 
-        // Build animation graph runtime.
-        let player_anim = AnimationPlayer::new(&fox_handles.skins[0]);
-        let anim_graph = AnimGraphRuntime::new(anim_graph_def, player_anim);
+        // Build animation components (only if the model has skin data).
+        let has_skin = !char_handles.skins.is_empty()
+            && char_handles.skinned_mesh_indices.iter().any(|s| s.is_some());
 
-        // ── Spawn player (Fox model) ──
-        // Fox model is large, scale down. The fox faces +Z by default.
-        let player_entity = ctx.world.spawn((
-            Transform3D {
-                position: self.player_pos,
-                scale: Vec3::splat(0.02),
-                ..Transform3D::default()
-            },
-            GlobalTransform::default(),
-            MeshRenderer {
-                mesh: fox_mesh,
-                material: fox_material,
-                tint: [1.0; 4],
-                visible: true,
-            },
-            RigidBodyComponent {
-                handle: player_handle,
-                body_type: BodyType::Kinematic,
-            },
-            AnimGraphController {
-                graph: anim_graph,
-                clips: fox_handles.animations,
-                skinned_mesh_index,
-            },
-        ));
+        let player_entity = if has_skin {
+            let skinned_mesh_index = char_handles.skinned_mesh_indices.iter()
+                .position(|s| s.is_some())
+                .and_then(|i| char_handles.skinned_mesh_indices[i])
+                .expect("model should have at least one skinned mesh");
+            let player_anim = AnimationPlayer::new(&char_handles.skins[0]);
+            let anim_graph = AnimGraphRuntime::new(anim_graph_def, player_anim);
+
+            ctx.world.spawn((
+                Transform3D {
+                    position: self.player_pos,
+                    scale: Vec3::splat(model_scale),
+                    ..Transform3D::default()
+                },
+                GlobalTransform::default(),
+                MeshRenderer {
+                    mesh: char_mesh,
+                    material: char_material,
+                    tint: [1.0; 4],
+                    visible: true,
+                },
+                RigidBodyComponent {
+                    handle: player_handle,
+                    body_type: BodyType::Kinematic,
+                },
+                AnimGraphController {
+                    graph: anim_graph,
+                    clips: char_handles.animations,
+                    skinned_mesh_index,
+                    extra_skinned_indices: vec![],
+                },
+            ))
+        } else {
+            // Static model (no skeleton) — still spawn with rigid body.
+            ctx.world.spawn((
+                Transform3D {
+                    position: self.player_pos,
+                    scale: Vec3::splat(model_scale),
+                    ..Transform3D::default()
+                },
+                GlobalTransform::default(),
+                MeshRenderer {
+                    mesh: char_mesh,
+                    material: char_material,
+                    tint: [1.0; 4],
+                    visible: true,
+                },
+                RigidBodyComponent {
+                    handle: player_handle,
+                    body_type: BodyType::Kinematic,
+                },
+            ))
+        };
         self.player_entity = Some(player_entity);
         ctx.entity_map.insert(player_handle, player_entity);
 
+        // ── Grass clumps ── scattered across the ground plane
+        {
+            // Deterministic pseudo-random scatter using a simple hash.
+            let ground_half = 12.0_f32;
+            let grass_count = 120;
+            for i in 0..grass_count {
+                let hash = ((i * 2654435761u32) >> 16) as f32;
+                let x = (hash % 100.0) / 100.0 * (ground_half * 2.0) - ground_half;
+                let hash2 = (((i.wrapping_mul(1013904223).wrapping_add(1664525)) >> 16) as f32) % 100.0;
+                let z = hash2 / 100.0 * (ground_half * 2.0) - ground_half;
+                let scale_var = 0.7 + (hash % 7.0) / 7.0 * 0.8; // 0.7..1.5
+                let rot_y = hash * 0.1;
+
+                ctx.world.spawn((
+                    Transform3D {
+                        position: Vec3::new(x, 0.0, z),
+                        rotation: Quat::from_rotation_y(rot_y),
+                        scale: Vec3::new(scale_var, scale_var * 1.2, scale_var),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: grass_mesh,
+                        material: grass_mat,
+                        tint: [1.0; 4],
+                        visible: true,
+                    },
+                ));
+            }
+        }
+
         // ── Lights ──
+        // Warm directional (sun)
         ctx.world.spawn((
             Transform3D {
                 position: Vec3::ZERO,
@@ -475,21 +563,52 @@ impl Game for Platformer {
             },
             GlobalTransform::default(),
             DirectionalLightComponent {
-                color: [1.0, 0.95, 0.85],
-                intensity: 2.5,
+                color: [1.0, 0.93, 0.82],
+                intensity: 2.8,
             },
         ));
 
+        // Cool fill light from above
         ctx.world.spawn((
             Transform3D {
-                position: Vec3::new(0.0, 18.0, 0.0),
+                position: Vec3::new(0.0, 20.0, 0.0),
                 ..Transform3D::default()
             },
             GlobalTransform::default(),
             PointLightComponent {
-                color: [0.6, 0.7, 1.0],
-                intensity: 5.0,
-                range: 30.0,
+                color: [0.5, 0.6, 0.9],
+                intensity: 6.0,
+                range: 35.0,
+                cast_shadows: true,
+            },
+        ));
+
+        // Warm accent light near the start area
+        ctx.world.spawn((
+            Transform3D {
+                position: Vec3::new(3.0, 4.0, 0.0),
+                ..Transform3D::default()
+            },
+            GlobalTransform::default(),
+            PointLightComponent {
+                color: [1.0, 0.75, 0.4],
+                intensity: 3.0,
+                range: 12.0,
+                cast_shadows: false,
+            },
+        ));
+
+        // Cool accent near the top platforms
+        ctx.world.spawn((
+            Transform3D {
+                position: Vec3::new(0.0, 15.0, -2.0),
+                ..Transform3D::default()
+            },
+            GlobalTransform::default(),
+            PointLightComponent {
+                color: [0.4, 0.7, 1.0],
+                intensity: 4.0,
+                range: 15.0,
                 cast_shadows: false,
             },
         ));
@@ -516,20 +635,31 @@ impl Game for Platformer {
         ctx.renderer.generate_procedural_ibl(ctx.gpu);
 
         ctx.renderer.set_shadow_config(ShadowConfig {
-            shadow_distance: 40.0,
-            depth_bias: 0.003,
-            normal_bias: 0.03,
+            shadow_distance: 50.0,
+            cascade_count: 3,
+            depth_bias: 0.002,
+            normal_bias: 0.025,
+            light_distance: 60.0,
+            point_depth_bias: 0.005,
+            point_normal_bias: 0.04,
             ..ShadowConfig::default()
         });
 
         ctx.renderer.set_postprocess(PostProcess3DConfig {
             bloom_enabled: true,
-            bloom_intensity: 0.04,
-            bloom_threshold: 3.5,
-            bloom_soft_knee: 0.1,
+            bloom_intensity: 0.06,
+            bloom_threshold: 2.5,
+            bloom_soft_knee: 0.3,
             tone_map_enabled: true,
-            ssao_enabled: false,
+            ssao_enabled: true,
             motion_blur_enabled: false,
+        });
+
+        ctx.renderer.set_ssao_config(SsaoConfig {
+            radius: 0.6,
+            bias: 0.02,
+            intensity: 1.2,
+            kernel_size: 24,
         });
 
         // ── Particles ──

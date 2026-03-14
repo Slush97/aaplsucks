@@ -1,0 +1,9 @@
+[package]
+name = "combat_demo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_engine = { workspace = true, features = ["ui"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

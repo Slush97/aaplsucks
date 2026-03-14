@@ -95,6 +95,7 @@ pub struct GltfNode {
 // ── Skeleton types ──
 
 /// Skeleton data parsed from a glTF skin.
+#[derive(Clone)]
 pub struct GltfSkin {
     /// Joint names (if present in glTF).
     pub joint_names: Vec<Option<String>>,

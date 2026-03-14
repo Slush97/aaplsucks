@@ -278,6 +278,7 @@ fn spawn_minion(
             graph: anim_graph,
             clips: clips.to_vec(),
             skinned_mesh_index,
+            extra_skinned_indices: vec![],
         },
         Team(team),
         LaneMinion,

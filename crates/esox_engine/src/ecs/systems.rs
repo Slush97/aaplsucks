@@ -117,7 +117,11 @@ pub fn animation_system(
     // Animation graph controllers — state machine with crossfade blending.
     for (_e, ctrl) in world.query_mut::<&mut AnimGraphController>() {
         ctrl.graph.advance(dt, &ctrl.clips);
-        renderer.update_joints(gpu, ctrl.skinned_mesh_index, ctrl.graph.skinning_matrices());
+        let matrices = ctrl.graph.skinning_matrices();
+        renderer.update_joints(gpu, ctrl.skinned_mesh_index, matrices);
+        for &idx in &ctrl.extra_skinned_indices {
+            renderer.update_joints(gpu, idx, matrices);
+        }
     }
 }
 

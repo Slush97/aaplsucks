@@ -3,6 +3,24 @@
 //! These replace the terminal-specific `esox_config` with a minimal set of
 //! settings needed by the platform layer.
 
+/// Frame timing configuration.
+#[derive(Debug, Clone)]
+pub struct FrameConfig {
+    /// Maximum render FPS. `None` = match monitor refresh rate.
+    pub max_fps: Option<u32>,
+    /// Fixed game-logic update rate in Hz (default: 60).
+    pub tick_rate: f32,
+}
+
+impl Default for FrameConfig {
+    fn default() -> Self {
+        Self {
+            max_fps: None,
+            tick_rate: 60.0,
+        }
+    }
+}
+
 /// Top-level platform configuration.
 #[derive(Debug, Clone)]
 pub struct PlatformConfig {
@@ -20,6 +38,8 @@ pub struct PlatformConfig {
     pub security: SecurityConfig,
     /// Accessibility settings.
     pub accessibility: AccessibilityConfig,
+    /// Frame timing settings.
+    pub frame: FrameConfig,
 }
 
 impl Default for PlatformConfig {
@@ -32,6 +52,7 @@ impl Default for PlatformConfig {
             msaa: 4,
             security: SecurityConfig::default(),
             accessibility: AccessibilityConfig::default(),
+            frame: FrameConfig::default(),
         }
     }
 }

@@ -548,6 +548,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "combat_demo"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

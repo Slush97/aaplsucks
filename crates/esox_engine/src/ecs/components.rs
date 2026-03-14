@@ -132,4 +132,7 @@ pub struct AnimGraphController {
     pub graph: AnimGraphRuntime,
     pub clips: Vec<AnimationClip>,
     pub skinned_mesh_index: usize,
+    /// Additional skinned mesh indices that share this skeleton's joint matrices.
+    /// Used for multi-primitive models (e.g. knight with Armor/Skin/Boots).
+    pub extra_skinned_indices: Vec<usize>,
 }

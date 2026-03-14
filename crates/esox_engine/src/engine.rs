@@ -23,8 +23,6 @@ use crate::Ctx;
 pub struct EngineConfig {
     /// Platform/window config.
     pub platform: esox_platform::config::PlatformConfig,
-    /// Fixed update rate in Hz (default: 60).
-    pub tick_rate: f32,
     /// 3D clear color.
     pub clear_color: wgpu::Color,
     /// Enable post-processing (bloom, tone mapping, SSAO).
@@ -47,7 +45,6 @@ impl Default for EngineConfig {
                 },
                 ..Default::default()
             },
-            tick_rate: 60.0,
             clear_color: wgpu::Color {
                 r: 0.05,
                 g: 0.05,
@@ -92,7 +89,7 @@ pub(crate) struct Engine {
 
 impl Engine {
     pub fn new(mut config: EngineConfig, game: Box<dyn Game>) -> Self {
-        let tick_rate = config.tick_rate;
+        let tick_rate = config.platform.frame.tick_rate;
         let physics = config.physics.take().unwrap_or_else(|| Box::new(NullPhysics));
         Self {
             config,

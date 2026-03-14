@@ -41,16 +41,16 @@
          tag: Some("wall"), collider: Some((shape: Box(half_extents: (5.0, 2.5, 0.15)), friction: 0.5, restitution: 0.0, is_sensor: false)),
          rigid_body: Some((body_type: Static, mass: 1.0))),
 
-        // Entry hall torches
-        (id: 8, transform: Some((position: (-4.5, 3.0, -3.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.15, 0.4, 0.15))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "torch_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // Entry hall torches (Kenney wood-support model)
+        (id: 8, transform: Some((position: (-4.5, 3.0, -3.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 0.5, 0.5))),
+         mesh_renderer: Some((mesh: "torch_mesh", material: "torch_mat_gltf", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          point_light: Some((color: (1.0, 0.7, 0.3), intensity: 12.0, range: 15.0, cast_shadows: true)),
          particle_emitter: Some((spawn_rate: 30.0, velocity_min: (-0.3, 0.8, -0.3), velocity_max: (0.3, 2.0, 0.3),
              gravity: (0.0, 1.0, 0.0), lifetime: (0.3, 0.8), size: (0.06, 0.01),
              color_start: (1.0, 0.6, 0.1, 0.9), color_end: (1.0, 0.2, 0.0, 0.0), active: true)),
          tag: Some("torch")),
-        (id: 9, transform: Some((position: (4.5, 3.0, -9.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.15, 0.4, 0.15))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "torch_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        (id: 9, transform: Some((position: (4.5, 3.0, -9.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 0.5, 0.5))),
+         mesh_renderer: Some((mesh: "torch_mesh", material: "torch_mat_gltf", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          point_light: Some((color: (1.0, 0.7, 0.3), intensity: 12.0, range: 15.0, cast_shadows: true)),
          particle_emitter: Some((spawn_rate: 30.0, velocity_min: (-0.3, 0.8, -0.3), velocity_max: (0.3, 2.0, 0.3),
              gravity: (0.0, 1.0, 0.0), lifetime: (0.3, 0.8), size: (0.06, 0.01),
@@ -113,9 +113,9 @@
          tag: Some("wall"), collider: Some((shape: Box(half_extents: (3.0, 2.0, 0.15)), friction: 0.5, restitution: 0.0, is_sensor: false)),
          rigid_body: Some((body_type: Static, mass: 1.0))),
 
-        // T-junction torch
-        (id: 21, transform: Some((position: (0.0, 3.0, -23.5), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.15, 0.4, 0.15))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "torch_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // T-junction torch (Kenney wood-support model)
+        (id: 21, transform: Some((position: (0.0, 3.0, -23.5), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 0.5, 0.5))),
+         mesh_renderer: Some((mesh: "torch_mesh", material: "torch_mat_gltf", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          point_light: Some((color: (1.0, 0.7, 0.3), intensity: 10.0, range: 12.0, cast_shadows: true)),
          particle_emitter: Some((spawn_rate: 30.0, velocity_min: (-0.3, 0.8, -0.3), velocity_max: (0.3, 2.0, 0.3),
              gravity: (0.0, 1.0, 0.0), lifetime: (0.3, 0.8), size: (0.06, 0.01),
@@ -172,34 +172,34 @@
          tag: Some("wall"), collider: Some((shape: Box(half_extents: (0.1, 1.75, 2.0)), friction: 0.5, restitution: 0.0, is_sensor: false)),
          rigid_body: Some((body_type: Static, mass: 1.0))),
 
-        // Treasure room torch
-        (id: 33, transform: Some((position: (-8.5, 3.0, -32.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.15, 0.4, 0.15))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "torch_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // Treasure room torch (Kenney wood-support model)
+        (id: 33, transform: Some((position: (-8.5, 3.0, -32.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 0.5, 0.5))),
+         mesh_renderer: Some((mesh: "torch_mesh", material: "torch_mat_gltf", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          point_light: Some((color: (1.0, 0.8, 0.4), intensity: 14.0, range: 15.0, cast_shadows: true)),
          particle_emitter: Some((spawn_rate: 30.0, velocity_min: (-0.3, 0.8, -0.3), velocity_max: (0.3, 2.0, 0.3),
              gravity: (0.0, 1.0, 0.0), lifetime: (0.3, 0.8), size: (0.06, 0.01),
              color_start: (1.0, 0.6, 0.1, 0.9), color_end: (1.0, 0.2, 0.0, 0.0), active: true)),
          tag: Some("torch")),
 
-        // Gold pickups in treasure room
-        (id: 34, transform: Some((position: (-7.0, 0.8, -33.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0))),
-         mesh_renderer: Some((mesh: "gold_sphere", material: "gold", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // Gold pickups in treasure room (Kenney coin model)
+        (id: 34, transform: Some((position: (-7.0, 0.5, -33.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (2.0, 2.0, 2.0))),
+         mesh_renderer: Some((mesh: "coin_mesh", material: "coin_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("pickup")),
-        (id: 35, transform: Some((position: (-5.0, 0.8, -35.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0))),
-         mesh_renderer: Some((mesh: "gold_sphere", material: "gold", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        (id: 35, transform: Some((position: (-5.0, 0.5, -35.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (2.0, 2.0, 2.0))),
+         mesh_renderer: Some((mesh: "coin_mesh", material: "coin_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("pickup")),
-        (id: 36, transform: Some((position: (-3.0, 0.8, -33.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0))),
-         mesh_renderer: Some((mesh: "gold_sphere", material: "gold", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        (id: 36, transform: Some((position: (-3.0, 0.5, -33.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (2.0, 2.0, 2.0))),
+         mesh_renderer: Some((mesh: "coin_mesh", material: "coin_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("pickup")),
 
-        // Pillars in treasure room
-        (id: 37, transform: Some((position: (-7.0, 2.0, -30.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 4.0, 0.5))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "stone_gold", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
-         tag: Some("pillar"), collider: Some((shape: Box(half_extents: (0.25, 2.0, 0.25)), friction: 0.5, restitution: 0.0, is_sensor: false)),
+        // Pillars in treasure room (Kenney column model)
+        (id: 37, transform: Some((position: (-7.0, 1.98, -30.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (2.0, 3.6, 2.0))),
+         mesh_renderer: Some((mesh: "column_mesh", material: "column_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("pillar"), collider: Some((shape: Box(half_extents: (0.5, 2.0, 0.5)), friction: 0.5, restitution: 0.0, is_sensor: false)),
          rigid_body: Some((body_type: Static, mass: 1.0))),
-        (id: 38, transform: Some((position: (-3.0, 2.0, -30.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 4.0, 0.5))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "stone_gold", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
-         tag: Some("pillar"), collider: Some((shape: Box(half_extents: (0.25, 2.0, 0.25)), friction: 0.5, restitution: 0.0, is_sensor: false)),
+        (id: 38, transform: Some((position: (-3.0, 1.98, -30.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (2.0, 3.6, 2.0))),
+         mesh_renderer: Some((mesh: "column_mesh", material: "column_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("pillar"), collider: Some((shape: Box(half_extents: (0.5, 2.0, 0.5)), friction: 0.5, restitution: 0.0, is_sensor: false)),
          rigid_body: Some((body_type: Static, mass: 1.0))),
 
         // ── Exit Chamber (right branch, 6x8x6, centered at x=5, z=-26 to z=-34) ──
@@ -260,32 +260,32 @@
          point_light: Some((color: (0.9, 0.95, 1.0), intensity: 15.0, range: 18.0, cast_shadows: true)),
          tag: Some("light_shaft")),
 
-        // Exit chamber torch
-        (id: 52, transform: Some((position: (7.5, 3.0, -32.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.15, 0.4, 0.15))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "torch_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // Exit chamber torch (Kenney wood-support model)
+        (id: 52, transform: Some((position: (7.5, 3.0, -32.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.5, 0.5, 0.5))),
+         mesh_renderer: Some((mesh: "torch_mesh", material: "torch_mat_gltf", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          point_light: Some((color: (1.0, 0.7, 0.3), intensity: 10.0, range: 12.0, cast_shadows: true)),
          particle_emitter: Some((spawn_rate: 30.0, velocity_min: (-0.3, 0.8, -0.3), velocity_max: (0.3, 2.0, 0.3),
              gravity: (0.0, 1.0, 0.0), lifetime: (0.3, 0.8), size: (0.06, 0.01),
              color_start: (1.0, 0.6, 0.1, 0.9), color_end: (1.0, 0.2, 0.0, 0.0), active: true)),
          tag: Some("torch")),
 
-        // ── Dynamic crates (physics-interactive) ──
-        (id: 53, transform: Some((position: (-4.0, 0.5, -4.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.8, 0.8, 0.8))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "wood", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+        // ── Dynamic barrels (physics-interactive, Kenney barrel model) ──
+        (id: 53, transform: Some((position: (-4.0, 0.36, -4.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.5, 1.5, 1.5))),
+         mesh_renderer: Some((mesh: "barrel_mesh", material: "barrel_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("crate"), rigid_body: Some((body_type: Dynamic, mass: 5.0)),
-         collider: Some((shape: Box(half_extents: (0.4, 0.4, 0.4)), friction: 0.6, restitution: 0.2, is_sensor: false))),
-        (id: 54, transform: Some((position: (3.0, 0.5, -8.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.8, 0.8, 0.8))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "wood", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         collider: Some((shape: Box(half_extents: (0.39, 0.36, 0.39)), friction: 0.6, restitution: 0.2, is_sensor: false))),
+        (id: 54, transform: Some((position: (3.0, 0.36, -8.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.5, 1.5, 1.5))),
+         mesh_renderer: Some((mesh: "barrel_mesh", material: "barrel_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("crate"), rigid_body: Some((body_type: Dynamic, mass: 5.0)),
-         collider: Some((shape: Box(half_extents: (0.4, 0.4, 0.4)), friction: 0.6, restitution: 0.2, is_sensor: false))),
-        (id: 55, transform: Some((position: (0.0, 0.5, -15.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.6, 0.6, 0.6))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "wood", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         collider: Some((shape: Box(half_extents: (0.39, 0.36, 0.39)), friction: 0.6, restitution: 0.2, is_sensor: false))),
+        (id: 55, transform: Some((position: (0.0, 0.29, -15.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.2, 1.2, 1.2))),
+         mesh_renderer: Some((mesh: "barrel_mesh", material: "barrel_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("crate"), rigid_body: Some((body_type: Dynamic, mass: 3.0)),
-         collider: Some((shape: Box(half_extents: (0.3, 0.3, 0.3)), friction: 0.6, restitution: 0.2, is_sensor: false))),
-        (id: 56, transform: Some((position: (5.0, 0.5, -31.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (0.7, 0.7, 0.7))),
-         mesh_renderer: Some((mesh: "stone_cube", material: "wood", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         collider: Some((shape: Box(half_extents: (0.31, 0.29, 0.31)), friction: 0.6, restitution: 0.2, is_sensor: false))),
+        (id: 56, transform: Some((position: (5.0, 0.31, -31.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.3, 1.3, 1.3))),
+         mesh_renderer: Some((mesh: "barrel_mesh", material: "barrel_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
          tag: Some("crate"), rigid_body: Some((body_type: Dynamic, mass: 4.0)),
-         collider: Some((shape: Box(half_extents: (0.35, 0.35, 0.35)), friction: 0.6, restitution: 0.2, is_sensor: false))),
+         collider: Some((shape: Box(half_extents: (0.34, 0.31, 0.34)), friction: 0.6, restitution: 0.2, is_sensor: false))),
 
         // ── Spot lights for dramatic effect ──
         (id: 57, transform: Some((position: (0.0, 4.8, -6.0), rotation: (-0.383, 0.0, 0.0, 0.924), scale: (1.0, 1.0, 1.0))),
@@ -294,5 +294,32 @@
         (id: 58, transform: Some((position: (-5.0, 4.3, -32.0), rotation: (-0.383, 0.0, 0.0, 0.924), scale: (1.0, 1.0, 1.0))),
          spot_light: Some((color: (1.0, 0.9, 0.6), intensity: 6.0, range: 10.0, inner_cone_angle: 0.15, outer_cone_angle: 0.4, cast_shadows: true)),
          tag: Some("spot")),
+
+        // ── Kenney decoration: rocks scattered on floors ──
+        (id: 59, transform: Some((position: (-3.0, 0.1, -5.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0))),
+         mesh_renderer: Some((mesh: "rocks_mesh", material: "rocks_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+        (id: 60, transform: Some((position: (1.0, 0.1, -17.0), rotation: (0.0, 0.38, 0.0, 0.92), scale: (0.8, 0.8, 0.8))),
+         mesh_renderer: Some((mesh: "rocks_mesh", material: "rocks_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+        (id: 61, transform: Some((position: (4.0, 0.1, -33.0), rotation: (0.0, 0.71, 0.0, 0.71), scale: (0.7, 0.7, 0.7))),
+         mesh_renderer: Some((mesh: "rocks_mesh", material: "rocks_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+
+        // ── Kenney decoration: chests in treasure room ──
+        (id: 62, transform: Some((position: (-7.5, 0.1, -35.0), rotation: (0.0, 0.38, 0.0, 0.92), scale: (1.5, 1.5, 1.5))),
+         mesh_renderer: Some((mesh: "chest_mesh", material: "chest_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+        (id: 63, transform: Some((position: (-3.5, 0.1, -35.5), rotation: (0.0, -0.38, 0.0, 0.92), scale: (1.2, 1.2, 1.2))),
+         mesh_renderer: Some((mesh: "chest_mesh", material: "chest_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+
+        // ── Kenney decoration: banners on walls ──
+        (id: 64, transform: Some((position: (-4.8, 2.5, -6.0), rotation: (0.0, 0.71, 0.0, 0.71), scale: (1.0, 1.0, 1.0))),
+         mesh_renderer: Some((mesh: "banner_mesh", material: "banner_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
+        (id: 65, transform: Some((position: (4.8, 2.5, -3.0), rotation: (0.0, -0.71, 0.0, 0.71), scale: (1.0, 1.0, 1.0))),
+         mesh_renderer: Some((mesh: "banner_mesh", material: "banner_mat", tint: (1.0, 1.0, 1.0, 1.0), visible: true)),
+         tag: Some("decor")),
     ],
 )

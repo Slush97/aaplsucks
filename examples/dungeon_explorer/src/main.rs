@@ -17,29 +17,40 @@ use std::path::Path;
 /// Register all dungeon assets (glTF if present, procedural fallbacks always).
 /// After this, `load_scene` can resolve mesh/material names like "stone_cube", "gold", etc.
 fn register_dungeon_assets(ctx: &mut Ctx) {
-    // Try loading glTF assets from assets/dungeon/
+    // Try loading specific Kenney Mini Dungeon GLB assets from assets/dungeon/
     let asset_dir = Path::new("assets/dungeon");
-    if asset_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(asset_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "glb" || e == "gltf") {
-                    let name = path.file_stem().unwrap().to_string_lossy().to_string();
-                    match GltfScene::load(&path) {
-                        Ok(scene) => {
-                            let handles = ctx.renderer.upload_gltf_scene(ctx.gpu, scene);
-                            if let (Some(&mesh), Some(&mat)) =
-                                (handles.meshes.first(), handles.materials.first())
-                            {
-                                ctx.assets.register_mesh_named(format!("gltf_{name}"), mesh);
-                                ctx.assets.register_material_named(format!("gltf_{name}_mat"), mat);
-                                eprintln!("[dungeon_explorer] loaded glTF asset: {name}");
-                            }
-                        }
-                        Err(e) => eprintln!("[dungeon_explorer] failed to load {}: {e}", path.display()),
-                    }
+    let glb_assets: &[(&str, &str)] = &[
+        ("barrel.glb",       "barrel"),
+        ("coin.glb",         "coin"),
+        ("column.glb",       "column"),
+        ("wood-support.glb", "torch"),
+        ("chest.glb",        "chest"),
+        ("rocks.glb",        "rocks"),
+        ("stones.glb",       "stones"),
+        ("banner.glb",       "banner"),
+    ];
+
+    for &(filename, prefix) in glb_assets {
+        let path = asset_dir.join(filename);
+        match GltfScene::load(&path) {
+            Ok(scene) => {
+                let handles = ctx.renderer.upload_gltf_scene(ctx.gpu, scene);
+                if let (Some(&mesh), Some(&mat)) =
+                    (handles.meshes.first(), handles.materials.first())
+                {
+                    let mesh_name = format!("{prefix}_mesh");
+                    // Avoid colliding with procedural "torch_mat" by using "torch_mat_gltf"
+                    let mat_name = if prefix == "torch" {
+                        format!("{prefix}_mat_gltf")
+                    } else {
+                        format!("{prefix}_mat")
+                    };
+                    ctx.assets.register_mesh_named(&mesh_name, mesh);
+                    ctx.assets.register_material_named(&mat_name, mat);
+                    eprintln!("[dungeon_explorer] loaded glTF asset: {filename} as {mesh_name}/{mat_name}");
                 }
             }
+            Err(e) => eprintln!("[dungeon_explorer] failed to load {}: {e}", path.display()),
         }
     }
 
@@ -189,6 +200,9 @@ impl Game for DungeonExplorer {
         ctx.input.bind_action("load", ActionBinding::Key(KeyCode::F9));
         ctx.input.bind_action("exit", ActionBinding::Key(KeyCode::Escape));
 
+        // Grab cursor for first-person mouse look.
+        ctx.input.set_cursor_grab(true);
+
         // ── Register assets ──
         register_dungeon_assets(ctx);
 
@@ -242,9 +256,12 @@ impl Game for DungeonExplorer {
 
         // ── Audio ──
         if let Some(ref mut audio) = ctx.audio {
-            self.audio_handles.footstep_sfx = audio.load("assets/audio/footstep.ogg").ok();
-            self.audio_handles.ambient_sfx = audio.load("assets/audio/ambient.ogg").ok();
-            self.audio_handles.torch_sfx = audio.load("assets/audio/fire_crackle.ogg").ok();
+            self.audio_handles.footstep_sfx = audio.load("assets/audio/footstep.ogg")
+                .map_err(|e| eprintln!("[dungeon_explorer] footstep audio: {e}")).ok();
+            self.audio_handles.ambient_sfx = audio.load("assets/audio/ambient.ogg")
+                .map_err(|e| eprintln!("[dungeon_explorer] ambient audio: {e}")).ok();
+            self.audio_handles.torch_sfx = audio.load("assets/audio/fire_crackle.ogg")
+                .map_err(|e| eprintln!("[dungeon_explorer] fire_crackle audio: {e}")).ok();
 
             // Play ambient music if available
             if let Some(ambient) = self.audio_handles.ambient_sfx {

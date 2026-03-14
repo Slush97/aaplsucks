@@ -2167,6 +2167,30 @@ impl Renderer3D {
 
         let mut stats = BatchStats3D::default();
 
+        // ── Pre-cull: collect all opaque draw data for shadow passes ──
+        // Point/spot light shadow maps must render ALL opaque geometry, not just
+        // what the camera can see, otherwise shadows disappear when the light
+        // source leaves the camera frustum.
+        let shadow_opaque_cmds: Vec<(u32, u32, u32)> = self
+            .draw_cmds
+            .iter()
+            .filter(|cmd| {
+                let mesh_idx = cmd.mesh.0 as usize;
+                if (cmd.mesh.0 & SKINNED_MESH_BIT) != 0 {
+                    return false;
+                }
+                if mesh_idx >= self.mesh_regions.len() {
+                    return false;
+                }
+                let mat_idx = cmd.material.0 as usize;
+                if mat_idx >= self.materials.len() {
+                    return false;
+                }
+                matches!(self.materials[mat_idx].pipeline_key.blend_mode, BlendMode3D::Opaque)
+            })
+            .map(|cmd| (cmd.mesh.0, cmd.instance_offset, cmd.instance_count))
+            .collect();
+
         // ── Frustum culling ──
         let frustum = Frustum::from_view_projection(&vp);
 
@@ -2413,20 +2437,13 @@ impl Renderer3D {
                         );
                         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-                        for &oi_idx in &opaque_cmds {
-                            let cmd = &self.draw_cmds[oi_idx];
-                            if (cmd.mesh.0 & SKINNED_MESH_BIT) != 0 {
-                                continue;
-                            }
-                            let mesh_idx = cmd.mesh.0 as usize;
-                            if mesh_idx >= self.mesh_regions.len() {
-                                continue;
-                            }
+                        for &(mesh_raw, inst_offset, inst_count) in &shadow_opaque_cmds {
+                            let mesh_idx = mesh_raw as usize;
                             let r = &self.mesh_regions[mesh_idx];
                             pass.draw_indexed(
                                 r.index_offset..r.index_offset + r.index_count,
                                 r.vertex_offset as i32,
-                                cmd.instance_offset..cmd.instance_offset + cmd.instance_count,
+                                inst_offset..inst_offset + inst_count,
                             );
                         }
                     }
@@ -2457,20 +2474,13 @@ impl Renderer3D {
                     );
                     pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-                    for &oi_idx in &opaque_cmds {
-                        let cmd = &self.draw_cmds[oi_idx];
-                        if (cmd.mesh.0 & SKINNED_MESH_BIT) != 0 {
-                            continue;
-                        }
-                        let mesh_idx = cmd.mesh.0 as usize;
-                        if mesh_idx >= self.mesh_regions.len() {
-                            continue;
-                        }
+                    for &(mesh_raw, inst_offset, inst_count) in &shadow_opaque_cmds {
+                        let mesh_idx = mesh_raw as usize;
                         let r = &self.mesh_regions[mesh_idx];
                         pass.draw_indexed(
                             r.index_offset..r.index_offset + r.index_count,
                             r.vertex_offset as i32,
-                            cmd.instance_offset..cmd.instance_offset + cmd.instance_count,
+                            inst_offset..inst_offset + inst_count,
                         );
                     }
                 }

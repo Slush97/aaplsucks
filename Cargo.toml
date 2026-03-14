@@ -15,8 +15,8 @@ members = [
     "examples/dungeon_explorer",
     "examples/editor",
     "examples/shadow_test",
-    "apps/dwnldr-gui",
 ]
+exclude = ["apps/dwnldr-gui"]
 
 [workspace.package]
 version = "0.1.0"

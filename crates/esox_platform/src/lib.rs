@@ -293,6 +293,14 @@ pub trait AppDelegate {
     fn cursor_icon(&self, _x: f64, _y: f64) -> winit::window::CursorIcon {
         winit::window::CursorIcon::Text
     }
+
+    /// Whether the cursor should be grabbed (confined to the window) and hidden.
+    ///
+    /// When `true`, the platform hides the cursor and locks it to the window
+    /// center, providing relative mouse motion for camera control. Defaults to `false`.
+    fn cursor_grabbed(&self) -> bool {
+        false
+    }
 }
 
 /// Mouse input event dispatched from platform to the delegate.
@@ -327,6 +335,8 @@ pub enum MouseInputEvent {
         /// Scroll delta (positive = up/left).
         delta_y: f32,
     },
+    /// Raw mouse motion delta (from `DeviceEvent`; used when cursor is grabbed).
+    RawMotion { dx: f64, dy: f64 },
     /// Cursor left the window surface.
     Left,
 }
@@ -435,6 +445,8 @@ pub struct App {
     last_redraw: std::time::Instant,
     /// Whether a redraw has been requested but not yet serviced.
     redraw_pending: bool,
+    /// Whether the cursor is currently grabbed (locked + hidden).
+    cursor_grabbed: bool,
     /// Count of consecutive render failures (for device-lost recovery).
     consecutive_render_failures: u32,
     /// Whether a screenshot should be captured on the next frame.
@@ -475,6 +487,7 @@ impl App {
             monitor_refresh_hz: 60,
             last_redraw: std::time::Instant::now(),
             redraw_pending: false,
+            cursor_grabbed: false,
             consecutive_render_failures: 0,
             screenshot_pending: false,
             pipeline_rx: None,
@@ -908,10 +921,12 @@ impl ApplicationHandler<AppUserEvent> for App {
                     x: position.x,
                     y: position.y,
                 });
-                // Update OS cursor icon based on pointer position.
-                if let Some(window) = self.window.as_ref() {
-                    let icon = self.delegate.cursor_icon(position.x, position.y);
-                    window.set_cursor(winit::window::Cursor::Icon(icon));
+                // Update OS cursor icon based on pointer position (skip when grabbed).
+                if !self.cursor_grabbed {
+                    if let Some(window) = self.window.as_ref() {
+                        let icon = self.delegate.cursor_icon(position.x, position.y);
+                        window.set_cursor(winit::window::Cursor::Icon(icon));
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -986,6 +1001,17 @@ impl ApplicationHandler<AppUserEvent> for App {
                 }
             }
             WindowEvent::Focused(focused) => {
+                // Release cursor grab on focus loss so the user can interact
+                // with other windows. It will be re-acquired on the next
+                // redraw if the delegate still wants it.
+                if !focused && self.cursor_grabbed {
+                    self.cursor_grabbed = false;
+                    if let Some(window) = self.window.as_ref() {
+                        use winit::window::CursorGrabMode;
+                        let _ = window.set_cursor_grab(CursorGrabMode::None);
+                        window.set_cursor_visible(true);
+                    }
+                }
                 self.delegate.on_focus_changed(focused);
                 if !self.redraw_pending
                     && let Some(window) = self.window.as_ref()
@@ -1001,6 +1027,26 @@ impl ApplicationHandler<AppUserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 self.last_redraw = std::time::Instant::now();
+
+                // Sync cursor grab/hide state with delegate.
+                let want_grab = self.delegate.cursor_grabbed();
+                if want_grab != self.cursor_grabbed {
+                    self.cursor_grabbed = want_grab;
+                    if let Some(window) = self.window.as_ref() {
+                        if want_grab {
+                            // Try Locked first (raw motion), fall back to Confined.
+                            use winit::window::CursorGrabMode;
+                            if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+                            }
+                            window.set_cursor_visible(false);
+                        } else {
+                            use winit::window::CursorGrabMode;
+                            let _ = window.set_cursor_grab(CursorGrabMode::None);
+                            window.set_cursor_visible(true);
+                        }
+                    }
+                }
 
                 // Hot-reload post-process shader if a file change was detected.
                 if self.shader_reload_pending {
@@ -1500,6 +1546,22 @@ impl ApplicationHandler<AppUserEvent> for App {
         {
             window.request_redraw();
             self.redraw_pending = true;
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        // When the cursor is grabbed, CursorMoved window events stop firing.
+        // Raw device motion still arrives here, so forward it to the delegate.
+        if self.cursor_grabbed {
+            if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+                self.delegate
+                    .on_mouse(MouseInputEvent::RawMotion { dx: delta.0, dy: delta.1 });
+            }
         }
     }
 

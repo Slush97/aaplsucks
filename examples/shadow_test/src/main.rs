@@ -439,6 +439,9 @@ impl Game for ShadowTest {
         ctx.input.bind_action("scene_5", ActionBinding::Key(KeyCode::Digit5));
         ctx.input.bind_action("scene_6", ActionBinding::Key(KeyCode::Digit6));
 
+        // Grab cursor for first-person mouse look.
+        ctx.input.set_cursor_grab(true);
+
         // Upload shared meshes
         let cube_data = MeshData::cube(1.0);
         let cube_mesh = ctx.renderer.upload_mesh(ctx.gpu, &cube_data);

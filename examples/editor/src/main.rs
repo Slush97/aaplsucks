@@ -947,6 +947,11 @@ impl Game for EditorApp {
         }
 
         self.camera.update(ctx);
+
+        // Grab cursor while orbiting (MMB) or flying (RMB).
+        let grab = ctx.input.is_mouse_button_down(1) || ctx.input.is_mouse_button_down(2);
+        ctx.input.set_cursor_grab(grab);
+
         self.sync_camera_entity(ctx);
     }
 

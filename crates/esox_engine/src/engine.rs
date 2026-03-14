@@ -453,6 +453,9 @@ impl AppDelegate for Engine {
                 #[cfg(feature = "ui")]
                 self.ui_state.process_scroll(_x as f32, _y as f32, _delta_y);
             }
+            MouseInputEvent::RawMotion { dx, dy } => {
+                self.input.handle_raw_mouse_motion(dx, dy);
+            }
             MouseInputEvent::Left => {}
         }
     }
@@ -491,6 +494,10 @@ impl AppDelegate for Engine {
 
     fn needs_continuous_redraw(&self) -> bool {
         true
+    }
+
+    fn cursor_grabbed(&self) -> bool {
+        self.input.cursor_grabbed()
     }
 
     fn should_exit(&self) -> bool {

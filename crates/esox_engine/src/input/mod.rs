@@ -55,6 +55,9 @@ pub struct InputManager {
     pub(crate) scroll_delta: f32,
     /// Snapshot for the current frame.
     scroll_frame: f32,
+
+    /// Whether the cursor should be grabbed (confined + hidden) for mouse-look.
+    cursor_grab: bool,
 }
 
 impl InputManager {
@@ -77,6 +80,7 @@ impl InputManager {
             scroll_accum: 0.0,
             scroll_delta: 0.0,
             scroll_frame: 0.0,
+            cursor_grab: false,
         }
     }
 
@@ -187,6 +191,16 @@ impl InputManager {
         self.scroll_delta
     }
 
+    /// Set whether the cursor should be grabbed (confined + hidden) for mouse-look.
+    pub fn set_cursor_grab(&mut self, grab: bool) {
+        self.cursor_grab = grab;
+    }
+
+    /// Whether the cursor is currently grabbed.
+    pub fn cursor_grabbed(&self) -> bool {
+        self.cursor_grab
+    }
+
     /// Whether a mouse button is currently held (0=left, 1=middle, 2=right).
     pub fn is_mouse_button_down(&self, button: u8) -> bool {
         self.mouse_buttons_down
@@ -217,6 +231,15 @@ impl InputManager {
         let dx = x - self.mouse_pos.0;
         let dy = y - self.mouse_pos.1;
         self.mouse_pos = (x, y);
+        self.mouse_delta_accum.0 += dx;
+        self.mouse_delta_accum.1 += dy;
+    }
+
+    /// Accumulate raw mouse motion deltas (from `DeviceEvent::MouseMotion`).
+    ///
+    /// Used when the cursor is grabbed — `CursorMoved` window events stop
+    /// firing, but raw device motion is still delivered.
+    pub(crate) fn handle_raw_mouse_motion(&mut self, dx: f64, dy: f64) {
         self.mouse_delta_accum.0 += dx;
         self.mouse_delta_accum.1 += dy;
     }

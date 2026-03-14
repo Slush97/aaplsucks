@@ -354,6 +354,9 @@ impl Game for Dungeon {
         ctx.input.bind_action("load", ActionBinding::Key(KeyCode::F9));
         ctx.input.bind_action("exit", ActionBinding::Key(KeyCode::Escape));
 
+        // Grab cursor for first-person mouse look.
+        ctx.input.set_cursor_grab(true);
+
         // Shared cube mesh — uploaded once, reused by all room builders.
         let cube_data = MeshData::cube(1.0);
         let cube_mesh = ctx.renderer.upload_mesh(ctx.gpu, &cube_data);

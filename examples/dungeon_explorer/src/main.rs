@@ -5,7 +5,7 @@
 use esox_engine::*;
 use esox_engine::glam::{Quat, Vec3};
 use esox_engine::esox_gfx::mesh3d::{
-    GltfScene, MaterialDescriptor, MaterialType, MeshData,
+    BlendMode3D, GltfScene, MaterialDescriptor, MaterialType, MeshData,
     MaterialHandle, ParticlePoolHandle, PostProcess3DConfig,
 };
 
@@ -144,6 +144,10 @@ struct DungeonExplorer {
     particle_mat: Option<MaterialHandle>,
     audio_handles: AudioHandles,
     exit: bool,
+    // Escape menu state
+    menu_open: bool,
+    menu_volume: esox_engine::esox_ui::InputState,
+    menu_mouse_sens: esox_engine::esox_ui::InputState,
 }
 
 #[allow(dead_code)]
@@ -167,6 +171,10 @@ impl Default for AudioHandles {
 
 impl DungeonExplorer {
     fn new() -> Self {
+        let mut volume_input = esox_engine::esox_ui::InputState::new();
+        volume_input.text = "100".into();
+        let mut sens_input = esox_engine::esox_ui::InputState::new();
+        sens_input.text = "3.0".into();
         Self {
             yaw: 0.0,
             pitch: 0.0,
@@ -182,6 +190,9 @@ impl DungeonExplorer {
             particle_mat: None,
             audio_handles: AudioHandles::default(),
             exit: false,
+            menu_open: false,
+            menu_volume: volume_input,
+            menu_mouse_sens: sens_input,
         }
     }
 }
@@ -210,6 +221,8 @@ impl Game for DungeonExplorer {
         let particle_mat = ctx.renderer.create_material(ctx.gpu, &MaterialDescriptor {
             material_type: MaterialType::Unlit,
             albedo: [1.0, 1.0, 1.0, 1.0],
+            blend_mode: BlendMode3D::Additive,
+            depth_write: false,
             ..MaterialDescriptor::default()
         });
         self.particle_mat = Some(particle_mat);
@@ -287,8 +300,22 @@ impl Game for DungeonExplorer {
     }
 
     fn update(&mut self, ctx: &mut Ctx) {
+        // Sync cursor grab with menu state (handles Resume button from UI).
+        ctx.input.set_cursor_grab(!self.menu_open);
+
         if ctx.input.just_pressed("exit") {
-            self.exit = true;
+            self.menu_open = !self.menu_open;
+            ctx.input.set_cursor_grab(!self.menu_open);
+            return;
+        }
+
+        // Skip gameplay input while menu is open.
+        if self.menu_open {
+            // Apply volume from menu slider.
+            let vol: f32 = self.menu_volume.text.parse().unwrap_or(100.0);
+            if let Some(ref mut audio) = ctx.audio {
+                audio.set_volume((vol / 100.0).clamp(0.0, 1.0) as f64);
+            }
             return;
         }
 
@@ -298,7 +325,8 @@ impl Game for DungeonExplorer {
         // ── Mouse look ──
         let look_x = ctx.input.axis("look_x");
         let look_y = ctx.input.axis("look_y");
-        let sensitivity = 0.003;
+        let sens_multiplier: f32 = self.menu_mouse_sens.text.parse().unwrap_or(3.0);
+        let sensitivity = 0.001 * sens_multiplier;
 
         self.yaw -= look_x * sensitivity;
         self.pitch = (self.pitch - look_y * sensitivity).clamp(-1.4, 1.4);
@@ -452,6 +480,56 @@ impl Game for DungeonExplorer {
             ui.label_colored(&format!("FPS: {fps}"), Color::new(0.6, 0.6, 0.6, 1.0));
         });
 
+        if self.menu_open {
+            // ── Escape menu ──
+            let menu_w = 340.0;
+            let center_y = ctx.viewport.1 as f32 / 2.0 - 180.0;
+            let current_y = ui.cursor_y();
+            if center_y > current_y {
+                ui.add_space(center_y - current_y);
+            }
+            ui.center_horizontal(menu_w, |ui| {
+                ui.max_width(menu_w, |ui| {
+                    ui.card(|ui| {
+                        ui.heading("Paused");
+                        ui.add_space(12.0);
+
+                        // Volume slider
+                        ui.label("Master Volume");
+                        ui.add_space(4.0);
+                        let vol_resp = ui.slider(0xA001, &mut self.menu_volume, 0.0, 100.0);
+                        if vol_resp.changed {
+                            // Slider stores value as text in InputState
+                        }
+                        ui.add_space(12.0);
+
+                        // Mouse sensitivity slider
+                        ui.label("Mouse Sensitivity");
+                        ui.add_space(4.0);
+                        ui.slider(0xA002, &mut self.menu_mouse_sens, 0.5, 10.0);
+                        ui.add_space(16.0);
+
+                        ui.separator();
+                        ui.add_space(12.0);
+
+                        // Resume
+                        if ui.button(0xA010, "Resume").clicked {
+                            self.menu_open = false;
+                        }
+                        ui.add_space(8.0);
+
+                        // Exit
+                        if ui.danger_button(0xA011, "Exit Game").clicked {
+                            self.exit = true;
+                        }
+                    });
+                });
+            });
+            return;
+        }
+
+        // ── Normal HUD ──
+
         // Crosshair (center)
         let center_y = ctx.viewport.1 as f32 / 2.0;
         let current_y = ui.cursor_y();
@@ -496,7 +574,7 @@ impl Game for DungeonExplorer {
         // Controls hint
         ui.padding(16.0, |ui| {
             ui.label_colored(
-                "WASD: Move  Mouse: Look  [F5] Save  [F9] Load  [Esc] Quit",
+                "WASD: Move  Mouse: Look  [F5] Save  [F9] Load  [Esc] Menu",
                 Color::new(0.4, 0.4, 0.4, 1.0),
             );
         });

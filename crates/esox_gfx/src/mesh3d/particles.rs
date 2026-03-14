@@ -290,6 +290,28 @@ impl super::renderer::Renderer3D {
             self.particle_quad_mesh = Some(self.upload_particle_quad(gpu));
         }
 
+        // Patch indirect args with the quad mesh's actual offsets in the mega-buffer.
+        if let Some(quad_handle) = self.particle_quad_mesh {
+            let quad_idx = quad_handle.0 as usize;
+            if quad_idx < self.mesh_regions.len() {
+                let r = &self.mesh_regions[quad_idx];
+                let pool = &self.particle_pools[handle.0 as usize];
+                // DrawIndexedIndirect: [index_count, instance_count, first_index, base_vertex (i32), first_instance]
+                let args: [u32; 5] = [
+                    r.index_count,
+                    0,
+                    r.index_offset,
+                    r.vertex_offset, // safe: vertex_offset fits in i32 range
+                    0,
+                ];
+                gpu.queue.write_buffer(
+                    &pool.indirect_args_buffer,
+                    0,
+                    bytemuck::cast_slice(&args),
+                );
+            }
+        }
+
         handle
     }
 

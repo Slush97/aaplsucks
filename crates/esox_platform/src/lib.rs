@@ -740,15 +740,32 @@ impl ApplicationHandler<AppUserEvent> for App {
         self.clear_color = clear.premultiplied();
 
         // Query the monitor refresh rate for frame throttling.
-        if let Some(monitor) = window.current_monitor()
-            && let Some(hz) = monitor
-                .video_modes()
-                .map(|m| m.refresh_rate_millihertz() / 1000)
+        if let Some(monitor) = window.current_monitor() {
+            let modes: Vec<_> = monitor.video_modes().collect();
+            if let Some(hz) = modes
+                .iter()
+                .map(|m| (m.refresh_rate_millihertz() + 999) / 1000)
                 .max()
-            && hz > 0
-        {
-            self.monitor_refresh_hz = hz;
-            tracing::debug!("monitor refresh rate: {}Hz", hz);
+                .filter(|&hz| hz > 0)
+            {
+                self.monitor_refresh_hz = hz;
+            } else {
+                // On Wayland, video_modes() often returns an empty list.
+                // Default to 240Hz so we don't artificially cap below the
+                // actual refresh rate — the GPU present mode (Mailbox/Fifo)
+                // will still provide the real sync.
+                self.monitor_refresh_hz = 240;
+                tracing::info!("no video modes reported (Wayland?), defaulting to {}Hz cap", self.monitor_refresh_hz);
+            }
+            tracing::info!(
+                "monitor: {:?}, {} video modes, detected {}Hz",
+                monitor.name(),
+                modes.len(),
+                self.monitor_refresh_hz,
+            );
+        } else {
+            self.monitor_refresh_hz = 240;
+            tracing::warn!("no monitor detected, defaulting to {}Hz cap", self.monitor_refresh_hz);
         }
 
         window.set_ime_allowed(true);

@@ -168,3 +168,41 @@ pub fn closest_point_on_axis(
     // t along axis_dir
     (b * d - a * e) / denom
 }
+
+/// Project a ray onto a plane, returning the intersection point.
+/// Returns `None` if the ray is nearly parallel to the plane.
+pub fn project_ray_to_plane(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    plane_point: Vec3,
+    plane_normal: Vec3,
+) -> Option<Vec3> {
+    let denom = ray_dir.dot(plane_normal);
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+    let t = (plane_point - ray_origin).dot(plane_normal) / denom;
+    if t < 0.0 {
+        return None;
+    }
+    Some(ray_origin + ray_dir * t)
+}
+
+/// Compute the angle of a point relative to a center on a plane perpendicular to `axis`.
+pub fn angle_on_plane(point: Vec3, center: Vec3, axis: Vec3) -> f32 {
+    let (u, v) = perpendicular_axes(axis);
+    let d = point - center;
+    d.dot(v).atan2(d.dot(u))
+}
+
+/// Build two perpendicular axes for a given normal direction.
+fn perpendicular_axes(axis: Vec3) -> (Vec3, Vec3) {
+    let up = if axis.dot(Vec3::Y).abs() > 0.9 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let u = axis.cross(up).normalize();
+    let v = u.cross(axis).normalize();
+    (u, v)
+}

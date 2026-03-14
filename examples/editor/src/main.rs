@@ -1,4 +1,4 @@
-use std::f32::consts::{FRAC_PI_4, PI};
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use esox_engine::esox_gfx::mesh3d::{
     InstanceData, MaterialDescriptor, MaterialHandle, MaterialType, MeshData, MeshHandle,
@@ -190,18 +190,41 @@ enum PendingEdit {
     SetTransform(hecs::Entity, Transform3D),
     SetPointLightIntensity(hecs::Entity, f32),
     SetPointLightRange(hecs::Entity, f32),
+    SetPointLightColor(hecs::Entity, [f32; 3]),
     SetSpotLightIntensity(hecs::Entity, f32),
     SetSpotLightRange(hecs::Entity, f32),
+    SetSpotLightColor(hecs::Entity, [f32; 3]),
+    SetSpotLightInnerCone(hecs::Entity, f32),
+    SetSpotLightOuterCone(hecs::Entity, f32),
     SetDirLightIntensity(hecs::Entity, f32),
+    SetDirLightColor(hecs::Entity, [f32; 3]),
+    SetTag(hecs::Entity, String),
+    SetCameraFov(hecs::Entity, f32),
+    SetCameraNear(hecs::Entity, f32),
+    SetCameraFar(hecs::Entity, f32),
+    SetMeshVisible(hecs::Entity, bool),
+}
+
+// ── Gizmo mode ──
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GizmoMode {
+    Translate,
+    Rotate,
+    Scale,
 }
 
 // ── Gizmo drag state ──
 
 struct GizmoDrag {
+    mode: GizmoMode,
     axis: picking::GizmoAxis,
     entity: hecs::Entity,
     start_axis_t: f32,
     start_entity_pos: Vec3,
+    start_entity_rot: Quat,
+    start_entity_scale: Vec3,
+    start_angle: f32,
 }
 
 // ── Editor state ──
@@ -215,6 +238,7 @@ struct EditorApp {
     // Gizmo materials
     gizmo_mats: Option<GizmoMaterials>,
     gizmo_meshes: Option<GizmoMeshes>,
+    gizmo_mode: GizmoMode,
     // Grid
     grid_mesh: Option<MeshHandle>,
     grid_mat: Option<MaterialHandle>,
@@ -243,6 +267,8 @@ struct GizmoMaterials {
 struct GizmoMeshes {
     arrow_mesh: MeshHandle,
     cube_mesh: MeshHandle,
+    ring_mesh: MeshHandle,
+    wire_mesh: MeshHandle,
 }
 
 impl EditorApp {
@@ -255,6 +281,7 @@ impl EditorApp {
             exit: false,
             gizmo_mats: None,
             gizmo_meshes: None,
+            gizmo_mode: GizmoMode::Translate,
             grid_mesh: None,
             grid_mat: None,
             scene_path: None,
@@ -376,9 +403,15 @@ impl Game for EditorApp {
             .renderer
             .upload_mesh(ctx.gpu, &MeshData::cylinder(0.03, 1.0, 8));
         let cube_mesh = ctx.renderer.upload_mesh(ctx.gpu, &MeshData::cube(0.08));
+        let ring_mesh = ctx
+            .renderer
+            .upload_mesh(ctx.gpu, &MeshData::torus(1.0, 0.02, 32, 8));
+        let wire_mesh = ctx.renderer.upload_mesh(ctx.gpu, &MeshData::cube(1.0));
         self.gizmo_meshes = Some(GizmoMeshes {
             arrow_mesh,
             cube_mesh,
+            ring_mesh,
+            wire_mesh,
         });
 
         // Create ground grid mesh
@@ -492,6 +525,105 @@ impl Game for EditorApp {
                         dl.intensity = v;
                     }
                 }
+                PendingEdit::SetPointLightColor(entity, v) => {
+                    if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                        let old = pl.color;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditPointLightColor { entity, old, new: v },
+                            elapsed,
+                        );
+                        pl.color = v;
+                    }
+                }
+                PendingEdit::SetSpotLightColor(entity, v) => {
+                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                        let old = sl.color;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditSpotLightColor { entity, old, new: v },
+                            elapsed,
+                        );
+                        sl.color = v;
+                    }
+                }
+                PendingEdit::SetSpotLightInnerCone(entity, v) => {
+                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                        let old = sl.inner_cone_angle;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditSpotLightInnerCone { entity, old, new: v },
+                            elapsed,
+                        );
+                        sl.inner_cone_angle = v;
+                    }
+                }
+                PendingEdit::SetSpotLightOuterCone(entity, v) => {
+                    if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                        let old = sl.outer_cone_angle;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditSpotLightOuterCone { entity, old, new: v },
+                            elapsed,
+                        );
+                        sl.outer_cone_angle = v;
+                    }
+                }
+                PendingEdit::SetDirLightColor(entity, v) => {
+                    if let Ok(mut dl) = ctx.world.get::<&mut DirectionalLightComponent>(entity) {
+                        let old = dl.color;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditDirLightColor { entity, old, new: v },
+                            elapsed,
+                        );
+                        dl.color = v;
+                    }
+                }
+                PendingEdit::SetTag(entity, v) => {
+                    if let Ok(mut tag) = ctx.world.get::<&mut Tag>(entity) {
+                        let old = tag.0.clone();
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditTag { entity, old, new: v.clone() },
+                            elapsed,
+                        );
+                        tag.0 = v;
+                    }
+                }
+                PendingEdit::SetCameraFov(entity, v) => {
+                    if let Ok(mut cam) = ctx.world.get::<&mut Camera3D>(entity) {
+                        let old = cam.fov_y;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditCameraFov { entity, old, new: v },
+                            elapsed,
+                        );
+                        cam.fov_y = v;
+                    }
+                }
+                PendingEdit::SetCameraNear(entity, v) => {
+                    if let Ok(mut cam) = ctx.world.get::<&mut Camera3D>(entity) {
+                        let old = cam.near;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditCameraNear { entity, old, new: v },
+                            elapsed,
+                        );
+                        cam.near = v;
+                    }
+                }
+                PendingEdit::SetCameraFar(entity, v) => {
+                    if let Ok(mut cam) = ctx.world.get::<&mut Camera3D>(entity) {
+                        let old = cam.far;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditCameraFar { entity, old, new: v },
+                            elapsed,
+                        );
+                        cam.far = v;
+                    }
+                }
+                PendingEdit::SetMeshVisible(entity, v) => {
+                    if let Ok(mut mr) = ctx.world.get::<&mut MeshRenderer>(entity) {
+                        let old = mr.visible;
+                        self.undo_stack.push(
+                            UndoAction::EditMeshVisible { entity, old, new: v },
+                        );
+                        mr.visible = v;
+                    }
+                }
             }
         }
 
@@ -526,29 +658,130 @@ impl Game for EditorApp {
                     picking::GizmoAxis::Y => Vec3::Y,
                     picking::GizmoAxis::Z => Vec3::Z,
                 };
-                let t = picking::closest_point_on_axis(
-                    ray_origin,
-                    ray_dir,
-                    drag.start_entity_pos,
-                    axis_dir,
-                );
-                let delta_t = t - drag.start_axis_t;
-                let new_pos = drag.start_entity_pos + axis_dir * delta_t;
 
-                if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(drag.entity) {
-                    tr.position = new_pos;
+                match drag.mode {
+                    GizmoMode::Translate => {
+                        let t = picking::closest_point_on_axis(
+                            ray_origin,
+                            ray_dir,
+                            drag.start_entity_pos,
+                            axis_dir,
+                        );
+                        let delta_t = t - drag.start_axis_t;
+                        let mut new_pos = drag.start_entity_pos + axis_dir * delta_t;
+                        // Ctrl: snap to 1.0 grid
+                        let ctrl_now = ctx.input.is_key_down(KeyCode::ControlLeft)
+                            || ctx.input.is_key_down(KeyCode::ControlRight);
+                        if ctrl_now {
+                            new_pos = Vec3::new(
+                                new_pos.x.round(),
+                                new_pos.y.round(),
+                                new_pos.z.round(),
+                            );
+                        }
+                        if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(drag.entity) {
+                            tr.position = new_pos;
+                        }
+                    }
+                    GizmoMode::Scale => {
+                        let cam_dist = (drag.start_entity_pos - cam_pos).length();
+                        let gizmo_scale = cam_dist / 8.0;
+                        let t = picking::closest_point_on_axis(
+                            ray_origin,
+                            ray_dir,
+                            drag.start_entity_pos,
+                            axis_dir,
+                        );
+                        let delta_t = t - drag.start_axis_t;
+                        let factor = 1.0 + delta_t / gizmo_scale;
+                        let mut new_scale = drag.start_entity_scale;
+                        match drag.axis {
+                            picking::GizmoAxis::X => new_scale.x = (drag.start_entity_scale.x * factor).max(0.01),
+                            picking::GizmoAxis::Y => new_scale.y = (drag.start_entity_scale.y * factor).max(0.01),
+                            picking::GizmoAxis::Z => new_scale.z = (drag.start_entity_scale.z * factor).max(0.01),
+                        }
+                        // Ctrl: snap to 0.25
+                        let ctrl_now = ctx.input.is_key_down(KeyCode::ControlLeft)
+                            || ctx.input.is_key_down(KeyCode::ControlRight);
+                        if ctrl_now {
+                            new_scale = Vec3::new(
+                                (new_scale.x / 0.25).round() * 0.25,
+                                (new_scale.y / 0.25).round() * 0.25,
+                                (new_scale.z / 0.25).round() * 0.25,
+                            );
+                            new_scale = new_scale.max(Vec3::splat(0.01));
+                        }
+                        if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(drag.entity) {
+                            tr.scale = new_scale;
+                        }
+                    }
+                    GizmoMode::Rotate => {
+                        if let Some(hit) = picking::project_ray_to_plane(
+                            ray_origin,
+                            ray_dir,
+                            drag.start_entity_pos,
+                            axis_dir,
+                        ) {
+                            let current_angle = picking::angle_on_plane(
+                                hit,
+                                drag.start_entity_pos,
+                                axis_dir,
+                            );
+                            let mut delta = current_angle - drag.start_angle;
+                            // Ctrl: snap to 15 degrees
+                            let ctrl_now = ctx.input.is_key_down(KeyCode::ControlLeft)
+                                || ctx.input.is_key_down(KeyCode::ControlRight);
+                            if ctrl_now {
+                                let step = PI / 12.0;
+                                delta = (delta / step).round() * step;
+                            }
+                            let new_rot =
+                                Quat::from_axis_angle(axis_dir, delta) * drag.start_entity_rot;
+                            if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(drag.entity) {
+                                tr.rotation = new_rot;
+                            }
+                        }
+                    }
                 }
             } else {
                 // LMB released — end drag
                 let drag = self.gizmo_drag.take().unwrap();
-                if let Ok(t) = ctx.world.get::<&Transform3D>(drag.entity) {
-                    let final_pos = t.position;
-                    if final_pos != drag.start_entity_pos {
-                        self.undo_stack.push(UndoAction::GizmoDrag {
-                            entity: drag.entity,
-                            old_pos: drag.start_entity_pos,
-                            new_pos: final_pos,
-                        });
+                match drag.mode {
+                    GizmoMode::Translate => {
+                        if let Ok(t) = ctx.world.get::<&Transform3D>(drag.entity) {
+                            let final_pos = t.position;
+                            if final_pos != drag.start_entity_pos {
+                                self.undo_stack.push(UndoAction::GizmoDrag {
+                                    entity: drag.entity,
+                                    old_pos: drag.start_entity_pos,
+                                    new_pos: final_pos,
+                                });
+                            }
+                        }
+                    }
+                    GizmoMode::Scale => {
+                        if let Ok(t) = ctx.world.get::<&Transform3D>(drag.entity) {
+                            let final_scale = t.scale;
+                            if final_scale != drag.start_entity_scale {
+                                self.undo_stack.push(UndoAction::GizmoScale {
+                                    entity: drag.entity,
+                                    old_scale: drag.start_entity_scale,
+                                    new_scale: final_scale,
+                                });
+                            }
+                        }
+                    }
+                    GizmoMode::Rotate => {
+                        if let Ok(t) = ctx.world.get::<&Transform3D>(drag.entity) {
+                            let final_rot = t.rotation;
+                            if final_rot != drag.start_entity_rot {
+                                self.undo_stack.push(UndoAction::GizmoRotate {
+                                    entity: drag.entity,
+                                    old_rot: drag.start_entity_rot,
+                                    new_rot: final_rot,
+                                });
+                            }
+                        }
                     }
                 }
                 self.dirty = true;
@@ -581,17 +814,43 @@ impl Game for EditorApp {
                             picking::GizmoAxis::Y => Vec3::Y,
                             picking::GizmoAxis::Z => Vec3::Z,
                         };
+
+                        // Read current transform for all start fields
+                        let (start_rot, start_scale) =
+                            if let Ok(tr) = ctx.world.get::<&Transform3D>(selected) {
+                                (tr.rotation, tr.scale)
+                            } else {
+                                (Quat::IDENTITY, Vec3::ONE)
+                            };
+
                         let start_t = picking::closest_point_on_axis(
                             ray_origin,
                             ray_dir,
                             world_pos,
                             axis_dir,
                         );
+
+                        let start_angle = if self.gizmo_mode == GizmoMode::Rotate {
+                            if let Some(hit) = picking::project_ray_to_plane(
+                                ray_origin, ray_dir, world_pos, axis_dir,
+                            ) {
+                                picking::angle_on_plane(hit, world_pos, axis_dir)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+
                         self.gizmo_drag = Some(GizmoDrag {
+                            mode: self.gizmo_mode,
                             axis,
                             entity: selected,
                             start_axis_t: start_t,
                             start_entity_pos: world_pos,
+                            start_entity_rot: start_rot,
+                            start_entity_scale: start_scale,
+                            start_angle,
                         });
                         gizmo_hit = true;
                     }
@@ -667,6 +926,24 @@ impl Game for EditorApp {
                     self.dirty = true;
                 }
             }
+            if ctx.input.just_pressed_key(KeyCode::KeyD) {
+                // Duplicate
+                self.pending_menu_action = Some(13);
+            }
+        }
+
+        // Gizmo tool switching (W/E/R, only when not dragging and ctrl not held)
+        let rmb = ctx.input.is_mouse_button_down(2);
+        if self.gizmo_drag.is_none() && !ctrl && !rmb {
+            if ctx.input.just_pressed_key(KeyCode::KeyW) {
+                self.gizmo_mode = GizmoMode::Translate;
+            }
+            if ctx.input.just_pressed_key(KeyCode::KeyE) {
+                self.gizmo_mode = GizmoMode::Rotate;
+            }
+            if ctx.input.just_pressed_key(KeyCode::KeyR) {
+                self.gizmo_mode = GizmoMode::Scale;
+            }
         }
 
         self.camera.update(ctx);
@@ -685,53 +962,137 @@ impl Game for EditorApp {
             );
         }
 
-        // Draw selection highlight (wireframe cube around selected entity)
+        // Draw selection wireframe + gizmo
         if let Some(selected) = self.selected {
             if let (Some(gizmo_mats), Some(gizmo_meshes)) =
                 (&self.gizmo_mats, &self.gizmo_meshes)
             {
-                // Draw translate gizmo at selected entity's position
+                // Selection wireframe box
+                if let Ok(gt) = ctx.world.get::<&GlobalTransform>(selected) {
+                    let (aabb_min, aabb_max) =
+                        if let Ok(mr) = ctx.world.get::<&MeshRenderer>(selected) {
+                            if let Some(local_aabb) = ctx.renderer.mesh_local_aabb(mr.mesh) {
+                                let world_aabb = local_aabb.transformed(&gt.0);
+                                (world_aabb.min, world_aabb.max)
+                            } else {
+                                let pos = Vec3::new(gt.0.col(3).x, gt.0.col(3).y, gt.0.col(3).z);
+                                (pos - Vec3::splat(0.3), pos + Vec3::splat(0.3))
+                            }
+                        } else {
+                            let pos = Vec3::new(gt.0.col(3).x, gt.0.col(3).y, gt.0.col(3).z);
+                            (pos - Vec3::splat(0.3), pos + Vec3::splat(0.3))
+                        };
+
+                    for edge_t in wireframe_aabb_edges(aabb_min, aabb_max) {
+                        ctx.renderer.draw_with_material(
+                            gizmo_meshes.wire_mesh,
+                            gizmo_mats.white,
+                            &[InstanceData::from_transform(&edge_t)],
+                        );
+                    }
+                }
+
+                // Draw gizmo at selected entity's position
                 if let Ok(gt) = ctx.world.get::<&GlobalTransform>(selected) {
                     let world_pos =
                         Vec3::new(gt.0.col(3).x, gt.0.col(3).y, gt.0.col(3).z);
                     let cam_dist = (world_pos - self.camera.position()).length();
                     let gizmo_scale = cam_dist / 8.0;
 
-                    // X axis (red)
-                    let x_transform = esox_engine::esox_gfx::mesh3d::Transform {
-                        position: world_pos + Vec3::X * gizmo_scale * 0.5,
-                        rotation: Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
-                        scale: Vec3::splat(gizmo_scale),
-                    };
-                    ctx.renderer.draw_with_material(
-                        gizmo_meshes.arrow_mesh,
-                        gizmo_mats.red,
-                        &[InstanceData::from_transform(&x_transform)],
-                    );
+                    match self.gizmo_mode {
+                        GizmoMode::Translate => {
+                            // X axis (red)
+                            let x_transform = esox_engine::esox_gfx::mesh3d::Transform {
+                                position: world_pos + Vec3::X * gizmo_scale * 0.5,
+                                rotation: Quat::from_rotation_z(-FRAC_PI_2),
+                                scale: Vec3::splat(gizmo_scale),
+                            };
+                            ctx.renderer.draw_with_material(
+                                gizmo_meshes.arrow_mesh,
+                                gizmo_mats.red,
+                                &[InstanceData::from_transform(&x_transform)],
+                            );
 
-                    // Y axis (green)
-                    let y_transform = esox_engine::esox_gfx::mesh3d::Transform {
-                        position: world_pos + Vec3::Y * gizmo_scale * 0.5,
-                        rotation: Quat::IDENTITY,
-                        scale: Vec3::splat(gizmo_scale),
-                    };
-                    ctx.renderer.draw_with_material(
-                        gizmo_meshes.arrow_mesh,
-                        gizmo_mats.green,
-                        &[InstanceData::from_transform(&y_transform)],
-                    );
+                            // Y axis (green)
+                            let y_transform = esox_engine::esox_gfx::mesh3d::Transform {
+                                position: world_pos + Vec3::Y * gizmo_scale * 0.5,
+                                rotation: Quat::IDENTITY,
+                                scale: Vec3::splat(gizmo_scale),
+                            };
+                            ctx.renderer.draw_with_material(
+                                gizmo_meshes.arrow_mesh,
+                                gizmo_mats.green,
+                                &[InstanceData::from_transform(&y_transform)],
+                            );
 
-                    // Z axis (blue)
-                    let z_transform = esox_engine::esox_gfx::mesh3d::Transform {
-                        position: world_pos + Vec3::Z * gizmo_scale * 0.5,
-                        rotation: Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-                        scale: Vec3::splat(gizmo_scale),
-                    };
-                    ctx.renderer.draw_with_material(
-                        gizmo_meshes.arrow_mesh,
-                        gizmo_mats.blue,
-                        &[InstanceData::from_transform(&z_transform)],
-                    );
+                            // Z axis (blue)
+                            let z_transform = esox_engine::esox_gfx::mesh3d::Transform {
+                                position: world_pos + Vec3::Z * gizmo_scale * 0.5,
+                                rotation: Quat::from_rotation_x(FRAC_PI_2),
+                                scale: Vec3::splat(gizmo_scale),
+                            };
+                            ctx.renderer.draw_with_material(
+                                gizmo_meshes.arrow_mesh,
+                                gizmo_mats.blue,
+                                &[InstanceData::from_transform(&z_transform)],
+                            );
+                        }
+                        GizmoMode::Scale => {
+                            // Scale gizmo: thin shafts + cube endpoints
+                            let axes = [
+                                (Vec3::X, Quat::from_rotation_z(-FRAC_PI_2), gizmo_mats.red),
+                                (Vec3::Y, Quat::IDENTITY, gizmo_mats.green),
+                                (Vec3::Z, Quat::from_rotation_x(FRAC_PI_2), gizmo_mats.blue),
+                            ];
+                            for (dir, rot, mat) in axes {
+                                // Shaft
+                                let shaft_t = esox_engine::esox_gfx::mesh3d::Transform {
+                                    position: world_pos + dir * gizmo_scale * 0.5,
+                                    rotation: rot,
+                                    scale: Vec3::splat(gizmo_scale),
+                                };
+                                ctx.renderer.draw_with_material(
+                                    gizmo_meshes.arrow_mesh,
+                                    mat,
+                                    &[InstanceData::from_transform(&shaft_t)],
+                                );
+                                // Cube endpoint
+                                let cube_t = esox_engine::esox_gfx::mesh3d::Transform {
+                                    position: world_pos + dir * gizmo_scale,
+                                    rotation: Quat::IDENTITY,
+                                    scale: Vec3::splat(gizmo_scale),
+                                };
+                                ctx.renderer.draw_with_material(
+                                    gizmo_meshes.cube_mesh,
+                                    mat,
+                                    &[InstanceData::from_transform(&cube_t)],
+                                );
+                            }
+                        }
+                        GizmoMode::Rotate => {
+                            // Rotation gizmo: 3 torus rings
+                            let rings = [
+                                // Y ring: torus naturally around Y
+                                (Quat::IDENTITY, gizmo_mats.green),
+                                // X ring: rotate Y-axis torus to X
+                                (Quat::from_rotation_z(-FRAC_PI_2), gizmo_mats.red),
+                                // Z ring: rotate Y-axis torus to Z
+                                (Quat::from_rotation_x(FRAC_PI_2), gizmo_mats.blue),
+                            ];
+                            for (rot, mat) in rings {
+                                let ring_t = esox_engine::esox_gfx::mesh3d::Transform {
+                                    position: world_pos,
+                                    rotation: rot,
+                                    scale: Vec3::splat(gizmo_scale),
+                                };
+                                ctx.renderer.draw_with_material(
+                                    gizmo_meshes.ring_mesh,
+                                    mat,
+                                    &[InstanceData::from_transform(&ring_t)],
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -940,6 +1301,26 @@ impl EditorApp {
                             stale_entity: selected,
                             snapshot,
                         });
+                        self.dirty = true;
+                    }
+                }
+            }
+            13 => {
+                // Duplicate selected entity
+                if let Some(selected) = self.selected {
+                    if self.camera_entity != Some(selected) {
+                        let snapshot = EntitySnapshot::capture(ctx.world, selected);
+                        let new_entity = snapshot.respawn(ctx.world);
+                        // Offset so the duplicate is visible
+                        if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(new_entity) {
+                            t.position.x += 1.0;
+                        }
+                        let spawn_snapshot = EntitySnapshot::capture(ctx.world, new_entity);
+                        self.undo_stack.push(UndoAction::SpawnEntity {
+                            entity: new_entity,
+                            snapshot: spawn_snapshot,
+                        });
+                        self.selected = Some(new_entity);
                         self.dirty = true;
                     }
                 }
@@ -1178,6 +1559,49 @@ fn generate_grid(half_size: i32, spacing: f32) -> MeshData {
     }
 
     MeshData { vertices, indices }
+}
+
+// ── Wireframe helper ──
+
+/// Generate 12 thin-bar transforms that outline an AABB.
+fn wireframe_aabb_edges(min: Vec3, max: Vec3) -> Vec<esox_engine::esox_gfx::mesh3d::Transform> {
+    let size = max - min;
+    let center = (min + max) * 0.5;
+    let thickness = 0.02;
+    let mut edges = Vec::with_capacity(12);
+
+    // 4 edges along X (at the 4 Y/Z corner combinations)
+    for &y in &[min.y, max.y] {
+        for &z in &[min.z, max.z] {
+            edges.push(esox_engine::esox_gfx::mesh3d::Transform {
+                position: Vec3::new(center.x, y, z),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::new(size.x, thickness, thickness),
+            });
+        }
+    }
+    // 4 edges along Y (at the 4 X/Z corner combinations)
+    for &x in &[min.x, max.x] {
+        for &z in &[min.z, max.z] {
+            edges.push(esox_engine::esox_gfx::mesh3d::Transform {
+                position: Vec3::new(x, center.y, z),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::new(thickness, size.y, thickness),
+            });
+        }
+    }
+    // 4 edges along Z (at the 4 X/Y corner combinations)
+    for &x in &[min.x, max.x] {
+        for &y in &[min.y, max.y] {
+            edges.push(esox_engine::esox_gfx::mesh3d::Transform {
+                position: Vec3::new(x, y, center.z),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::new(thickness, thickness, size.z),
+            });
+        }
+    }
+
+    edges
 }
 
 // ── Utilities ──

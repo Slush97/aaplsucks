@@ -8,6 +8,7 @@ use winit::event::KeyEvent;
 use winit::keyboard::ModifiersState;
 
 use crate::layout::Rect;
+use crate::widgets::menu_bar::MenuBarDeferred;
 
 /// Trait for clipboard access. Implemented by platform layer.
 pub trait ClipboardProvider {
@@ -868,6 +869,8 @@ pub struct UiState {
     pub split_drag: Option<(u64, bool)>,
     /// Which menu bar dropdown is currently open (index into the menus slice).
     pub menu_bar_open: Option<usize>,
+    /// Deferred menu bar dropdown painting data (drawn in finish() for z-order).
+    pub(crate) menu_bar_deferred: Option<MenuBarDeferred>,
     /// Inline edit buffers for number_input widgets, keyed by widget ID.
     pub number_edit_buffers: HashMap<u64, InputState>,
     /// Per-combobox filter input state, keyed by widget ID.
@@ -931,6 +934,7 @@ impl UiState {
             split_ratios: HashMap::new(),
             split_drag: None,
             menu_bar_open: None,
+            menu_bar_deferred: None,
             number_edit_buffers: HashMap::new(),
             combobox_inputs: HashMap::new(),
         }

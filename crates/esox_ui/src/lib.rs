@@ -125,6 +125,7 @@ impl<'f> Ui<'f> {
         // Draw order: normal content (already drawn) → modals → dropdowns → toasts → tooltips
         self.draw_modals();
         let selection = self.draw_overlay();
+        self.draw_deferred_menu_bar();
         self.draw_toasts();
         self.draw_tooltip();
         self.state.end_frame();

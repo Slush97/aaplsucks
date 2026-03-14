@@ -1,7 +1,7 @@
-use esox_engine::glam::Vec3;
+use esox_engine::glam::{Quat, Vec3};
 use esox_engine::hecs::{self, Entity};
 use esox_engine::{
-    DirectionalLightComponent, GlobalTransform, MeshRenderer, PointLightComponent,
+    Camera3D, DirectionalLightComponent, GlobalTransform, MeshRenderer, PointLightComponent,
     SpotLightComponent, Tag, Transform3D,
 };
 
@@ -16,6 +16,7 @@ pub struct EntitySnapshot {
     pub point_light: Option<PointLightComponent>,
     pub spot_light: Option<SpotLightComponent>,
     pub dir_light: Option<DirectionalLightComponent>,
+    pub camera: Option<Camera3D>,
 }
 
 impl EntitySnapshot {
@@ -39,6 +40,7 @@ impl EntitySnapshot {
                 .get::<&DirectionalLightComponent>(entity)
                 .ok()
                 .map(|d| *d),
+            camera: world.get::<&Camera3D>(entity).ok().map(|c| *c),
         }
     }
 
@@ -63,6 +65,9 @@ impl EntitySnapshot {
         }
         if let Some(dl) = self.dir_light {
             world.insert_one(entity, dl).unwrap();
+        }
+        if let Some(cam) = self.camera {
+            world.insert_one(entity, cam).unwrap();
         }
         entity
     }
@@ -107,10 +112,70 @@ pub enum UndoAction {
         stale_entity: Entity,
         snapshot: EntitySnapshot,
     },
+    EditPointLightColor {
+        entity: Entity,
+        old: [f32; 3],
+        new: [f32; 3],
+    },
+    EditSpotLightColor {
+        entity: Entity,
+        old: [f32; 3],
+        new: [f32; 3],
+    },
+    EditSpotLightInnerCone {
+        entity: Entity,
+        old: f32,
+        new: f32,
+    },
+    EditSpotLightOuterCone {
+        entity: Entity,
+        old: f32,
+        new: f32,
+    },
+    EditDirLightColor {
+        entity: Entity,
+        old: [f32; 3],
+        new: [f32; 3],
+    },
+    EditTag {
+        entity: Entity,
+        old: String,
+        new: String,
+    },
+    EditCameraFov {
+        entity: Entity,
+        old: f32,
+        new: f32,
+    },
+    EditCameraNear {
+        entity: Entity,
+        old: f32,
+        new: f32,
+    },
+    EditCameraFar {
+        entity: Entity,
+        old: f32,
+        new: f32,
+    },
+    EditMeshVisible {
+        entity: Entity,
+        old: bool,
+        new: bool,
+    },
     GizmoDrag {
         entity: Entity,
         old_pos: Vec3,
         new_pos: Vec3,
+    },
+    GizmoScale {
+        entity: Entity,
+        old_scale: Vec3,
+        new_scale: Vec3,
+    },
+    GizmoRotate {
+        entity: Entity,
+        old_rot: Quat,
+        new_rot: Quat,
     },
 }
 
@@ -266,6 +331,55 @@ fn try_merge(top: &mut UndoAction, incoming: &UndoAction) -> bool {
             *n = *n2;
             true
         }
+        (
+            UndoAction::EditPointLightColor { entity: e1, new: n, .. },
+            UndoAction::EditPointLightColor { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditSpotLightColor { entity: e1, new: n, .. },
+            UndoAction::EditSpotLightColor { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditSpotLightInnerCone { entity: e1, new: n, .. },
+            UndoAction::EditSpotLightInnerCone { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditSpotLightOuterCone { entity: e1, new: n, .. },
+            UndoAction::EditSpotLightOuterCone { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditDirLightColor { entity: e1, new: n, .. },
+            UndoAction::EditDirLightColor { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditTag { entity: e1, new: n, .. },
+            UndoAction::EditTag { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = n2.clone(); true }
+        (
+            UndoAction::EditCameraFov { entity: e1, new: n, .. },
+            UndoAction::EditCameraFov { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditCameraNear { entity: e1, new: n, .. },
+            UndoAction::EditCameraNear { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::EditCameraFar { entity: e1, new: n, .. },
+            UndoAction::EditCameraFar { entity: e2, new: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::GizmoDrag { entity: e1, new_pos: n, .. },
+            UndoAction::GizmoDrag { entity: e2, new_pos: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::GizmoScale { entity: e1, new_scale: n, .. },
+            UndoAction::GizmoScale { entity: e2, new_scale: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        (
+            UndoAction::GizmoRotate { entity: e1, new_rot: n, .. },
+            UndoAction::GizmoRotate { entity: e2, new_rot: n2, .. },
+        ) if *e1 == *e2 => { *n = *n2; true }
+        // Bool toggles don't merge
         _ => false,
     }
 }
@@ -356,6 +470,46 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                 },
             )
         }
+        UndoAction::EditPointLightColor { entity, old, new } => {
+            if let Ok(mut pl) = world.get::<&mut PointLightComponent>(entity) { pl.color = old; }
+            (no_select, UndoAction::EditPointLightColor { entity, old, new })
+        }
+        UndoAction::EditSpotLightColor { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.color = old; }
+            (no_select, UndoAction::EditSpotLightColor { entity, old, new })
+        }
+        UndoAction::EditSpotLightInnerCone { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.inner_cone_angle = old; }
+            (no_select, UndoAction::EditSpotLightInnerCone { entity, old, new })
+        }
+        UndoAction::EditSpotLightOuterCone { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.outer_cone_angle = old; }
+            (no_select, UndoAction::EditSpotLightOuterCone { entity, old, new })
+        }
+        UndoAction::EditDirLightColor { entity, old, new } => {
+            if let Ok(mut dl) = world.get::<&mut DirectionalLightComponent>(entity) { dl.color = old; }
+            (no_select, UndoAction::EditDirLightColor { entity, old, new })
+        }
+        UndoAction::EditTag { entity, old, new } => {
+            if let Ok(mut tag) = world.get::<&mut Tag>(entity) { tag.0 = old.clone(); }
+            (no_select, UndoAction::EditTag { entity, old, new })
+        }
+        UndoAction::EditCameraFov { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.fov_y = old; }
+            (no_select, UndoAction::EditCameraFov { entity, old, new })
+        }
+        UndoAction::EditCameraNear { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.near = old; }
+            (no_select, UndoAction::EditCameraNear { entity, old, new })
+        }
+        UndoAction::EditCameraFar { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.far = old; }
+            (no_select, UndoAction::EditCameraFar { entity, old, new })
+        }
+        UndoAction::EditMeshVisible { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.visible = old; }
+            (no_select, UndoAction::EditMeshVisible { entity, old, new })
+        }
         UndoAction::GizmoDrag {
             entity,
             old_pos,
@@ -370,6 +524,40 @@ fn apply_inverse(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                     entity,
                     old_pos,
                     new_pos,
+                },
+            )
+        }
+        UndoAction::GizmoScale {
+            entity,
+            old_scale,
+            new_scale,
+        } => {
+            if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
+                t.scale = old_scale;
+            }
+            (
+                no_select,
+                UndoAction::GizmoScale {
+                    entity,
+                    old_scale,
+                    new_scale,
+                },
+            )
+        }
+        UndoAction::GizmoRotate {
+            entity,
+            old_rot,
+            new_rot,
+        } => {
+            if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
+                t.rotation = old_rot;
+            }
+            (
+                no_select,
+                UndoAction::GizmoRotate {
+                    entity,
+                    old_rot,
+                    new_rot,
                 },
             )
         }
@@ -465,6 +653,46 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                 },
             )
         }
+        UndoAction::EditPointLightColor { entity, old, new } => {
+            if let Ok(mut pl) = world.get::<&mut PointLightComponent>(entity) { pl.color = new; }
+            (no_select, UndoAction::EditPointLightColor { entity, old, new })
+        }
+        UndoAction::EditSpotLightColor { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.color = new; }
+            (no_select, UndoAction::EditSpotLightColor { entity, old, new })
+        }
+        UndoAction::EditSpotLightInnerCone { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.inner_cone_angle = new; }
+            (no_select, UndoAction::EditSpotLightInnerCone { entity, old, new })
+        }
+        UndoAction::EditSpotLightOuterCone { entity, old, new } => {
+            if let Ok(mut sl) = world.get::<&mut SpotLightComponent>(entity) { sl.outer_cone_angle = new; }
+            (no_select, UndoAction::EditSpotLightOuterCone { entity, old, new })
+        }
+        UndoAction::EditDirLightColor { entity, old, new } => {
+            if let Ok(mut dl) = world.get::<&mut DirectionalLightComponent>(entity) { dl.color = new; }
+            (no_select, UndoAction::EditDirLightColor { entity, old, new })
+        }
+        UndoAction::EditTag { entity, old, new } => {
+            if let Ok(mut tag) = world.get::<&mut Tag>(entity) { tag.0 = new.clone(); }
+            (no_select, UndoAction::EditTag { entity, old, new })
+        }
+        UndoAction::EditCameraFov { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.fov_y = new; }
+            (no_select, UndoAction::EditCameraFov { entity, old, new })
+        }
+        UndoAction::EditCameraNear { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.near = new; }
+            (no_select, UndoAction::EditCameraNear { entity, old, new })
+        }
+        UndoAction::EditCameraFar { entity, old, new } => {
+            if let Ok(mut cam) = world.get::<&mut Camera3D>(entity) { cam.far = new; }
+            (no_select, UndoAction::EditCameraFar { entity, old, new })
+        }
+        UndoAction::EditMeshVisible { entity, old, new } => {
+            if let Ok(mut mr) = world.get::<&mut MeshRenderer>(entity) { mr.visible = new; }
+            (no_select, UndoAction::EditMeshVisible { entity, old, new })
+        }
         UndoAction::GizmoDrag {
             entity,
             old_pos,
@@ -479,6 +707,40 @@ fn apply_forward(action: UndoAction, world: &mut hecs::World) -> (UndoResult, Un
                     entity,
                     old_pos,
                     new_pos,
+                },
+            )
+        }
+        UndoAction::GizmoScale {
+            entity,
+            old_scale,
+            new_scale,
+        } => {
+            if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
+                t.scale = new_scale;
+            }
+            (
+                no_select,
+                UndoAction::GizmoScale {
+                    entity,
+                    old_scale,
+                    new_scale,
+                },
+            )
+        }
+        UndoAction::GizmoRotate {
+            entity,
+            old_rot,
+            new_rot,
+        } => {
+            if let Ok(mut t) = world.get::<&mut Transform3D>(entity) {
+                t.rotation = new_rot;
+            }
+            (
+                no_select,
+                UndoAction::GizmoRotate {
+                    entity,
+                    old_rot,
+                    new_rot,
                 },
             )
         }

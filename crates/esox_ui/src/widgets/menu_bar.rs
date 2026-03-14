@@ -38,6 +38,19 @@ use crate::layout::Rect;
 use crate::paint;
 use crate::Ui;
 
+/// Data needed to paint a menu dropdown in `finish()` (deferred for z-order).
+pub(crate) struct MenuBarDeferred {
+    pub items: Vec<MenuBarDeferredItem>,
+    pub dd_rect: Rect,
+}
+
+pub(crate) struct MenuBarDeferredItem {
+    pub label: String,
+    pub shortcut: Option<String>,
+    pub enabled: bool,
+    pub is_separator: bool,
+}
+
 /// A single actionable menu item.
 pub struct MenuItem {
     pub label: String,
@@ -226,17 +239,39 @@ impl<'f> Ui<'f> {
             );
         }
 
-        // Draw the open dropdown.
+        // Hit-test the open dropdown and defer painting to finish().
         if let Some(open_idx) = new_open {
             if open_idx < menus.len() {
-                result = self.draw_menu_dropdown(
-                    &menus[open_idx],
-                    &label_rects[open_idx],
-                );
-                // If an item was selected, close the menu.
+                let menu = &menus[open_idx];
+                let anchor = &label_rects[open_idx];
+                let dd_rect = self.dropdown_rect(menu, anchor);
+
+                // Hit-test for clicks inside dropdown.
+                result = self.hit_test_menu_dropdown(menu, &dd_rect);
                 if result.is_some() {
                     new_open = None;
                 }
+
+                // Store deferred paint data.
+                let items = menu.items.iter().map(|entry| match entry {
+                    MenuEntry::Item(item) => MenuBarDeferredItem {
+                        label: item.label.clone(),
+                        shortcut: item.shortcut.clone(),
+                        enabled: item.enabled,
+                        is_separator: false,
+                    },
+                    MenuEntry::Separator => MenuBarDeferredItem {
+                        label: String::new(),
+                        shortcut: None,
+                        enabled: false,
+                        is_separator: true,
+                    },
+                }).collect();
+
+                self.state.menu_bar_deferred = Some(MenuBarDeferred {
+                    items,
+                    dd_rect,
+                });
             }
         }
 
@@ -286,52 +321,15 @@ impl<'f> Ui<'f> {
         Rect::new(dd_x, dd_y, dd_w, total_h)
     }
 
-    /// Draw a single menu's dropdown and return the selected item id, if any.
-    fn draw_menu_dropdown(&mut self, menu: &Menu, anchor: &Rect) -> Option<u64> {
-        let font_size = self.theme.font_size;
-        let pad = self.theme.input_padding;
+    /// Hit-test a menu dropdown for clicks. Returns the selected item id, if any.
+    fn hit_test_menu_dropdown(&mut self, menu: &Menu, dd_rect: &Rect) -> Option<u64> {
         let item_h = self.theme.item_height;
         let sep_h: f32 = 9.0;
-        let corner_r = self.theme.corner_radius;
 
-        // Measure dropdown.
-        let mut max_label_w: f32 = 0.0;
-        let mut max_shortcut_w: f32 = 0.0;
-        let mut total_h: f32 = 0.0;
-        for entry in &menu.items {
-            match entry {
-                MenuEntry::Item(item) => {
-                    let lw = self.text.measure_text(&item.label, font_size);
-                    if lw > max_label_w {
-                        max_label_w = lw;
-                    }
-                    if let Some(ref sc) = item.shortcut {
-                        let sw = self.text.measure_text(sc, font_size);
-                        if sw > max_shortcut_w {
-                            max_shortcut_w = sw;
-                        }
-                    }
-                    total_h += item_h;
-                }
-                MenuEntry::Separator => {
-                    total_h += sep_h;
-                }
-            }
-        }
-
-        let shortcut_gap = if max_shortcut_w > 0.0 { 24.0 } else { 0.0 };
-        let dd_w = (pad + max_label_w + shortcut_gap + max_shortcut_w + pad)
-            .max(anchor.w)
-            .max(self.theme.context_menu_min_w);
-        let dd_x = anchor.x;
-        let dd_y = anchor.y + anchor.h;
-
-        // Handle click inside dropdown.
         let mut result: Option<u64> = None;
         if let Some((cx, cy, ref mut consumed)) = self.state.mouse.pending_click {
-            if cx >= dd_x && cx < dd_x + dd_w && cy >= dd_y && cy < dd_y + total_h {
-                // Find which item was clicked.
-                let mut iy = dd_y;
+            if dd_rect.contains(cx, cy) {
+                let mut iy = dd_rect.y;
                 for entry in &menu.items {
                     match entry {
                         MenuEntry::Item(item) => {
@@ -348,15 +346,31 @@ impl<'f> Ui<'f> {
                     }
                 }
                 if result.is_none() {
-                    // Clicked on disabled item or separator — consume but don't act.
                     *consumed = true;
                 }
             }
         }
+        result
+    }
+
+    /// Paint the deferred menu bar dropdown. Called from `finish()`.
+    pub(crate) fn draw_deferred_menu_bar(&mut self) {
+        let deferred = match self.state.menu_bar_deferred.take() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let font_size = self.theme.font_size;
+        let pad = self.theme.input_padding;
+        let item_h = self.theme.item_height;
+        let sep_h: f32 = 9.0;
+        let corner_r = self.theme.corner_radius;
+
+        let dd = &deferred.dd_rect;
 
         // Shadow.
         self.frame.push(
-            ShapeBuilder::rect(dd_x - 1.0, dd_y - 1.0, dd_w + 2.0, total_h + 2.0)
+            ShapeBuilder::rect(dd.x - 1.0, dd.y - 1.0, dd.w + 2.0, dd.h + 2.0)
                 .color(self.theme.shadow)
                 .border_radius(BorderRadius::uniform(corner_r))
                 .build(),
@@ -364,92 +378,78 @@ impl<'f> Ui<'f> {
 
         // Background.
         self.frame.push(
-            ShapeBuilder::rect(dd_x, dd_y, dd_w, total_h)
+            ShapeBuilder::rect(dd.x, dd.y, dd.w, dd.h)
                 .color(self.theme.bg_raised)
                 .border_radius(BorderRadius::uniform(corner_r))
                 .build(),
         );
 
         // Border.
-        paint::draw_border(
-            self.frame,
-            Rect::new(dd_x, dd_y, dd_w, total_h),
-            self.theme.border,
-        );
+        paint::draw_border(self.frame, *dd, self.theme.border);
 
         // Items.
-        let mut iy = dd_y;
-        for entry in &menu.items {
-            match entry {
-                MenuEntry::Item(item) => {
-                    let row_rect = Rect::new(dd_x, iy, dd_w, item_h);
-                    let hovered = row_rect.contains(self.state.mouse.x, self.state.mouse.y)
-                        && item.enabled;
+        let mut iy = dd.y;
+        for item in &deferred.items {
+            if item.is_separator {
+                let sep_y = iy + sep_h / 2.0;
+                self.frame.push(
+                    ShapeBuilder::rect(dd.x + pad, sep_y, dd.w - pad * 2.0, 1.0)
+                        .color(self.theme.border)
+                        .build(),
+                );
+                iy += sep_h;
+            } else {
+                let row_rect = Rect::new(dd.x, iy, dd.w, item_h);
+                let hovered = row_rect.contains(self.state.mouse.x, self.state.mouse.y)
+                    && item.enabled;
 
-                    // Hover highlight.
-                    if hovered {
-                        self.frame.push(
-                            ShapeBuilder::rect(dd_x + 1.0, iy, dd_w - 2.0, item_h)
-                                .color(self.theme.bg_input)
-                                .build(),
-                        );
-                    }
+                if hovered {
+                    self.frame.push(
+                        ShapeBuilder::rect(dd.x + 1.0, iy, dd.w - 2.0, item_h)
+                            .color(self.theme.bg_input)
+                            .build(),
+                    );
+                }
 
-                    // Label text.
-                    let text_color = if !item.enabled {
+                let text_color = if !item.enabled {
+                    self.theme.fg_dim
+                } else {
+                    self.theme.fg
+                };
+
+                self.text.draw_text(
+                    &item.label,
+                    dd.x + pad,
+                    iy + (item_h - font_size) / 2.0,
+                    font_size,
+                    text_color,
+                    self.frame,
+                    self.gpu,
+                    self.resources,
+                );
+
+                if let Some(ref sc) = item.shortcut {
+                    let sc_w = self.text.measure_text(sc, font_size);
+                    let sc_color = if !item.enabled {
                         self.theme.fg_dim
-                    } else if hovered {
-                        self.theme.fg
                     } else {
-                        self.theme.fg
+                        self.theme.fg_muted
                     };
 
                     self.text.draw_text(
-                        &item.label,
-                        dd_x + pad,
+                        sc,
+                        dd.x + dd.w - pad - sc_w,
                         iy + (item_h - font_size) / 2.0,
                         font_size,
-                        text_color,
+                        sc_color,
                         self.frame,
                         self.gpu,
                         self.resources,
                     );
-
-                    // Shortcut text (right-aligned, muted).
-                    if let Some(ref sc) = item.shortcut {
-                        let sc_w = self.text.measure_text(sc, font_size);
-                        let sc_color = if !item.enabled {
-                            self.theme.fg_dim
-                        } else {
-                            self.theme.fg_muted
-                        };
-
-                        self.text.draw_text(
-                            sc,
-                            dd_x + dd_w - pad - sc_w,
-                            iy + (item_h - font_size) / 2.0,
-                            font_size,
-                            sc_color,
-                            self.frame,
-                            self.gpu,
-                            self.resources,
-                        );
-                    }
-
-                    iy += item_h;
                 }
-                MenuEntry::Separator => {
-                    let sep_y = iy + sep_h / 2.0;
-                    self.frame.push(
-                        ShapeBuilder::rect(dd_x + pad, sep_y, dd_w - pad * 2.0, 1.0)
-                            .color(self.theme.border)
-                            .build(),
-                    );
-                    iy += sep_h;
-                }
+
+                iy += item_h;
             }
         }
-
-        result
     }
 }

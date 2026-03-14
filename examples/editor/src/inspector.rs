@@ -35,10 +35,10 @@ pub fn draw_inspector(
         ui.muted_label(&format!("Entity {}", entity.to_bits().get()));
         ui.spacing(8.0);
 
-        draw_tag_section(ui, ctx, entity);
+        draw_tag_section(ui, ctx, entity, edits);
         draw_transform_section(ui, ctx, entity, edits);
-        draw_camera_section(ui, ctx, entity);
-        draw_mesh_renderer_section(ui, ctx, entity);
+        draw_camera_section(ui, ctx, entity, edits);
+        draw_mesh_renderer_section(ui, ctx, entity, edits);
         draw_point_light_section(ui, ctx, entity, edits);
         draw_spot_light_section(ui, ctx, entity, edits);
         draw_dir_light_section(ui, ctx, entity, edits);
@@ -51,10 +51,23 @@ fn section_header(ui: &mut Ui, label: &str) {
     ui.spacing(4.0);
 }
 
-fn draw_tag_section(ui: &mut Ui, ctx: &Ctx, entity: hecs::Entity) {
-    if let Ok(tag) = ctx.world.get::<&Tag>(entity) {
-        section_header(ui, "Tag");
-        ui.label(&tag.0);
+fn draw_tag_section(
+    ui: &mut Ui,
+    ctx: &Ctx,
+    entity: hecs::Entity,
+    edits: &mut Vec<PendingEdit>,
+) {
+    let tag = match ctx.world.get::<&Tag>(entity) {
+        Ok(t) => t.0.clone(),
+        Err(_) => return,
+    };
+
+    section_header(ui, "Tag");
+
+    let mut input = esox_engine::esox_ui::InputState::new();
+    input.text = tag;
+    if ui.text_input(super::hash("tag_name"), &mut input, "name...").changed {
+        edits.push(PendingEdit::SetTag(entity, input.text));
     }
 }
 
@@ -124,7 +137,12 @@ fn draw_transform_section(
     }
 }
 
-fn draw_camera_section(ui: &mut Ui, ctx: &Ctx, entity: hecs::Entity) {
+fn draw_camera_section(
+    ui: &mut Ui,
+    ctx: &Ctx,
+    entity: hecs::Entity,
+    edits: &mut Vec<PendingEdit>,
+) {
     let cam = match ctx.world.get::<&Camera3D>(entity) {
         Ok(c) => *c,
         Err(_) => return,
@@ -137,22 +155,38 @@ fn draw_camera_section(ui: &mut Ui, ctx: &Ctx, entity: hecs::Entity) {
     let mut far = cam.far as f64;
 
     ui.muted_label("FOV (degrees)");
-    ui.number_input_clamped(super::hash("cam_fov"), &mut fov, 1.0, 1.0, 179.0);
+    if ui.number_input_clamped(super::hash("cam_fov"), &mut fov, 1.0, 1.0, 179.0).changed {
+        edits.push(PendingEdit::SetCameraFov(entity, (fov as f32).to_radians()));
+    }
     ui.muted_label("Near");
-    ui.number_input_clamped(super::hash("cam_near"), &mut near, 0.01, 0.001, 100.0);
+    if ui.number_input_clamped(super::hash("cam_near"), &mut near, 0.01, 0.001, 100.0).changed {
+        edits.push(PendingEdit::SetCameraNear(entity, near as f32));
+    }
     ui.muted_label("Far");
-    ui.number_input_clamped(super::hash("cam_far"), &mut far, 1.0, 1.0, 10000.0);
+    if ui.number_input_clamped(super::hash("cam_far"), &mut far, 1.0, 1.0, 10000.0).changed {
+        edits.push(PendingEdit::SetCameraFar(entity, far as f32));
+    }
     ui.muted_label(if cam.active { "Active" } else { "Inactive" });
 }
 
-fn draw_mesh_renderer_section(ui: &mut Ui, ctx: &Ctx, entity: hecs::Entity) {
+fn draw_mesh_renderer_section(
+    ui: &mut Ui,
+    ctx: &Ctx,
+    entity: hecs::Entity,
+    edits: &mut Vec<PendingEdit>,
+) {
     let (visible, tint) = match ctx.world.get::<&MeshRenderer>(entity) {
         Ok(m) => (m.visible, m.tint),
         Err(_) => return,
     };
 
     section_header(ui, "Mesh Renderer");
-    ui.muted_label(&format!("Visible: {visible}"));
+
+    let label = if visible { "Visible: ON" } else { "Visible: OFF" };
+    if ui.button(super::hash("mr_visible"), label).clicked {
+        edits.push(PendingEdit::SetMeshVisible(entity, !visible));
+    }
+
     ui.muted_label(&format!(
         "Tint: [{:.2}, {:.2}, {:.2}, {:.2}]",
         tint[0], tint[1], tint[2], tint[3]
@@ -174,11 +208,21 @@ fn draw_point_light_section(
 
     let mut intensity = pl.intensity as f64;
     let mut range = pl.range as f64;
+    let mut cr = pl.color[0] as f64;
+    let mut cg = pl.color[1] as f64;
+    let mut cb = pl.color[2] as f64;
 
-    ui.muted_label(&format!(
-        "Color: [{:.2}, {:.2}, {:.2}]",
-        pl.color[0], pl.color[1], pl.color[2]
-    ));
+    ui.muted_label("Color (RGB)");
+    let mut color_changed = false;
+    ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
+        0 => { color_changed |= ui.number_input_clamped(super::hash("pl_cr"), &mut cr, 0.01, 0.0, 1.0).changed; }
+        1 => { color_changed |= ui.number_input_clamped(super::hash("pl_cg"), &mut cg, 0.01, 0.0, 1.0).changed; }
+        2 => { color_changed |= ui.number_input_clamped(super::hash("pl_cb"), &mut cb, 0.01, 0.0, 1.0).changed; }
+        _ => {}
+    });
+    if color_changed {
+        edits.push(PendingEdit::SetPointLightColor(entity, [cr as f32, cg as f32, cb as f32]));
+    }
 
     ui.muted_label("Intensity");
     if ui.number_input_clamped(super::hash("pl_intensity"), &mut intensity, 0.5, 0.0, 1000.0).changed {
@@ -208,13 +252,23 @@ fn draw_spot_light_section(
 
     let mut intensity = sl.intensity as f64;
     let mut range = sl.range as f64;
-    let inner = sl.inner_cone_angle.to_degrees() as f64;
-    let outer = sl.outer_cone_angle.to_degrees() as f64;
+    let mut inner = sl.inner_cone_angle.to_degrees() as f64;
+    let mut outer = sl.outer_cone_angle.to_degrees() as f64;
+    let mut cr = sl.color[0] as f64;
+    let mut cg = sl.color[1] as f64;
+    let mut cb = sl.color[2] as f64;
 
-    ui.muted_label(&format!(
-        "Color: [{:.2}, {:.2}, {:.2}]",
-        sl.color[0], sl.color[1], sl.color[2]
-    ));
+    ui.muted_label("Color (RGB)");
+    let mut color_changed = false;
+    ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
+        0 => { color_changed |= ui.number_input_clamped(super::hash("sl_cr"), &mut cr, 0.01, 0.0, 1.0).changed; }
+        1 => { color_changed |= ui.number_input_clamped(super::hash("sl_cg"), &mut cg, 0.01, 0.0, 1.0).changed; }
+        2 => { color_changed |= ui.number_input_clamped(super::hash("sl_cb"), &mut cb, 0.01, 0.0, 1.0).changed; }
+        _ => {}
+    });
+    if color_changed {
+        edits.push(PendingEdit::SetSpotLightColor(entity, [cr as f32, cg as f32, cb as f32]));
+    }
 
     ui.muted_label("Intensity");
     if ui.number_input_clamped(super::hash("sl_intensity"), &mut intensity, 0.5, 0.0, 1000.0).changed {
@@ -226,8 +280,16 @@ fn draw_spot_light_section(
         edits.push(PendingEdit::SetSpotLightRange(entity, range as f32));
     }
 
-    ui.muted_label(&format!("Inner: {:.1}", inner));
-    ui.muted_label(&format!("Outer: {:.1}", outer));
+    ui.muted_label("Inner Cone (deg)");
+    if ui.number_input_clamped(super::hash("sl_inner"), &mut inner, 0.5, 0.0, 90.0).changed {
+        edits.push(PendingEdit::SetSpotLightInnerCone(entity, (inner as f32).to_radians()));
+    }
+
+    ui.muted_label("Outer Cone (deg)");
+    if ui.number_input_clamped(super::hash("sl_outer"), &mut outer, 0.5, 0.0, 90.0).changed {
+        edits.push(PendingEdit::SetSpotLightOuterCone(entity, (outer as f32).to_radians()));
+    }
+
     ui.muted_label(&format!("Shadows: {}", sl.cast_shadows));
 }
 
@@ -245,11 +307,21 @@ fn draw_dir_light_section(
     section_header(ui, "Directional Light");
 
     let mut intensity = dl.intensity as f64;
+    let mut cr = dl.color[0] as f64;
+    let mut cg = dl.color[1] as f64;
+    let mut cb = dl.color[2] as f64;
 
-    ui.muted_label(&format!(
-        "Color: [{:.2}, {:.2}, {:.2}]",
-        dl.color[0], dl.color[1], dl.color[2]
-    ));
+    ui.muted_label("Color (RGB)");
+    let mut color_changed = false;
+    ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
+        0 => { color_changed |= ui.number_input_clamped(super::hash("dl_cr"), &mut cr, 0.01, 0.0, 1.0).changed; }
+        1 => { color_changed |= ui.number_input_clamped(super::hash("dl_cg"), &mut cg, 0.01, 0.0, 1.0).changed; }
+        2 => { color_changed |= ui.number_input_clamped(super::hash("dl_cb"), &mut cb, 0.01, 0.0, 1.0).changed; }
+        _ => {}
+    });
+    if color_changed {
+        edits.push(PendingEdit::SetDirLightColor(entity, [cr as f32, cg as f32, cb as f32]));
+    }
 
     ui.muted_label("Intensity");
     if ui.number_input_clamped(super::hash("dl_intensity"), &mut intensity, 0.1, 0.0, 100.0).changed {

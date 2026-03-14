@@ -14,6 +14,9 @@ use esox_engine::{
 mod hierarchy;
 mod inspector;
 mod picking;
+mod undo;
+
+use undo::{EntitySnapshot, UndoAction, UndoStack};
 
 // ── Editor camera ──
 
@@ -192,6 +195,15 @@ enum PendingEdit {
     SetDirLightIntensity(hecs::Entity, f32),
 }
 
+// ── Gizmo drag state ──
+
+struct GizmoDrag {
+    axis: picking::GizmoAxis,
+    entity: hecs::Entity,
+    start_axis_t: f32,
+    start_entity_pos: Vec3,
+}
+
 // ── Editor state ──
 
 struct EditorApp {
@@ -206,15 +218,17 @@ struct EditorApp {
     // Grid
     grid_mesh: Option<MeshHandle>,
     grid_mat: Option<MaterialHandle>,
-    // Scene tracking (used by Save/Load, Steps 6-7)
-    #[allow(dead_code)]
+    // Scene tracking
     scene_path: Option<String>,
-    #[allow(dead_code)]
     dirty: bool,
     // Pending mutations from UI
     pending_edits: Vec<PendingEdit>,
     // Pending menu actions
     pending_menu_action: Option<u64>,
+    // Gizmo interaction
+    gizmo_drag: Option<GizmoDrag>,
+    // Undo/redo
+    undo_stack: UndoStack,
 }
 
 #[allow(dead_code)]
@@ -247,6 +261,8 @@ impl EditorApp {
             dirty: false,
             pending_edits: Vec::new(),
             pending_menu_action: None,
+            gizmo_drag: None,
+            undo_stack: UndoStack::new(),
         }
     }
 
@@ -410,35 +426,69 @@ impl Game for EditorApp {
 
     fn update(&mut self, ctx: &mut Ctx) {
         // Apply pending edits from UI
+        if !self.pending_edits.is_empty() {
+            self.dirty = true;
+        }
+        let elapsed = ctx.time.elapsed;
         for edit in self.pending_edits.drain(..) {
             match edit {
                 PendingEdit::SetTransform(entity, t) => {
                     if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(entity) {
+                        let old = *tr;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditTransform { entity, old, new: t },
+                            elapsed,
+                        );
                         *tr = t;
                     }
                 }
                 PendingEdit::SetPointLightIntensity(entity, v) => {
                     if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                        let old = pl.intensity;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditPointLightIntensity { entity, old, new: v },
+                            elapsed,
+                        );
                         pl.intensity = v;
                     }
                 }
                 PendingEdit::SetPointLightRange(entity, v) => {
                     if let Ok(mut pl) = ctx.world.get::<&mut esox_engine::PointLightComponent>(entity) {
+                        let old = pl.range;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditPointLightRange { entity, old, new: v },
+                            elapsed,
+                        );
                         pl.range = v;
                     }
                 }
                 PendingEdit::SetSpotLightIntensity(entity, v) => {
                     if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                        let old = sl.intensity;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditSpotLightIntensity { entity, old, new: v },
+                            elapsed,
+                        );
                         sl.intensity = v;
                     }
                 }
                 PendingEdit::SetSpotLightRange(entity, v) => {
                     if let Ok(mut sl) = ctx.world.get::<&mut esox_engine::SpotLightComponent>(entity) {
+                        let old = sl.range;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditSpotLightRange { entity, old, new: v },
+                            elapsed,
+                        );
                         sl.range = v;
                     }
                 }
                 PendingEdit::SetDirLightIntensity(entity, v) => {
                     if let Ok(mut dl) = ctx.world.get::<&mut DirectionalLightComponent>(entity) {
+                        let old = dl.intensity;
+                        self.undo_stack.push_or_merge(
+                            UndoAction::EditDirLightIntensity { entity, old, new: v },
+                            elapsed,
+                        );
                         dl.intensity = v;
                     }
                 }
@@ -454,31 +504,107 @@ impl Game for EditorApp {
             self.exit = true;
         }
 
-        // Left-click picking (only when no MMB/RMB held)
-        if ctx.input.just_pressed("pick")
+        // Helper: build camera matrices for picking
+        let cam_pos = self.camera.position();
+        let cam_target = match self.camera.mode {
+            CameraMode::Orbit => self.camera.orbit_target,
+            CameraMode::Fly => cam_pos + self.camera.forward(),
+        };
+        let view = Mat4::look_at_rh(cam_pos, cam_target, Vec3::Y);
+        let aspect = ctx.viewport.0 as f32 / ctx.viewport.1.max(1) as f32;
+        let projection = Mat4::perspective_rh(FRAC_PI_4, aspect, 0.1, 500.0);
+
+        // Gizmo drag: continue or end
+        if let Some(ref drag) = self.gizmo_drag {
+            if ctx.input.is_mouse_button_down(0) {
+                let (mx, my) = ctx.input.mouse_pos();
+                let (ray_origin, ray_dir) =
+                    picking::screen_to_ray(mx, my, ctx.viewport, view, projection);
+
+                let axis_dir = match drag.axis {
+                    picking::GizmoAxis::X => Vec3::X,
+                    picking::GizmoAxis::Y => Vec3::Y,
+                    picking::GizmoAxis::Z => Vec3::Z,
+                };
+                let t = picking::closest_point_on_axis(
+                    ray_origin,
+                    ray_dir,
+                    drag.start_entity_pos,
+                    axis_dir,
+                );
+                let delta_t = t - drag.start_axis_t;
+                let new_pos = drag.start_entity_pos + axis_dir * delta_t;
+
+                if let Ok(mut tr) = ctx.world.get::<&mut Transform3D>(drag.entity) {
+                    tr.position = new_pos;
+                }
+            } else {
+                // LMB released — end drag
+                let drag = self.gizmo_drag.take().unwrap();
+                if let Ok(t) = ctx.world.get::<&Transform3D>(drag.entity) {
+                    let final_pos = t.position;
+                    if final_pos != drag.start_entity_pos {
+                        self.undo_stack.push(UndoAction::GizmoDrag {
+                            entity: drag.entity,
+                            old_pos: drag.start_entity_pos,
+                            new_pos: final_pos,
+                        });
+                    }
+                }
+                self.dirty = true;
+            }
+        }
+
+        // Left-click picking (only when no MMB/RMB held, not dragging gizmo)
+        if self.gizmo_drag.is_none()
+            && ctx.input.just_pressed("pick")
             && !ctx.input.is_mouse_button_down(1)
             && !ctx.input.is_mouse_button_down(2)
         {
             let (mx, my) = ctx.input.mouse_pos();
-
-            // Build view and projection matrices from camera entity
-            let cam_pos = self.camera.position();
-            let cam_target = match self.camera.mode {
-                CameraMode::Orbit => self.camera.orbit_target,
-                CameraMode::Fly => cam_pos + self.camera.forward(),
-            };
-
-            let view = Mat4::look_at_rh(cam_pos, cam_target, Vec3::Y);
-            let aspect = ctx.viewport.0 as f32 / ctx.viewport.1.max(1) as f32;
-            let projection = Mat4::perspective_rh(FRAC_PI_4, aspect, 0.1, 500.0);
-
             let (ray_origin, ray_dir) =
                 picking::screen_to_ray(mx, my, ctx.viewport, view, projection);
 
-            if let Some((entity, _dist)) =
-                picking::pick_entity(ctx, ray_origin, ray_dir, self.camera_entity)
-            {
-                self.selected = Some(entity);
+            // Try gizmo picking first
+            let mut gizmo_hit = false;
+            if let Some(selected) = self.selected {
+                if let Ok(gt) = ctx.world.get::<&GlobalTransform>(selected) {
+                    let world_pos = Vec3::new(gt.0.col(3).x, gt.0.col(3).y, gt.0.col(3).z);
+                    let cam_dist = (world_pos - cam_pos).length();
+                    let gizmo_scale = cam_dist / 8.0;
+
+                    if let Some(axis) =
+                        picking::pick_gizmo_axis(ray_origin, ray_dir, world_pos, gizmo_scale)
+                    {
+                        let axis_dir = match axis {
+                            picking::GizmoAxis::X => Vec3::X,
+                            picking::GizmoAxis::Y => Vec3::Y,
+                            picking::GizmoAxis::Z => Vec3::Z,
+                        };
+                        let start_t = picking::closest_point_on_axis(
+                            ray_origin,
+                            ray_dir,
+                            world_pos,
+                            axis_dir,
+                        );
+                        self.gizmo_drag = Some(GizmoDrag {
+                            axis,
+                            entity: selected,
+                            start_axis_t: start_t,
+                            start_entity_pos: world_pos,
+                        });
+                        gizmo_hit = true;
+                    }
+                }
+            }
+
+            // Fall through to entity picking if no gizmo was hit
+            if !gizmo_hit {
+                if let Some((entity, _dist)) =
+                    picking::pick_entity(ctx, ray_origin, ray_dir, self.camera_entity)
+                {
+                    self.selected = Some(entity);
+                }
             }
         }
 
@@ -496,7 +622,49 @@ impl Game for EditorApp {
         if ctx.input.just_pressed("delete") {
             if let Some(selected) = self.selected.take() {
                 if self.camera_entity != Some(selected) {
+                    let snapshot = EntitySnapshot::capture(ctx.world, selected);
                     let _ = ctx.world.despawn(selected);
+                    self.undo_stack.push(UndoAction::DeleteEntity {
+                        stale_entity: selected,
+                        snapshot,
+                    });
+                    self.dirty = true;
+                }
+            }
+        }
+
+        // Undo/Redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
+        let ctrl = ctx.input.is_key_down(KeyCode::ControlLeft)
+            || ctx.input.is_key_down(KeyCode::ControlRight);
+        let shift = ctx.input.is_key_down(KeyCode::ShiftLeft)
+            || ctx.input.is_key_down(KeyCode::ShiftRight);
+        if ctrl {
+            if ctx.input.just_pressed_key(KeyCode::KeyZ) {
+                if shift {
+                    // Redo
+                    if let Some(result) = self.undo_stack.redo(ctx.world) {
+                        if let Some(sel) = result.select {
+                            self.selected = sel;
+                        }
+                        self.dirty = true;
+                    }
+                } else {
+                    // Undo
+                    if let Some(result) = self.undo_stack.undo(ctx.world) {
+                        if let Some(sel) = result.select {
+                            self.selected = sel;
+                        }
+                        self.dirty = true;
+                    }
+                }
+            }
+            if ctx.input.just_pressed_key(KeyCode::KeyY) {
+                // Redo (alternative)
+                if let Some(result) = self.undo_stack.redo(ctx.world) {
+                    if let Some(sel) = result.select {
+                        self.selected = sel;
+                    }
+                    self.dirty = true;
                 }
             }
         }
@@ -573,9 +741,10 @@ impl Game for EditorApp {
         use esox_engine::esox_ui::{Menu, MenuEntry, MenuItem};
 
         // Menu bar
+        let file_label = if self.dirty { "File *" } else { "File" };
         let menus = &[
             Menu::new(
-                "File",
+                file_label,
                 vec![
                     MenuEntry::Item(MenuItem::new("New Scene", 1).with_shortcut("Ctrl+N")),
                     MenuEntry::Item(MenuItem::new("Open Scene", 2).with_shortcut("Ctrl+O")),
@@ -591,16 +760,16 @@ impl Game for EditorApp {
             Menu::new(
                 "Edit",
                 vec![
-                    MenuEntry::Item(
-                        MenuItem::new("Undo", 10)
-                            .with_shortcut("Ctrl+Z")
-                            .disabled(),
-                    ),
-                    MenuEntry::Item(
-                        MenuItem::new("Redo", 11)
-                            .with_shortcut("Ctrl+Shift+Z")
-                            .disabled(),
-                    ),
+                    MenuEntry::Item({
+                        let mut item = MenuItem::new("Undo", 10).with_shortcut("Ctrl+Z");
+                        if !self.undo_stack.can_undo() { item = item.disabled(); }
+                        item
+                    }),
+                    MenuEntry::Item({
+                        let mut item = MenuItem::new("Redo", 11).with_shortcut("Ctrl+Shift+Z");
+                        if !self.undo_stack.can_redo() { item = item.disabled(); }
+                        item
+                    }),
                     MenuEntry::Separator,
                     MenuEntry::Item(MenuItem::new("Delete Entity", 12).with_shortcut("Del")),
                     MenuEntry::Item(MenuItem::new("Duplicate", 13).with_shortcut("Ctrl+D")),
@@ -667,7 +836,89 @@ impl Game for EditorApp {
 impl EditorApp {
     fn handle_menu_action(&mut self, action: u64, ctx: &mut Ctx) {
         match action {
+            // New Scene
+            1 => {
+                if let Some(cam) = self.camera_entity {
+                    esox_engine::scene::clear_scene(
+                        ctx.world,
+                        ctx.physics,
+                        ctx.entity_map,
+                        &[cam],
+                    );
+                }
+                self.selected = None;
+                self.scene_path = None;
+                self.dirty = false;
+                self.undo_stack.clear();
+            }
+            // Open Scene
+            2 => {
+                let file = rfd::FileDialog::new()
+                    .add_filter("Scene", &["scene.ron"])
+                    .pick_file();
+                if let Some(path) = file {
+                    // Clear current scene
+                    if let Some(cam) = self.camera_entity {
+                        esox_engine::scene::clear_scene(
+                            ctx.world,
+                            ctx.physics,
+                            ctx.entity_map,
+                            &[cam],
+                        );
+                    }
+                    match std::fs::read_to_string(&path) {
+                        Ok(ron_str) => match esox_engine::scene::scene_from_ron(&ron_str) {
+                            Ok(scene) => {
+                                let _id_map = esox_engine::scene::load_scene(
+                                    &scene,
+                                    ctx.world,
+                                    ctx.assets,
+                                    Some(ctx.physics),
+                                    Some(ctx.entity_map),
+                                );
+                                self.scene_path = Some(path.to_string_lossy().into_owned());
+                                self.dirty = false;
+                                self.selected = None;
+                                self.undo_stack.clear();
+                                eprintln!("[editor] opened scene: {}", path.display());
+                            }
+                            Err(e) => eprintln!("[editor] failed to parse scene: {e}"),
+                        },
+                        Err(e) => eprintln!("[editor] failed to read file: {e}"),
+                    }
+                }
+            }
+            // Save
+            3 => {
+                if let Some(ref path) = self.scene_path.clone() {
+                    self.save_scene_to(ctx, path);
+                } else {
+                    self.save_scene_as(ctx);
+                }
+            }
+            // Save As
+            4 => {
+                self.save_scene_as(ctx);
+            }
             9 => self.exit = true,
+            10 => {
+                // Undo (menu)
+                if let Some(result) = self.undo_stack.undo(ctx.world) {
+                    if let Some(sel) = result.select {
+                        self.selected = sel;
+                    }
+                    self.dirty = true;
+                }
+            }
+            11 => {
+                // Redo (menu)
+                if let Some(result) = self.undo_stack.redo(ctx.world) {
+                    if let Some(sel) = result.select {
+                        self.selected = sel;
+                    }
+                    self.dirty = true;
+                }
+            }
             20 => {
                 self.camera = EditorCamera::new();
             }
@@ -682,7 +933,15 @@ impl EditorApp {
             12 => {
                 // Delete selected entity
                 if let Some(selected) = self.selected.take() {
-                    let _ = ctx.world.despawn(selected);
+                    if self.camera_entity != Some(selected) {
+                        let snapshot = EntitySnapshot::capture(ctx.world, selected);
+                        let _ = ctx.world.despawn(selected);
+                        self.undo_stack.push(UndoAction::DeleteEntity {
+                            stale_entity: selected,
+                            snapshot,
+                        });
+                        self.dirty = true;
+                    }
                 }
             }
             30 => {
@@ -692,7 +951,10 @@ impl EditorApp {
                     GlobalTransform::default(),
                     Tag("Empty".to_string()),
                 ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
                 self.selected = Some(entity);
+                self.dirty = true;
             }
             31 => {
                 // Add cube
@@ -721,7 +983,10 @@ impl EditorApp {
                     },
                     Tag("Cube".to_string()),
                 ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
                 self.selected = Some(entity);
+                self.dirty = true;
             }
             32 => {
                 // Add sphere
@@ -752,7 +1017,10 @@ impl EditorApp {
                     },
                     Tag("Sphere".to_string()),
                 ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
                 self.selected = Some(entity);
+                self.dirty = true;
             }
             33 => {
                 // Add point light
@@ -770,7 +1038,10 @@ impl EditorApp {
                     },
                     Tag("Point Light".to_string()),
                 ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
                 self.selected = Some(entity);
+                self.dirty = true;
             }
             34 => {
                 // Add spot light
@@ -791,9 +1062,38 @@ impl EditorApp {
                     },
                     Tag("Spot Light".to_string()),
                 ));
+                let snapshot = EntitySnapshot::capture(ctx.world, entity);
+                self.undo_stack.push(UndoAction::SpawnEntity { entity, snapshot });
                 self.selected = Some(entity);
+                self.dirty = true;
             }
             _ => {}
+        }
+    }
+
+    fn save_scene_to(&mut self, ctx: &Ctx, path: &str) {
+        let scene = esox_engine::scene::save_scene(ctx.world, ctx.assets);
+        match esox_engine::scene::scene_to_ron(&scene) {
+            Ok(ron_str) => match std::fs::write(path, &ron_str) {
+                Ok(()) => {
+                    self.dirty = false;
+                    eprintln!("[editor] saved scene: {path}");
+                }
+                Err(e) => eprintln!("[editor] failed to write scene: {e}"),
+            },
+            Err(e) => eprintln!("[editor] failed to serialize scene: {e}"),
+        }
+    }
+
+    fn save_scene_as(&mut self, ctx: &Ctx) {
+        let file = rfd::FileDialog::new()
+            .add_filter("Scene", &["scene.ron"])
+            .set_file_name("untitled.scene.ron")
+            .save_file();
+        if let Some(path) = file {
+            let path_str = path.to_string_lossy().into_owned();
+            self.save_scene_to(ctx, &path_str);
+            self.scene_path = Some(path_str);
         }
     }
 }

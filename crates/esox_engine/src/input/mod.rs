@@ -177,6 +177,11 @@ impl InputManager {
         self.keys_down.get(&key).copied().unwrap_or(false)
     }
 
+    /// Whether a specific key was just pressed this tick.
+    pub fn just_pressed_key(&self, key: KeyCode) -> bool {
+        self.keys_just_pressed.get(&key).copied().unwrap_or(false)
+    }
+
     /// Scroll wheel delta for this tick (positive = scroll up).
     pub fn scroll_delta(&self) -> f32 {
         self.scroll_delta

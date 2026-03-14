@@ -52,6 +52,7 @@ impl Default for GlobalTransform {
 }
 
 /// Mesh renderer component — entities with this + Transform3D are drawn.
+#[derive(Clone, Copy)]
 pub struct MeshRenderer {
     pub mesh: MeshHandle,
     pub material: MaterialHandle,

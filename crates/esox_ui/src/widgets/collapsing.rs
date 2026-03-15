@@ -71,7 +71,8 @@ impl<'f> Ui<'f> {
             response.changed = true;
         }
 
-        // Keyboard: Enter/Space toggles, ArrowLeft collapses, ArrowRight expands.
+        // Keyboard: ArrowLeft collapses, ArrowRight expands.
+        // (Enter/Space activation is handled by widget_response since this is WidgetKind::Button.)
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, _mods) in &keys {
@@ -79,14 +80,6 @@ impl<'f> Ui<'f> {
                     continue;
                 }
                 match &event.logical_key {
-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
-                        if is_open {
-                            self.state.collapsing_open.remove(&id);
-                        } else {
-                            self.state.collapsing_open.insert(id);
-                        }
-                        response.changed = true;
-                    }
                     Key::Named(NamedKey::ArrowLeft) => {
                         if is_open {
                             self.state.collapsing_open.remove(&id);

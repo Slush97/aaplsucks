@@ -538,27 +538,6 @@ impl AppDelegate for DemoApp {
         event: &winit::event::KeyEvent,
         modifiers: winit::keyboard::ModifiersState,
     ) {
-        use winit::event::ElementState;
-        use winit::keyboard::{Key, NamedKey};
-
-        if event.state == ElementState::Pressed {
-            if let Key::Named(NamedKey::Tab) = &event.logical_key {
-                let focused = self.ui_state.focused;
-                let is_text_area = focused.is_some_and(|fid| {
-                    fid == esox_ui::fnv1a_runtime("text_area")
-                        || fid == esox_ui::fnv1a_runtime("text_area_wrap")
-                });
-                if !is_text_area {
-                    if modifiers.shift_key() {
-                        self.ui_state.focus_prev();
-                    } else {
-                        self.ui_state.focus_next();
-                    }
-                    return;
-                }
-            }
-        }
-
         self.ui_state.process_key(event.clone(), modifiers);
     }
 

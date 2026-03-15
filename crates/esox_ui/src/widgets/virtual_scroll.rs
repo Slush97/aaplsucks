@@ -32,9 +32,17 @@ impl<'f> Ui<'f> {
         let content_height = state.item_count as f32 * item_height;
         let max_scroll = (content_height - visible_height).max(0.0);
         let mut offset = match self.state.scroll_offsets.get_mut(&id) {
-            Some((off, age)) => { *age = 0; off[0] }
+            Some((off, age)) => {
+                *age = 0;
+                // Pre-clamp using previous frame's max_scroll to avoid stranded offsets.
+                if let Some(prev_max) = self.state.prev_max_scroll.get(&id) {
+                    off[0] = off[0].clamp(0.0, prev_max[0]);
+                }
+                off[0]
+            }
             None => 0.0,
         };
+        self.state.prev_max_scroll.insert(id, [max_scroll, 0.0]);
 
         // Handle scroll_to.
         if let Some(target) = state.scroll_to.take() {

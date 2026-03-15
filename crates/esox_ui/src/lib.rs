@@ -1067,6 +1067,11 @@ impl<'f> Ui<'f> {
             self.state.hit_rects.push((rect, id, kind));
         }
         self.state.focus_chain.push(id);
+
+        // Track the focused widget's kind for keyboard activation.
+        if self.state.focused == Some(id) {
+            self.state.focused_kind = Some(kind);
+        }
     }
 
     /// Compute the Response for a widget given its ID and rect.
@@ -1119,6 +1124,35 @@ impl<'f> Ui<'f> {
             if !*consumed && effective.contains(cx, cy) {
                 right_clicked = true;
                 *consumed = true;
+            }
+        }
+
+        // Keyboard activation: Enter/Space triggers click for activatable widgets.
+        if !clicked && focused && !self.disabled {
+            use winit::keyboard::{Key, NamedKey};
+            let activatable = matches!(
+                self.state.focused_kind,
+                Some(state::WidgetKind::Button)
+                    | Some(state::WidgetKind::Checkbox)
+                    | Some(state::WidgetKind::Toggle)
+                    | Some(state::WidgetKind::Radio)
+                    | Some(state::WidgetKind::Hyperlink)
+                    | Some(state::WidgetKind::Tab)
+            );
+            if activatable {
+                for (event, _) in &self.state.keys {
+                    if event.state.is_pressed() {
+                        if matches!(
+                            event.logical_key,
+                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space)
+                        ) {
+                            clicked = true;
+                            self.state.focused = Some(id);
+                            self.state.reset_blink();
+                            break;
+                        }
+                    }
+                }
             }
         }
 

@@ -85,6 +85,46 @@ impl<'f> Ui<'f> {
             response.changed = true;
         }
 
+        // Keyboard: arrow keys adjust value.
+        if response.focused && !disabled {
+            use winit::keyboard::{Key, NamedKey};
+            for (event, _) in &self.state.keys {
+                if !event.state.is_pressed() {
+                    continue;
+                }
+                let step = if (max - min) >= 10.0 {
+                    1.0
+                } else {
+                    (max - min) / 20.0
+                };
+                match &event.logical_key {
+                    Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowDown) => {
+                        value = (value - step).clamp(min, max);
+                        let formatted = if (max - min) >= 10.0 {
+                            format!("{}", value.round() as i32)
+                        } else {
+                            format!("{:.1}", value)
+                        };
+                        input.text = formatted;
+                        input.cursor = input.text.len();
+                        response.changed = true;
+                    }
+                    Key::Named(NamedKey::ArrowRight | NamedKey::ArrowUp) => {
+                        value = (value + step).clamp(min, max);
+                        let formatted = if (max - min) >= 10.0 {
+                            format!("{}", value.round() as i32)
+                        } else {
+                            format!("{:.1}", value)
+                        };
+                        input.text = formatted;
+                        input.cursor = input.text.len();
+                        response.changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Focus ring.
         if response.focused && !disabled {
             paint::draw_focus_ring(

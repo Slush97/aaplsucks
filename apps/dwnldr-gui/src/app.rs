@@ -484,14 +484,7 @@ impl AppDelegate for App {
                 }
                 return;
             }
-            Key::Named(NamedKey::Tab) => {
-                if modifiers.shift_key() {
-                    self.ui_state.focus_prev();
-                } else {
-                    self.ui_state.focus_next();
-                }
-                return;
-            }
+            // Tab focus cycling is now handled automatically by esox_ui.
             Key::Named(NamedKey::Enter) if ctrl => {
                 self.execute_tool();
                 return;

@@ -276,6 +276,94 @@ impl InputState {
         self.cursor = pos;
     }
 
+    // ── Word boundary helpers ──
+
+    /// Find the byte offset of the word boundary to the left of `pos`.
+    fn word_boundary_left(&self, pos: usize) -> usize {
+        let bytes = self.text.as_bytes();
+        let mut i = pos;
+        // Skip whitespace backward.
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        // Skip non-whitespace backward.
+        while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i
+    }
+
+    /// Find the byte offset of the word boundary to the right of `pos`.
+    fn word_boundary_right(&self, pos: usize) -> usize {
+        let bytes = self.text.as_bytes();
+        let len = bytes.len();
+        let mut i = pos;
+        // Skip non-whitespace forward.
+        while i < len && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        // Skip whitespace forward.
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    }
+
+    /// Move cursor one word left (Ctrl+Left).
+    pub fn move_word_left(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+        self.cursor = self.word_boundary_left(self.cursor);
+    }
+
+    /// Move cursor one word right (Ctrl+Right).
+    pub fn move_word_right(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+        self.cursor = self.word_boundary_right(self.cursor);
+    }
+
+    /// Move cursor one word left, extending selection (Ctrl+Shift+Left).
+    pub fn move_word_left_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = self.word_boundary_left(self.cursor);
+        self.update_selection_from_anchor();
+    }
+
+    /// Move cursor one word right, extending selection (Ctrl+Shift+Right).
+    pub fn move_word_right_extend(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+        self.cursor = self.word_boundary_right(self.cursor);
+        self.update_selection_from_anchor();
+    }
+
+    /// Delete the word before the cursor (Ctrl+Backspace).
+    pub fn delete_word_back(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let target = self.word_boundary_left(self.cursor);
+        if target < self.cursor {
+            self.text.drain(target..self.cursor);
+            self.cursor = target;
+        }
+    }
+
+    /// Delete the word after the cursor (Ctrl+Delete).
+    pub fn delete_word_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let target = self.word_boundary_right(self.cursor);
+        if target > self.cursor {
+            self.text.drain(self.cursor..target);
+        }
+    }
+
     /// Select all text.
     pub fn select_all(&mut self) {
         if !self.text.is_empty() {
@@ -888,6 +976,10 @@ pub struct UiState {
     pub debug_overlay: bool,
     /// Collected widget rects for debug overlay (populated when `debug_overlay` is true).
     pub(crate) debug_widget_rects: Vec<(Rect, u64, &'static str)>,
+    /// The WidgetKind of the currently focused widget (set during register_widget).
+    pub(crate) focused_kind: Option<WidgetKind>,
+    /// Previous frame's max scroll values per scrollable, for pre-clamping on content shrink.
+    pub(crate) prev_max_scroll: HashMap<u64, [f32; 2]>,
 }
 
 /// IME (Input Method Editor) composition state.
@@ -955,6 +1047,8 @@ impl UiState {
             flex_child_sizes: HashMap::new(),
             debug_overlay: false,
             debug_widget_rects: Vec::new(),
+            focused_kind: None,
+            prev_max_scroll: HashMap::new(),
         }
     }
 
@@ -1336,6 +1430,38 @@ impl UiState {
         });
 
         self.hit_rects.clear();
+
+        // Automatic Tab/Shift+Tab focus cycling. Uses focused_kind from the
+        // previous frame (set during register_widget calls). TextInput widgets
+        // keep Tab for literal insertion.
+        {
+            use winit::keyboard::{Key, NamedKey};
+            let is_text_input = matches!(self.focused_kind, Some(WidgetKind::TextInput));
+            let mut tab_action: Option<bool> = None; // Some(true) = shift+tab, Some(false) = tab
+            if !is_text_input {
+                for (event, mods) in &self.keys {
+                    if event.state.is_pressed() {
+                        if let Key::Named(NamedKey::Tab) = &event.logical_key {
+                            tab_action = Some(mods.shift_key());
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(shift) = tab_action {
+                self.keys.retain(|(event, _)| {
+                    !(event.state.is_pressed()
+                        && matches!(event.logical_key, Key::Named(NamedKey::Tab)))
+                });
+                if shift {
+                    self.focus_prev();
+                } else {
+                    self.focus_next();
+                }
+            }
+            self.focused_kind = None; // reset for this frame
+        }
+
         self.spinner_active = false;
         self.debug_widget_rects.clear();
         if self.a11y_enabled {

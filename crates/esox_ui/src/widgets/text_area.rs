@@ -702,20 +702,36 @@ fn process_text_area_key(
         }
         Key::Named(NamedKey::Backspace) => {
             input.save_undo();
-            input.delete_back();
+            if ctrl { input.delete_word_back(); } else { input.delete_back(); }
             true
         }
         Key::Named(NamedKey::Delete) => {
             input.save_undo();
-            input.delete_forward();
+            if ctrl { input.delete_word_forward(); } else { input.delete_forward(); }
             true
         }
         Key::Named(NamedKey::ArrowLeft) => {
-            if shift { input.move_left_extend(); } else { input.move_left(); }
+            if ctrl && shift {
+                input.move_word_left_extend();
+            } else if ctrl {
+                input.move_word_left();
+            } else if shift {
+                input.move_left_extend();
+            } else {
+                input.move_left();
+            }
             true
         }
         Key::Named(NamedKey::ArrowRight) => {
-            if shift { input.move_right_extend(); } else { input.move_right(); }
+            if ctrl && shift {
+                input.move_word_right_extend();
+            } else if ctrl {
+                input.move_word_right();
+            } else if shift {
+                input.move_right_extend();
+            } else {
+                input.move_right();
+            }
             true
         }
         Key::Named(NamedKey::ArrowUp) => {

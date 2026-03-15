@@ -40,7 +40,7 @@ impl<'f> Ui<'f> {
         let scroll_offset = match self.state.scroll_offsets.get_mut(&id) {
             Some((off, age)) => {
                 *age = 0;
-                if let Some(prev_max) = self.state.prev_max_scroll.get(&id) {
+                if let Some((prev_max, _)) = self.state.prev_max_scroll.get(&id) {
                     off[0] = off[0].clamp(0.0, prev_max[0]);
                 }
                 off[0]
@@ -99,7 +99,7 @@ impl<'f> Ui<'f> {
 
         // --- Scroll logic ---
         let max_scroll = (content_height - visible_height).max(0.0);
-        self.state.prev_max_scroll.insert(id, [max_scroll, 0.0]);
+        self.state.prev_max_scroll.insert(id, ([max_scroll, 0.0], 0));
         let mut offset = scroll_offset;
 
         // Handle scrollbar drag.
@@ -241,7 +241,7 @@ impl<'f> Ui<'f> {
         let scroll_offset = match self.state.scroll_offsets.get_mut(&id) {
             Some((off, age)) => {
                 *age = 0;
-                if let Some(prev_max) = self.state.prev_max_scroll.get(&id) {
+                if let Some((prev_max, _)) = self.state.prev_max_scroll.get(&id) {
                     off[1] = off[1].clamp(0.0, prev_max[1]);
                 }
                 off[1]
@@ -292,7 +292,7 @@ impl<'f> Ui<'f> {
         self.hit_clip = saved_hit_clip;
 
         let max_scroll = (content_width - visible_width).max(0.0);
-        self.state.prev_max_scroll.insert(id, [0.0, max_scroll]);
+        self.state.prev_max_scroll.insert(id, ([0.0, max_scroll], 0));
         let mut offset = scroll_offset;
 
         // Horizontal scroll from wheel (shift+scroll or trackpad).
@@ -373,7 +373,7 @@ impl<'f> Ui<'f> {
         let (scroll_y, scroll_x) = match self.state.scroll_offsets.get_mut(&id) {
             Some((off, age)) => {
                 *age = 0;
-                if let Some(prev_max) = self.state.prev_max_scroll.get(&id) {
+                if let Some((prev_max, _)) = self.state.prev_max_scroll.get(&id) {
                     off[0] = off[0].clamp(0.0, prev_max[0]);
                     off[1] = off[1].clamp(0.0, prev_max[1]);
                 }
@@ -427,7 +427,7 @@ impl<'f> Ui<'f> {
 
         let max_scroll_y = (content_height - content_area_h).max(0.0);
         let max_scroll_x = (content_width - content_area_w).max(0.0);
-        self.state.prev_max_scroll.insert(id, [max_scroll_y, max_scroll_x]);
+        self.state.prev_max_scroll.insert(id, ([max_scroll_y, max_scroll_x], 0));
         let mut off_y = scroll_y;
         let mut off_x = scroll_x;
 

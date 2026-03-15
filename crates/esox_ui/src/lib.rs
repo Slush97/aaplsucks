@@ -132,7 +132,7 @@ impl<'a, 'f> FlexBuilder<'a, 'f> {
     pub fn show_flex(self, id: u64, f: impl FnOnce(&mut FlexUi<'_, 'f>)) {
         let is_horizontal = self.direction == Direction::Horizontal;
         let available = if is_horizontal { self.ui.region.w } else { self.ui.region.h };
-        let cached = self.ui.state.flex_child_sizes.get(&id).cloned();
+        let cached = self.ui.state.flex_child_sizes.get(&id).map(|(v, _)| v.clone());
 
         let saved_cursor = self.ui.cursor;
         let saved_region = self.ui.region;
@@ -161,8 +161,8 @@ impl<'a, 'f> FlexBuilder<'a, 'f> {
         let wrap_lines = flex_ui.wrap_lines;
         let child_count = flex_ui.child_index;
 
-        // Store recorded sizes for next frame.
-        self.ui.state.flex_child_sizes.insert(id, recorded);
+        // Store recorded sizes for next frame (reset age to 0).
+        self.ui.state.flex_child_sizes.insert(id, (recorded, 0));
 
         let end_idx = self.ui.frame.instance_len();
 
@@ -1071,6 +1071,11 @@ impl<'f> Ui<'f> {
         // Track the focused widget's kind for keyboard activation.
         if self.state.focused == Some(id) {
             self.state.focused_kind = Some(kind);
+        }
+
+        // Track rects for widgets with active animations (for targeted damage).
+        if self.state.hover_anims.contains_key(&id) || self.state.anims.contains_key(&id) {
+            self.state.anim_rects.insert(id, rect);
         }
     }
 

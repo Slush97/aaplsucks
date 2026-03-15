@@ -1,6 +1,6 @@
 //! UI interaction state — focus, hit testing, input, keyboard/mouse routing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -26,14 +26,14 @@ struct UndoEntry {
 /// Undo/redo history for text input.
 #[derive(Debug, Clone)]
 pub struct UndoHistory {
-    entries: Vec<UndoEntry>,
+    entries: VecDeque<UndoEntry>,
     index: usize,
 }
 
 impl UndoHistory {
     fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             index: 0,
         }
     }
@@ -41,13 +41,13 @@ impl UndoHistory {
     fn push(&mut self, text: &str, cursor: usize) {
         // Truncate redo history.
         self.entries.truncate(self.index);
-        self.entries.push(UndoEntry {
+        self.entries.push_back(UndoEntry {
             text: text.to_string(),
             cursor,
         });
         // Cap at 100 entries.
         if self.entries.len() > 100 {
-            self.entries.remove(0);
+            self.entries.pop_front();
         }
         self.index = self.entries.len();
     }
@@ -376,7 +376,7 @@ impl InputState {
     /// Save current state to undo history. Call before mutations.
     pub fn save_undo(&mut self) {
         // Only push if text differs from last entry.
-        let dominated = self.undo_history.entries.last().is_some_and(|e| e.text == self.text);
+        let dominated = self.undo_history.entries.back().is_some_and(|e| e.text == self.text);
         if !dominated {
             self.undo_history.push(&self.text, self.cursor);
         }
@@ -970,8 +970,8 @@ pub struct UiState {
     /// Tile grid for partial redraw caching.
     pub tile_grid: Option<esox_gfx::TileGrid>,
     /// Frame-cached child sizes for flex layout grow/shrink distribution.
-    /// Key = flex container ID, Value = per-child (main_size, cross_size).
-    pub(crate) flex_child_sizes: HashMap<u64, Vec<(f32, f32)>>,
+    /// Key = flex container ID, Value = (per-child (main_size, cross_size), age_counter).
+    pub(crate) flex_child_sizes: HashMap<u64, (Vec<(f32, f32)>, u32)>,
     /// Whether the debug overlay is enabled (toggle with Alt+D or programmatically).
     pub debug_overlay: bool,
     /// Collected widget rects for debug overlay (populated when `debug_overlay` is true).
@@ -979,7 +979,12 @@ pub struct UiState {
     /// The WidgetKind of the currently focused widget (set during register_widget).
     pub(crate) focused_kind: Option<WidgetKind>,
     /// Previous frame's max scroll values per scrollable, for pre-clamping on content shrink.
-    pub(crate) prev_max_scroll: HashMap<u64, [f32; 2]>,
+    /// Value: ([vertical_max, horizontal_max], age_counter).
+    pub(crate) prev_max_scroll: HashMap<u64, ([f32; 2], u32)>,
+    /// Whether the mouse moved since last frame (for targeted hover damage).
+    pub(crate) mouse_moved: bool,
+    /// Rects of widgets with active animations, for targeted animation damage.
+    pub(crate) anim_rects: HashMap<u64, Rect>,
 }
 
 /// IME (Input Method Editor) composition state.
@@ -1049,6 +1054,8 @@ impl UiState {
             debug_widget_rects: Vec::new(),
             focused_kind: None,
             prev_max_scroll: HashMap::new(),
+            mouse_moved: false,
+            anim_rects: HashMap::new(),
         }
     }
 
@@ -1097,9 +1104,9 @@ impl UiState {
         item_height: f32,
         dropdown_gap: f32,
     ) {
-        // Mark damage if mouse actually moved (hover may change).
+        // Flag mouse movement for targeted hover damage in begin_frame().
         if (self.mouse.x - x).abs() > 0.5 || (self.mouse.y - y).abs() > 0.5 {
-            self.damage.invalidate_all();
+            self.mouse_moved = true;
         }
         self.mouse.x = x;
         self.mouse.y = y;
@@ -1381,29 +1388,53 @@ impl UiState {
         self.last_frame_time = Instant::now();
 
         // Damage detection: hover/focus changes, active animations, scroll velocity.
-        let current_hovered = self.hit_rects.iter().rev()
-            .find(|(r, _, _)| r.contains(self.mouse.x, self.mouse.y))
-            .map(|(_, id, _)| *id);
-        if current_hovered != self.prev_hovered {
-            // Add damage for old and new hovered widget rects.
-            if let Some(old_id) = self.prev_hovered {
-                if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == old_id) {
-                    self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+        if self.mouse_moved {
+            let current_hovered = self.hit_rects.iter().rev()
+                .find(|(r, _, _)| r.contains(self.mouse.x, self.mouse.y))
+                .map(|(_, id, _)| *id);
+            if current_hovered != self.prev_hovered {
+                // Add damage for old and new hovered widget rects.
+                if let Some(old_id) = self.prev_hovered {
+                    if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == old_id) {
+                        self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                    }
+                }
+                if let Some(new_id) = current_hovered {
+                    if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == new_id) {
+                        self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                    }
                 }
             }
-            if let Some(new_id) = current_hovered {
-                if let Some((r, _, _)) = self.hit_rects.iter().find(|(_, id, _)| *id == new_id) {
-                    self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
-                }
-            }
+            self.mouse_moved = false;
         }
         if self.focused != self.prev_focused {
             self.damage.invalidate_all();
         }
-        if self.hover_anims.values().any(|a| !a.is_settled())
-            || self.anims.values().any(|a| !a.is_settled())
+        // Per-widget animation damage: only invalidate rects of unsettled animations.
         {
-            self.damage.invalidate_all();
+            let mut any_missing = false;
+            for (id, anim) in &self.hover_anims {
+                if !anim.is_settled() {
+                    if let Some(r) = self.anim_rects.get(id) {
+                        self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                    } else {
+                        any_missing = true;
+                    }
+                }
+            }
+            for (id, anim) in &self.anims {
+                if !anim.is_settled() {
+                    if let Some(r) = self.anim_rects.get(id) {
+                        self.damage.add(esox_gfx::DamageRect::new(r.x, r.y, r.w, r.h));
+                    } else {
+                        any_missing = true;
+                    }
+                }
+            }
+            if any_missing {
+                self.damage.invalidate_all();
+            }
+            self.anim_rects.clear();
         }
         if self.overlay.is_some() || !self.modal_stack.is_empty() || !self.toasts.toasts.is_empty()
             || self.menu_bar_open.is_some()
@@ -1523,6 +1554,16 @@ impl UiState {
         if self.hover_anims.len() > 256 {
             self.hover_anims.retain(|_, anim| !anim.is_settled());
         }
+        // Prune stale flex_child_sizes (not accessed for >300 frames).
+        self.flex_child_sizes.retain(|_, (_, age)| {
+            *age += 1;
+            *age <= 300
+        });
+        // Prune stale prev_max_scroll (not accessed for >300 frames).
+        self.prev_max_scroll.retain(|_, (_, age)| {
+            *age += 1;
+            *age <= 300
+        });
         // Save hover/focus state for next frame's damage detection.
         self.prev_hovered = self.hit_rects.iter().rev()
             .find(|(r, _, _)| r.contains(self.mouse.x, self.mouse.y))

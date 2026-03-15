@@ -15,6 +15,17 @@ use esox_gfx::{
     RenderResources, ShapeType, ShelfAllocator, UvRect,
 };
 
+/// Text truncation mode for overflow handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruncationMode {
+    /// Truncate at end: `text…`
+    End,
+    /// Truncate at start: `…text`
+    Start,
+    /// Truncate in middle: `te…xt`
+    Middle,
+}
+
 /// Initial atlas dimensions in texels. Grows on demand when full.
 const ATLAS_SIZE: u32 = 256;
 
@@ -268,6 +279,104 @@ impl TextRenderer {
         self.face.metrics(size).cell_height
     }
 
+    /// Measure wrapped text dimensions. Returns `(max_line_width, total_height)`
+    /// including line spacing between lines. Uses `wrap_lines_measured()` internally.
+    pub fn measure_text_wrapped(
+        &mut self,
+        text: &str,
+        size: f32,
+        max_width: f32,
+        line_spacing: f32,
+    ) -> (f32, f32) {
+        if text.is_empty() {
+            return (0.0, self.line_height(size));
+        }
+        let lines = self.wrap_lines_measured(text, size, max_width);
+        let line_height = self.line_height(size);
+        let max_w = lines.iter().map(|&(_, _, w)| w).fold(0.0f32, f32::max);
+        let total_h = lines.len() as f32 * line_height
+            + (lines.len().saturating_sub(1)) as f32 * line_spacing;
+        (max_w, total_h)
+    }
+
+    /// Split text into lines fitting within `max_width`, with per-line widths.
+    /// Returns `(start_byte, end_byte, line_width)` triples.
+    pub fn wrap_lines_measured(
+        &mut self,
+        text: &str,
+        size: f32,
+        max_width: f32,
+    ) -> Vec<(usize, usize, f32)> {
+        if text.is_empty() {
+            return vec![(0, 0, 0.0)];
+        }
+
+        let mut lines: Vec<(usize, usize, f32)> = Vec::new();
+        let mut line_start: usize = 0;
+        let mut line_width: f32 = 0.0;
+        let space_width = self.measure_text(" ", size);
+
+        let mut words: Vec<(usize, usize)> = Vec::new();
+        let mut word_start: Option<usize> = None;
+        for (i, c) in text.char_indices() {
+            if c.is_whitespace() {
+                if let Some(ws) = word_start.take() {
+                    words.push((ws, i));
+                }
+            } else if word_start.is_none() {
+                word_start = Some(i);
+            }
+        }
+        if let Some(ws) = word_start {
+            words.push((ws, text.len()));
+        }
+
+        if words.is_empty() {
+            return vec![(0, text.len(), 0.0)];
+        }
+
+        for &(word_start_byte, word_end_byte) in &words {
+            let word = &text[word_start_byte..word_end_byte];
+            let word_width = self.measure_text(word, size);
+
+            if word_width > max_width {
+                if line_width > 0.0 {
+                    lines.push((line_start, word_start_byte, line_width));
+                }
+                let mut char_start = word_start_byte;
+                let mut accum = 0.0_f32;
+                for (i, c) in word[..].char_indices() {
+                    let byte_pos = word_start_byte + i;
+                    let cw =
+                        self.measure_text(&text[byte_pos..byte_pos + c.len_utf8()], size);
+                    if accum + cw > max_width && accum > 0.0 {
+                        lines.push((char_start, byte_pos, accum));
+                        char_start = byte_pos;
+                        accum = cw;
+                    } else {
+                        accum += cw;
+                    }
+                }
+                line_start = char_start;
+                line_width = accum;
+                continue;
+            }
+
+            if line_width == 0.0 {
+                line_width = word_width;
+            } else if line_width + space_width + word_width <= max_width {
+                line_width += space_width + word_width;
+            } else {
+                lines.push((line_start, word_start_byte, line_width));
+                line_start = word_start_byte;
+                line_width = word_width;
+            }
+        }
+
+        lines.push((line_start, text.len(), line_width));
+        lines
+    }
+
     /// Split text into lines fitting within `max_width`. Greedy word-wrap at
     /// whitespace. Falls back to character-level breaking for words wider than
     /// `max_width`. Returns byte-offset pairs `(start, end)`.
@@ -390,6 +499,117 @@ impl TextRenderer {
         );
         self.draw_text(ellipsis, x + advance, y, size, color, frame, gpu, resources);
         advance + ellipsis_width
+    }
+
+    /// Draw text truncated with a specified truncation mode.
+    ///
+    /// - `End`: `text…` (same as `draw_text_truncated`)
+    /// - `Start`: `…text` (walk glyphs from end backward)
+    /// - `Middle`: `te…xt` (split budget between prefix and suffix)
+    pub fn draw_text_truncated_mode(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        max_width: f32,
+        color: Color,
+        mode: TruncationMode,
+        frame: &mut Frame,
+        gpu: &GpuContext,
+        resources: &mut RenderResources,
+    ) -> f32 {
+        let full_width = self.measure_text(text, size);
+        if full_width <= max_width {
+            return self.draw_text(text, x, y, size, color, frame, gpu, resources);
+        }
+
+        let ellipsis = "\u{2026}";
+        let ellipsis_width = self.measure_text(ellipsis, size);
+        let target = max_width - ellipsis_width;
+
+        if target <= 0.0 {
+            return self.draw_text(ellipsis, x, y, size, color, frame, gpu, resources);
+        }
+
+        let glyphs = self.resolve_glyphs(text, size);
+
+        match mode {
+            TruncationMode::End => {
+                // Walk forward, same as draw_text_truncated.
+                let mut accum = 0.0;
+                let mut trunc_count = 0;
+                for glyph in &glyphs {
+                    if accum + glyph.x_advance > target {
+                        break;
+                    }
+                    accum += glyph.x_advance;
+                    trunc_count += 1;
+                }
+                let advance = self.render_glyphs(
+                    &glyphs[..trunc_count],
+                    x, y, size, color, 0, frame, gpu, resources,
+                );
+                self.draw_text(ellipsis, x + advance, y, size, color, frame, gpu, resources);
+                advance + ellipsis_width
+            }
+            TruncationMode::Start => {
+                // Walk backward from end.
+                let mut accum = 0.0;
+                let mut suffix_start = glyphs.len();
+                for i in (0..glyphs.len()).rev() {
+                    if accum + glyphs[i].x_advance > target {
+                        break;
+                    }
+                    accum += glyphs[i].x_advance;
+                    suffix_start = i;
+                }
+                let ew = self.draw_text(ellipsis, x, y, size, color, frame, gpu, resources);
+                self.render_glyphs(
+                    &glyphs[suffix_start..],
+                    x + ew, y, size, color, 0, frame, gpu, resources,
+                );
+                ew + accum
+            }
+            TruncationMode::Middle => {
+                // Split budget: half for prefix, half for suffix.
+                let half = target / 2.0;
+
+                let mut prefix_accum = 0.0;
+                let mut prefix_count = 0;
+                for glyph in &glyphs {
+                    if prefix_accum + glyph.x_advance > half {
+                        break;
+                    }
+                    prefix_accum += glyph.x_advance;
+                    prefix_count += 1;
+                }
+
+                let mut suffix_accum = 0.0;
+                let mut suffix_start = glyphs.len();
+                for i in (0..glyphs.len()).rev() {
+                    if suffix_accum + glyphs[i].x_advance > half {
+                        break;
+                    }
+                    suffix_accum += glyphs[i].x_advance;
+                    suffix_start = i;
+                }
+
+                let prefix_advance = self.render_glyphs(
+                    &glyphs[..prefix_count],
+                    x, y, size, color, 0, frame, gpu, resources,
+                );
+                let ew = self.draw_text(
+                    ellipsis,
+                    x + prefix_advance, y, size, color, frame, gpu, resources,
+                );
+                self.render_glyphs(
+                    &glyphs[suffix_start..],
+                    x + prefix_advance + ew, y, size, color, 0, frame, gpu, resources,
+                );
+                prefix_advance + ew + suffix_accum
+            }
+        }
     }
 
     /// Map a pixel x-offset to the nearest byte offset in `text`.

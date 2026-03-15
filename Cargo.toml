@@ -17,6 +17,7 @@ members = [
     "examples/shadow_test",
     "examples/moba_lane",
     "examples/combat_demo",
+    "examples/layout_showcase",
 ]
 exclude = ["apps/dwnldr-gui"]
 

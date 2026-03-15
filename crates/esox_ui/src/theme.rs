@@ -18,6 +18,16 @@ pub enum TextSize {
     Custom(f32),
 }
 
+/// Pseudo-state for deriving colors from a base color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleState {
+    Normal,
+    Hovered,
+    Focused,
+    Active,
+    Disabled,
+}
+
 /// Per-widget style overrides, pushed onto a stack via `Ui::with_style`.
 #[derive(Debug, Clone, Default)]
 pub struct WidgetStyle {
@@ -27,6 +37,10 @@ pub struct WidgetStyle {
     pub font_size: Option<f32>,
     pub corner_radius: Option<f32>,
     pub height: Option<f32>,
+    /// Inherited text color for label-type widgets (labels, paragraphs).
+    pub text_color: Option<Color>,
+    /// Override spacing between children.
+    pub spacing: Option<f32>,
 }
 
 /// Complete UI theme — all visual properties in one place.
@@ -117,6 +131,7 @@ pub struct Theme {
     pub scrollbar_width: f32,
     pub scrollbar_min_thumb: f32,
     pub scroll_speed: f32,
+    pub scroll_friction: f32,
 
     // Tabs.
     pub tab_indicator_height: f32,
@@ -161,6 +176,13 @@ pub struct Theme {
     pub text_lg: f32,
     pub text_xl: f32,
     pub text_2xl: f32,
+
+    // Text layout.
+    pub line_spacing: f32,
+
+    // Responsive breakpoints.
+    pub breakpoint_compact: f32,
+    pub breakpoint_expanded: f32,
 
     // Form field helpers.
     pub form_label_gap: f32,
@@ -384,6 +406,7 @@ impl Theme {
         t.scrollbar_width *= factor;
         t.scrollbar_min_thumb *= factor;
         t.scroll_speed *= factor;
+        // scroll_friction is a ratio, not a size — don't scale it.
         t.tab_indicator_height *= factor;
         t.table_header_height *= factor;
         t.column_resize_handle_width *= factor;
@@ -405,6 +428,9 @@ impl Theme {
         t.text_lg *= factor;
         t.text_xl *= factor;
         t.text_2xl *= factor;
+        t.line_spacing *= factor;
+        t.breakpoint_compact *= factor;
+        t.breakpoint_expanded *= factor;
         t.form_label_gap *= factor;
         t.form_helper_gap *= factor;
         t.form_helper_font_size *= factor;
@@ -487,6 +513,7 @@ impl Theme {
             scrollbar_width: snap.scrollbar_width,
             scrollbar_min_thumb: snap.scrollbar_min_thumb,
             scroll_speed: snap.scroll_speed,
+            scroll_friction: snap.scroll_friction,
             tab_indicator_height: snap.tab_indicator_height,
             tab_fade_duration_ms: snap.tab_fade_duration_ms,
             table_header_height: snap.table_header_height,
@@ -513,12 +540,41 @@ impl Theme {
             text_lg: snap.text_lg,
             text_xl: snap.text_xl,
             text_2xl: snap.text_2xl,
+            line_spacing: snap.line_spacing,
+            breakpoint_compact: snap.breakpoint_compact,
+            breakpoint_expanded: snap.breakpoint_expanded,
             form_label_gap: snap.form_label_gap,
             form_helper_gap: snap.form_helper_gap,
             form_helper_font_size: snap.form_helper_font_size,
             toast_duration_ms: snap.toast_duration_ms,
             toast_max_visible: snap.toast_max_visible,
             toast_margin: snap.toast_margin,
+        }
+    }
+
+    /// Derive a background color for a given pseudo-state.
+    ///
+    /// `Hovered` lightens by 8%, `Active` darkens by 5%, `Disabled` desaturates.
+    pub fn derive_bg(&self, base: Color, state: StyleState) -> Color {
+        match state {
+            StyleState::Normal => base,
+            StyleState::Hovered => lighten(base, 0.08),
+            StyleState::Focused => lerp_color(base, self.accent, 0.15),
+            StyleState::Active => darken(base, 0.05),
+            StyleState::Disabled => desaturate(base, 0.6),
+        }
+    }
+
+    /// Derive a foreground color for a given pseudo-state.
+    ///
+    /// `Hovered` lightens slightly, `Disabled` desaturates.
+    pub fn derive_fg(&self, base: Color, state: StyleState) -> Color {
+        match state {
+            StyleState::Normal => base,
+            StyleState::Hovered => lighten(base, 0.05),
+            StyleState::Focused => base,
+            StyleState::Active => darken(base, 0.03),
+            StyleState::Disabled => desaturate(base, 0.6),
         }
     }
 
@@ -602,6 +658,7 @@ impl Theme {
             scrollbar_width: 8.0,
             scrollbar_min_thumb: 20.0,
             scroll_speed: 40.0,
+            scroll_friction: 0.92,
 
             tab_indicator_height: 2.0,
             tab_fade_duration_ms: 150.0,
@@ -638,6 +695,11 @@ impl Theme {
             text_lg: 16.0,
             text_xl: 20.0,
             text_2xl: 28.0,
+
+            line_spacing: 2.0,
+
+            breakpoint_compact: 600.0,
+            breakpoint_expanded: 1200.0,
 
             form_label_gap: 4.0,
             form_helper_gap: 2.0,
@@ -782,6 +844,37 @@ mod tests {
         assert_ne!(hc.fg, dark.fg);
         assert_ne!(hc.accent, dark.accent);
     }
+}
+
+/// Lighten a color by a fraction (0.0–1.0).
+fn lighten(c: Color, amount: f32) -> Color {
+    Color::new(
+        (c.r + (1.0 - c.r) * amount).min(1.0),
+        (c.g + (1.0 - c.g) * amount).min(1.0),
+        (c.b + (1.0 - c.b) * amount).min(1.0),
+        c.a,
+    )
+}
+
+/// Darken a color by a fraction (0.0–1.0).
+fn darken(c: Color, amount: f32) -> Color {
+    Color::new(
+        (c.r * (1.0 - amount)).max(0.0),
+        (c.g * (1.0 - amount)).max(0.0),
+        (c.b * (1.0 - amount)).max(0.0),
+        c.a,
+    )
+}
+
+/// Desaturate a color by blending toward its luminance.
+fn desaturate(c: Color, amount: f32) -> Color {
+    let lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    Color::new(
+        c.r + (lum - c.r) * amount,
+        c.g + (lum - c.g) * amount,
+        c.b + (lum - c.b) * amount,
+        c.a,
+    )
 }
 
 /// Convert HSL to linear RGB (h in degrees, s/l in 0-1).

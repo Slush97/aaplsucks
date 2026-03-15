@@ -33,3 +33,4 @@ pub mod status_bar;
 pub mod number_input;
 pub mod split_pane;
 pub mod combobox;
+pub mod paragraph;

@@ -46,7 +46,7 @@ pub mod theme;
 mod widgets;
 
 pub use id::{fnv1a_mix, fnv1a_runtime, HOVER_SALT};
-pub use layout::{Align, Constraints, Justify, Rect};
+pub use layout::{Align, Constraints, FlexItem, FlexWrap, Justify, Rect, Spacing};
 pub use paint::lerp_color;
 pub use response::Response;
 pub use rich_text::{RichText, Span};
@@ -55,8 +55,8 @@ pub use state::{
     InputState, ModalAction, SelectState, SortDirection, TabState, TableState, ToastKind,
     ToastQueue, TooltipState, TreeState, UiState, VirtualScrollState, WidgetKind,
 };
-pub use text::TextRenderer;
-pub use theme::{TextSize, Theme, ThemeBuilder, ThemeTransition, WidgetStyle};
+pub use text::{TextRenderer, TruncationMode};
+pub use theme::{StyleState, TextSize, Theme, ThemeBuilder, ThemeTransition, WidgetStyle};
 pub use widgets::image::{ImageCache, ImageHandle};
 pub use widgets::table::{ColumnWidth, TableColumn};
 pub use widgets::form::FieldStatus;
@@ -65,6 +65,17 @@ pub use widgets::menu_bar::{Menu, MenuEntry, MenuItem};
 
 use esox_gfx::{Color, Frame, GpuContext, RenderResources};
 use layout::{Direction, LayoutContext, Vec2};
+
+/// Responsive width classification for container queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthClass {
+    /// Width < `theme.breakpoint_compact` (default 600px).
+    Compact,
+    /// Width between compact and expanded breakpoints.
+    Medium,
+    /// Width >= `theme.breakpoint_expanded` (default 1200px).
+    Expanded,
+}
 
 /// Rendering access for custom widgets.
 ///
@@ -85,6 +96,7 @@ pub struct FlexBuilder<'a, 'f> {
     gap: f32,
     align: layout::Align,
     justify: layout::Justify,
+    wrap: layout::FlexWrap,
 }
 
 impl<'a, 'f> FlexBuilder<'a, 'f> {
@@ -104,6 +116,104 @@ impl<'a, 'f> FlexBuilder<'a, 'f> {
     pub fn justify(mut self, justify: layout::Justify) -> Self {
         self.justify = justify;
         self
+    }
+
+    /// Set flex wrap mode.
+    pub fn wrap(mut self, wrap: layout::FlexWrap) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// Draw a flex layout with per-child grow/shrink via `FlexUi`.
+    ///
+    /// Uses frame-cached child sizes: on frame N, children render at natural size
+    /// and sizes are recorded. On frame N+1, cached sizes compute grow/shrink
+    /// distribution before rendering. Converges in 1 frame for static layouts.
+    pub fn show_flex(self, id: u64, f: impl FnOnce(&mut FlexUi<'_, 'f>)) {
+        let is_horizontal = self.direction == Direction::Horizontal;
+        let available = if is_horizontal { self.ui.region.w } else { self.ui.region.h };
+        let cached = self.ui.state.flex_child_sizes.get(&id).cloned();
+
+        let saved_cursor = self.ui.cursor;
+        let saved_region = self.ui.region;
+        let saved_spacing = self.ui.spacing;
+        let start_idx = self.ui.frame.instance_len();
+
+        let mut flex_ui = FlexUi {
+            ui: self.ui,
+            direction: self.direction,
+            gap: self.gap,
+            align: self.align,
+            justify: self.justify,
+            wrap: self.wrap,
+            cached_sizes: cached.as_deref(),
+            recorded_sizes: Vec::new(),
+            child_index: 0,
+            available,
+            wrap_lines: Vec::new(),
+            current_wrap_main: 0.0,
+            current_wrap_cross: 0.0_f32,
+        };
+
+        f(&mut flex_ui);
+
+        let recorded = flex_ui.recorded_sizes;
+        let wrap_lines = flex_ui.wrap_lines;
+        let child_count = flex_ui.child_index;
+
+        // Store recorded sizes for next frame.
+        self.ui.state.flex_child_sizes.insert(id, recorded);
+
+        let end_idx = self.ui.frame.instance_len();
+
+        // Compute content extent for justification.
+        if is_horizontal {
+            let content_w = self.ui.cursor.x - saved_cursor.x
+                - if child_count > 0 { self.gap } else { 0.0 };
+
+            let offset_x = match self.justify {
+                layout::Justify::Center => (saved_region.w - content_w) / 2.0,
+                layout::Justify::End => saved_region.w - content_w,
+                _ => 0.0,
+            };
+
+            if offset_x.abs() > 0.01 {
+                for i in start_idx..end_idx {
+                    self.ui.frame.translate_instance(i, offset_x, 0.0);
+                }
+            }
+
+            // Find max cross from wrap lines or direct tracking.
+            let max_cross = if !wrap_lines.is_empty() {
+                wrap_lines.iter().map(|wl| wl.cross).sum::<f32>()
+                    + (wrap_lines.len().saturating_sub(1)) as f32 * self.gap
+            } else {
+                self.ui.layout_stack.last()
+                    .map(|ctx| ctx.max_cross)
+                    .unwrap_or(0.0)
+            };
+
+            self.ui.cursor.x = saved_cursor.x;
+            self.ui.cursor.y = saved_cursor.y + max_cross + saved_spacing;
+        } else {
+            let content_h = self.ui.cursor.y - saved_cursor.y
+                - if child_count > 0 { self.gap } else { 0.0 };
+
+            let offset_y = match self.justify {
+                layout::Justify::Center => (saved_region.h - content_h) / 2.0,
+                layout::Justify::End => saved_region.h - content_h,
+                _ => 0.0,
+            };
+
+            if offset_y.abs() > 0.01 {
+                for i in start_idx..end_idx {
+                    self.ui.frame.translate_instance(i, 0.0, offset_y);
+                }
+            }
+        }
+
+        self.ui.region = saved_region;
+        self.ui.spacing = saved_spacing;
     }
 
     /// Draw the flex layout with the given content closure.
@@ -228,6 +338,143 @@ impl<'a, 'f> FlexBuilder<'a, 'f> {
     }
 }
 
+/// Tracks a single wrap line in flex-wrap mode.
+struct WrapLine {
+    /// Cross-axis extent of this wrap line.
+    cross: f32,
+}
+
+/// Context for placing flex items with grow/shrink within a `FlexBuilder::show_flex()`.
+pub struct FlexUi<'a, 'f> {
+    ui: &'a mut Ui<'f>,
+    direction: Direction,
+    gap: f32,
+    #[allow(dead_code)]
+    align: layout::Align,
+    #[allow(dead_code)]
+    justify: layout::Justify,
+    wrap: layout::FlexWrap,
+    cached_sizes: Option<&'a [(f32, f32)]>,
+    recorded_sizes: Vec<(f32, f32)>,
+    child_index: usize,
+    available: f32,
+    wrap_lines: Vec<WrapLine>,
+    current_wrap_main: f32,
+    current_wrap_cross: f32,
+}
+
+impl<'a, 'f> FlexUi<'a, 'f> {
+    /// Place a flex item with default properties (no grow/shrink).
+    pub fn item_default(&mut self, f: impl FnOnce(&mut Ui<'f>)) {
+        self.item(layout::FlexItem::default(), f);
+    }
+
+    /// Place a flex item with explicit grow/shrink/alignment properties.
+    pub fn item(&mut self, props: layout::FlexItem, f: impl FnOnce(&mut Ui<'f>)) {
+        let is_horizontal = self.direction == Direction::Horizontal;
+        let idx = self.child_index;
+        self.child_index += 1;
+
+        // Apply margin: advance cursor by margin.left/top.
+        if is_horizontal {
+            self.ui.cursor.x += props.margin.left;
+        } else {
+            self.ui.cursor.y += props.margin.top;
+        }
+
+        // Determine the size to allocate based on cached sizes + grow/shrink.
+        let cached = self.cached_sizes.and_then(|c| c.get(idx)).copied();
+        let basis = props.basis.or_else(|| cached.map(|(m, _)| m));
+
+        if let Some(basis_size) = basis {
+            if props.grow > 0.0 {
+                // Compute extra space and distribute by grow factor.
+                // For now, simple: give this child its proportional share.
+                let total_cached_main: f32 = self.cached_sizes
+                    .map(|c| c.iter().map(|(m, _)| m).sum())
+                    .unwrap_or(0.0);
+                let total_gaps = if let Some(c) = self.cached_sizes {
+                    (c.len().saturating_sub(1)) as f32 * self.gap
+                } else {
+                    0.0
+                };
+                let remaining = (self.available - total_cached_main - total_gaps).max(0.0);
+
+                if remaining > 0.0 {
+                    let extra = remaining * props.grow; // simplified: single-child grow
+                    let new_size = basis_size + extra;
+                    if is_horizontal {
+                        let saved_region = self.ui.region;
+                        self.ui.region = layout::Rect::new(
+                            self.ui.cursor.x,
+                            self.ui.region.y,
+                            new_size,
+                            self.ui.region.h,
+                        );
+                        f(self.ui);
+                        self.ui.region = saved_region;
+                    } else {
+                        f(self.ui);
+                    }
+                } else {
+                    f(self.ui);
+                }
+            } else {
+                f(self.ui);
+            }
+        } else {
+            // No cached size yet — render at natural size.
+            f(self.ui);
+        }
+
+        // Record the size this child actually took.
+        let (main_size, cross_size) = if is_horizontal {
+            let main = self.ui.cursor.x - (self.recorded_sizes.iter().map(|(m, _)| m).sum::<f32>()
+                + (idx as f32) * self.gap
+                + props.margin.left);
+            let cross = self.ui.layout_stack.last().map(|c| c.max_cross).unwrap_or(0.0);
+            (main.max(0.0), cross)
+        } else {
+            // For vertical, approximate using cursor delta.
+            let main = 0.0; // vertical tracking is implicit via cursor.y
+            let cross = self.ui.region.w;
+            (main, cross)
+        };
+        self.recorded_sizes.push((main_size, cross_size));
+
+        // Apply margin: advance cursor by margin.right/bottom.
+        if is_horizontal {
+            self.ui.cursor.x += props.margin.right;
+        } else {
+            self.ui.cursor.y += props.margin.bottom;
+        }
+
+        // Flex-wrap: check if we exceeded the main axis.
+        if self.wrap != layout::FlexWrap::NoWrap && is_horizontal {
+            self.current_wrap_main += main_size + self.gap + props.margin.horizontal();
+            self.current_wrap_cross = self.current_wrap_cross.max(cross_size);
+
+            if self.current_wrap_main > self.available && idx > 0 {
+                // Wrap: start new line.
+                self.wrap_lines.push(WrapLine {
+                    cross: self.current_wrap_cross,
+                });
+                // Reset cursor to start of next line.
+                let wrap_y_offset = self.wrap_lines.iter().map(|wl| wl.cross + self.gap).sum::<f32>();
+                self.ui.cursor.x = self.ui.region.x;
+                self.ui.cursor.y = self.ui.region.y + wrap_y_offset;
+                self.current_wrap_main = 0.0;
+                self.current_wrap_cross = 0.0;
+            }
+        }
+    }
+
+    /// Access the inner `Ui` for direct widget calls outside flex items.
+    pub fn ui(&mut self) -> &mut Ui<'f> {
+        self.ui
+    }
+}
+
 /// The main UI context. Created each frame, consumed by `finish()`.
 pub struct Ui<'f> {
     pub(crate) frame: &'f mut Frame,
@@ -311,6 +558,7 @@ impl<'f> Ui<'f> {
         self.draw_deferred_menu_bar();
         self.draw_toasts();
         self.draw_tooltip();
+        self.draw_debug_overlay();
 
         // Finalize tile grid: merge dirty/clean tiles + overlay.
         if let Some(ref mut grid) = self.state.tile_grid {
@@ -344,6 +592,16 @@ impl<'f> Ui<'f> {
             if ctx.direction == Direction::Horizontal && h > ctx.max_cross {
                 ctx.max_cross = h;
             }
+        }
+        // Debug overlay: collect layout bounds.
+        if self.state.debug_overlay {
+            let depth = self.layout_stack.len();
+            let kind = match depth {
+                0 => "root",
+                1 => "child",
+                _ => "nested",
+            };
+            self.state.debug_widget_rects.push((rect, 0, kind));
         }
         rect
     }
@@ -433,6 +691,17 @@ impl<'f> Ui<'f> {
         self.region.w
     }
 
+    /// Responsive width classification based on the current region width.
+    pub fn width_class(&self) -> WidthClass {
+        if self.region.w < self.theme.breakpoint_compact {
+            WidthClass::Compact
+        } else if self.region.w >= self.theme.breakpoint_expanded {
+            WidthClass::Expanded
+        } else {
+            WidthClass::Medium
+        }
+    }
+
     /// Narrow the region: offset cursor.x and reduce region.w.
     /// Useful for centering content without a closure.
     pub fn indent(&mut self, offset: f32, width: f32) {
@@ -468,6 +737,7 @@ impl<'f> Ui<'f> {
             gap: 0.0,
             align: layout::Align::Start,
             justify: layout::Justify::Start,
+            wrap: layout::FlexWrap::NoWrap,
         }
     }
 
@@ -479,6 +749,7 @@ impl<'f> Ui<'f> {
             gap: 0.0,
             align: layout::Align::Start,
             justify: layout::Justify::Start,
+            wrap: layout::FlexWrap::NoWrap,
         }
     }
 
@@ -511,6 +782,27 @@ impl<'f> Ui<'f> {
         if target_x > self.cursor.x {
             self.cursor.x = target_x;
         }
+    }
+
+    /// Measure the size a closure would occupy without actually drawing.
+    ///
+    /// Runs `f` to populate GPU instances, records cursor delta, then truncates
+    /// the instance buffer to discard all generated instances. Use only for
+    /// small subtrees — the closure is fully executed (double-render cost).
+    pub fn measure(&mut self, f: impl FnOnce(&mut Self)) -> (f32, f32) {
+        let saved_cursor = self.cursor;
+        let start_len = self.frame.instance_len();
+
+        f(self);
+
+        let dx = self.cursor.x - saved_cursor.x;
+        let dy = self.cursor.y - saved_cursor.y;
+
+        // Discard all GPU instances generated by f.
+        self.frame.truncate_instances(start_len);
+        self.cursor = saved_cursor;
+
+        (dx, dy)
     }
 
     // ── Flex/Weighted Columns ──
@@ -899,6 +1191,12 @@ impl<'f> Ui<'f> {
                 return c;
             }
         }
+        // Fallback: check inherited text_color for label-type widgets.
+        for s in self.style_stack.iter().rev() {
+            if let Some(c) = s.text_color {
+                return c;
+            }
+        }
         self.theme.fg
     }
 
@@ -954,6 +1252,11 @@ impl<'f> Ui<'f> {
     }
 
     /// Access the theme.
+    /// Whether the debug overlay is currently enabled.
+    pub fn is_debug_overlay(&self) -> bool {
+        self.state.debug_overlay
+    }
+
     pub fn theme(&self) -> &Theme {
         self.theme
     }
@@ -1081,6 +1384,98 @@ impl<'f> Ui<'f> {
             self.gpu,
             self.resources,
         );
+    }
+
+    /// Draw debug overlay outlines around all allocated rects. Called from `finish()`.
+    fn draw_debug_overlay(&mut self) {
+        if !self.state.debug_overlay {
+            return;
+        }
+
+        // Depth-cycling colors for layout bounds.
+        const DEPTH_COLORS: [[f32; 4]; 4] = [
+            [0.2, 0.8, 0.2, 0.3],  // green
+            [0.2, 0.5, 1.0, 0.3],  // blue
+            [1.0, 0.6, 0.1, 0.3],  // orange
+            [0.8, 0.2, 0.8, 0.3],  // purple
+        ];
+
+        let rects: Vec<_> = self.state.debug_widget_rects.drain(..).collect();
+        for (i, (rect, _id, _kind)) in rects.iter().enumerate() {
+            let color_idx = i % DEPTH_COLORS.len();
+            let [r, g, b, a] = DEPTH_COLORS[color_idx];
+            let outline_color = Color::new(r, g, b, a);
+            // Draw 1px outline.
+            let t = 1.0;
+            // Top
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y, rect.w, t), outline_color, 0.0);
+            // Bottom
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y + rect.h - t, rect.w, t), outline_color, 0.0);
+            // Left
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y, t, rect.h), outline_color, 0.0);
+            // Right
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x + rect.w - t, rect.y, t, rect.h), outline_color, 0.0);
+        }
+
+        // Hovered widget gets a tooltip with rect info.
+        let mouse_x = self.state.mouse.x;
+        let mouse_y = self.state.mouse.y;
+        if let Some((rect, id, kind)) = rects.iter().rev()
+            .find(|(r, _, _)| r.contains(mouse_x, mouse_y))
+        {
+            // Alt+click: log widget info instead of sending click.
+            if self.state.modifiers.alt_key() {
+                if let Some((_, _, ref mut consumed)) = self.state.mouse.pending_click {
+                    if !*consumed {
+                        *consumed = true;
+                        tracing::info!(
+                            id = id,
+                            kind = kind,
+                            x = rect.x,
+                            y = rect.y,
+                            w = rect.w,
+                            h = rect.h,
+                            "debug: click-to-inspect widget"
+                        );
+                    }
+                }
+            }
+
+            // Draw highlighted outline on hovered widget.
+            let highlight = Color::new(1.0, 1.0, 0.0, 0.5);
+            let t = 2.0;
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y, rect.w, t), highlight, 0.0);
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y + rect.h - t, rect.w, t), highlight, 0.0);
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x, rect.y, t, rect.h), highlight, 0.0);
+            paint::draw_rounded_rect(self.frame, Rect::new(rect.x + rect.w - t, rect.y, t, rect.h), highlight, 0.0);
+
+            // Info tooltip.
+            let info = format!("{kind} [{:.0}x{:.0}] @({:.0},{:.0})", rect.w, rect.h, rect.x, rect.y);
+            let font_size = self.theme.tooltip_font_size;
+            let pad = 4.0;
+            let text_w = self.text.measure_text(&info, font_size);
+            let tw = text_w + pad * 2.0;
+            let th = font_size + pad * 2.0;
+            let tx = (mouse_x + 12.0).min(self.region.x + self.region.w - tw);
+            let ty = (mouse_y + 12.0).min(self.region.y + self.region.h - th);
+
+            paint::draw_rounded_rect(
+                self.frame,
+                Rect::new(tx, ty, tw, th),
+                Color::new(0.0, 0.0, 0.0, 0.85),
+                3.0,
+            );
+            self.text.draw_text(
+                &info,
+                tx + pad,
+                ty + pad,
+                font_size,
+                Color::new(1.0, 1.0, 0.0, 1.0),
+                self.frame,
+                self.gpu,
+                self.resources,
+            );
+        }
     }
 
     // ── Context Menu ──

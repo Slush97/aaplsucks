@@ -212,6 +212,14 @@ impl Frame {
         self.instances.len()
     }
 
+    /// Truncate the instance buffer to `len`, discarding instances added after that point.
+    /// Used by `measure()` to discard off-screen rendering. No-op if `len >= instance_len()`.
+    pub fn truncate_instances(&mut self, len: usize) {
+        if len < self.instances.len() {
+            self.instances.truncate(len);
+        }
+    }
+
     /// Replace an existing instance at `index` (e.g. to backfill a placeholder).
     ///
     /// If an active clip is set, it is stamped onto the instance.

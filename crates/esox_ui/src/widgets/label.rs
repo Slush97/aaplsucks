@@ -4,6 +4,7 @@ use esox_gfx::Color;
 
 use crate::rich_text::RichText;
 use crate::state::{A11yNode, A11yRole};
+use crate::text::TruncationMode;
 use crate::theme::TextSize;
 use crate::Ui;
 
@@ -122,16 +123,19 @@ impl<'f> Ui<'f> {
         let size = self.theme.font_size;
         let max_width = self.region.w;
         let line_height = self.text.line_height(size);
-        let lines = self.text.wrap_lines(text, size, max_width);
-        let total_height = lines.len() as f32 * line_height + self.theme.label_pad_y;
+        let line_spacing = self.theme.line_spacing;
+        let (_, measured_h) = self.text.measure_text_wrapped(text, size, max_width, line_spacing);
+        let total_height = measured_h + self.theme.label_pad_y;
         let rect = self.allocate_rect(max_width, total_height);
 
+        let lines = self.text.wrap_lines(text, size, max_width);
+        let step = line_height + line_spacing;
         for (i, &(start, end)) in lines.iter().enumerate() {
             let line = &text[start..end].trim_start();
             self.text.draw_ui_text(
                 line,
                 rect.x,
-                rect.y + i as f32 * line_height,
+                rect.y + i as f32 * step,
                 self.theme.fg,
                 self.frame,
                 self.gpu,
@@ -150,6 +154,23 @@ impl<'f> Ui<'f> {
             self.theme.font_size,
             rect.w,
             self.theme.fg,
+            self.frame,
+            self.gpu,
+            self.resources,
+        );
+    }
+
+    /// Draw a single-line label truncated with a specific truncation mode.
+    pub fn label_truncated_mode(&mut self, text: &str, mode: TruncationMode) {
+        let rect = self.allocate_rect(self.region.w, self.theme.font_size + self.theme.label_pad_y);
+        self.text.draw_text_truncated_mode(
+            text,
+            rect.x,
+            rect.y,
+            self.theme.font_size,
+            rect.w,
+            self.theme.fg,
+            mode,
             self.frame,
             self.gpu,
             self.resources,

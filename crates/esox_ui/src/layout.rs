@@ -171,6 +171,102 @@ pub enum Justify {
     SpaceBetween,
 }
 
+/// Flex item properties for per-child grow/shrink/alignment.
+#[derive(Debug, Clone, Copy)]
+pub struct FlexItem {
+    /// Grow factor: how much extra space this child should absorb. Default 0.0.
+    pub grow: f32,
+    /// Shrink factor: how much this child should shrink when space is tight. Default 1.0.
+    pub shrink: f32,
+    /// Explicit basis size. `None` = use natural size from previous frame.
+    pub basis: Option<f32>,
+    /// Per-child cross-axis alignment override.
+    pub align_self: Option<Align>,
+    /// Per-child margin.
+    pub margin: Spacing,
+}
+
+impl Default for FlexItem {
+    fn default() -> Self {
+        Self {
+            grow: 0.0,
+            shrink: 1.0,
+            basis: None,
+            align_self: None,
+            margin: Spacing::default(),
+        }
+    }
+}
+
+impl FlexItem {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn grow(mut self, v: f32) -> Self {
+        self.grow = v;
+        self
+    }
+
+    pub fn shrink(mut self, v: f32) -> Self {
+        self.shrink = v;
+        self
+    }
+
+    pub fn basis(mut self, v: f32) -> Self {
+        self.basis = Some(v);
+        self
+    }
+
+    pub fn align_self(mut self, a: Align) -> Self {
+        self.align_self = Some(a);
+        self
+    }
+
+    pub fn margin(mut self, m: Spacing) -> Self {
+        self.margin = m;
+        self
+    }
+}
+
+/// Spacing on four sides (margin or padding).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Spacing {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl Spacing {
+    pub fn all(v: f32) -> Self {
+        Self { top: v, right: v, bottom: v, left: v }
+    }
+
+    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
+        Self { top: vertical, right: horizontal, bottom: vertical, left: horizontal }
+    }
+
+    pub fn horizontal(&self) -> f32 {
+        self.left + self.right
+    }
+
+    pub fn vertical(&self) -> f32 {
+        self.top + self.bottom
+    }
+}
+
+/// Flex wrap mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexWrap {
+    /// No wrapping — all items on one line (default).
+    NoWrap,
+    /// Wrap items to next line when exceeding main axis extent.
+    Wrap,
+    /// Wrap in reverse order.
+    WrapReverse,
+}
+
 /// Saved layout context for nested row/padding/scroll.
 #[allow(dead_code)]
 pub(crate) struct LayoutContext {

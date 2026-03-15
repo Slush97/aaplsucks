@@ -813,7 +813,8 @@ pub struct UiState {
     /// When the cursor blink last toggled.
     pub cursor_blink_time: Instant,
     /// Scroll offsets keyed by widget ID: (offset, frames_since_last_access).
-    pub scroll_offsets: HashMap<u64, (f32, u32)>,
+    /// Scroll offsets: `[vertical, horizontal]` and age counter.
+    pub scroll_offsets: HashMap<u64, ([f32; 2], u32)>,
     /// Timestamp of last frame start for dt calculation.
     pub(crate) last_frame_time: Instant,
     /// Damage tracker for frame-skip optimization.
@@ -876,8 +877,17 @@ pub struct UiState {
     pub number_edit_buffers: HashMap<u64, InputState>,
     /// Per-combobox filter input state, keyed by widget ID.
     pub combobox_inputs: HashMap<u64, InputState>,
+    /// Scroll velocity for momentum scrolling: `[vertical_vel, horizontal_vel]`.
+    pub scroll_velocity: HashMap<u64, [f32; 2]>,
     /// Tile grid for partial redraw caching.
     pub tile_grid: Option<esox_gfx::TileGrid>,
+    /// Frame-cached child sizes for flex layout grow/shrink distribution.
+    /// Key = flex container ID, Value = per-child (main_size, cross_size).
+    pub(crate) flex_child_sizes: HashMap<u64, Vec<(f32, f32)>>,
+    /// Whether the debug overlay is enabled (toggle with Alt+D or programmatically).
+    pub debug_overlay: bool,
+    /// Collected widget rects for debug overlay (populated when `debug_overlay` is true).
+    pub(crate) debug_widget_rects: Vec<(Rect, u64, &'static str)>,
 }
 
 /// IME (Input Method Editor) composition state.
@@ -940,7 +950,11 @@ impl UiState {
             menu_bar_deferred: None,
             number_edit_buffers: HashMap::new(),
             combobox_inputs: HashMap::new(),
+            scroll_velocity: HashMap::new(),
             tile_grid: None,
+            flex_child_sizes: HashMap::new(),
+            debug_overlay: false,
+            debug_widget_rects: Vec::new(),
         }
     }
 
@@ -1304,8 +1318,26 @@ impl UiState {
         }
 
         self.focus_chain.clear();
+        // Momentum scrolling: decay velocities and apply to offsets.
+        self.scroll_velocity.retain(|id, vel| {
+            let any_active = vel[0].abs() > 0.5 || vel[1].abs() > 0.5;
+            if any_active {
+                if let Some((off, _)) = self.scroll_offsets.get_mut(id) {
+                    off[0] += vel[0];
+                    off[1] += vel[1];
+                }
+                // Friction is applied per-frame; 0.92 is the default.
+                vel[0] *= 0.92;
+                vel[1] *= 0.92;
+                if vel[0].abs() < 0.5 { vel[0] = 0.0; }
+                if vel[1].abs() < 0.5 { vel[1] = 0.0; }
+            }
+            any_active
+        });
+
         self.hit_rects.clear();
         self.spinner_active = false;
+        self.debug_widget_rects.clear();
         if self.a11y_enabled {
             self.a11y_tree.clear();
         }

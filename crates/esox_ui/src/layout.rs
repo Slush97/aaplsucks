@@ -153,6 +153,24 @@ pub enum Direction {
     Horizontal,
 }
 
+/// Cross-axis alignment for flex layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Start,
+    Center,
+    End,
+    Stretch,
+}
+
+/// Main-axis justification for flex layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Justify {
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+}
+
 /// Saved layout context for nested row/padding/scroll.
 #[allow(dead_code)]
 pub(crate) struct LayoutContext {

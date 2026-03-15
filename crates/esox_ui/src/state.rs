@@ -509,6 +509,7 @@ pub enum WidgetKind {
     SplitDividerH,
     SplitDividerV,
     Combobox,
+    Custom(winit::window::CursorIcon),
 }
 
 /// Overlay state (dropdown menus drawn on top of everything).
@@ -875,6 +876,8 @@ pub struct UiState {
     pub number_edit_buffers: HashMap<u64, InputState>,
     /// Per-combobox filter input state, keyed by widget ID.
     pub combobox_inputs: HashMap<u64, InputState>,
+    /// Tile grid for partial redraw caching.
+    pub tile_grid: Option<esox_gfx::TileGrid>,
 }
 
 /// IME (Input Method Editor) composition state.
@@ -937,6 +940,7 @@ impl UiState {
             menu_bar_deferred: None,
             number_edit_buffers: HashMap::new(),
             combobox_inputs: HashMap::new(),
+            tile_grid: None,
         }
     }
 
@@ -1149,6 +1153,7 @@ impl UiState {
                     WidgetKind::SplitDividerH => winit::window::CursorIcon::ColResize,
                     WidgetKind::SplitDividerV => winit::window::CursorIcon::RowResize,
                     WidgetKind::Combobox => winit::window::CursorIcon::Text,
+                    WidgetKind::Custom(icon) => *icon,
                 };
             }
         }

@@ -1326,7 +1326,7 @@ impl Game for EditorApp {
     }
 
     fn ui(&mut self, ui: &mut esox_engine::esox_ui::Ui, ctx: &Ctx) {
-        use esox_engine::esox_ui::{InputState, Menu, MenuEntry, MenuItem, ModalAction};
+        use esox_engine::esox_ui::{Menu, MenuEntry, MenuItem, ModalAction};
 
         // Fire pending toast
         if let Some((kind, msg)) = self.toast_pending.take() {
@@ -1464,10 +1464,8 @@ impl Game for EditorApp {
                         ("Esc", "Quit"),
                     ];
                     for (key, desc) in &shortcuts {
-                        ui.columns(&[0.35, 0.65], |ui, col| match col {
-                            0 => { ui.label(key); }
-                            1 => { ui.muted_label(desc); }
-                            _ => {}
+                        ui.labeled(key, |ui| {
+                            ui.muted_label(desc);
                         });
                     }
                 },
@@ -1494,33 +1492,21 @@ impl Game for EditorApp {
                             *dirty = true;
                         }
                         if pp.bloom_enabled {
-                            ui.muted_label("Intensity");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.2}", pp.bloom_intensity);
-                            if ui.slider(hash("rs_bloom_int"), &mut input, 0.0, 2.0).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    pp.bloom_intensity = v.clamp(0.0, 2.0);
+                            ui.labeled("Intensity", |ui| {
+                                if ui.slider_f32(hash("rs_bloom_int"), &mut pp.bloom_intensity, 0.0, 2.0).changed {
                                     *dirty = true;
                                 }
-                            }
-                            ui.muted_label("Threshold");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.2}", pp.bloom_threshold);
-                            if ui.slider(hash("rs_bloom_thr"), &mut input, 0.0, 5.0).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    pp.bloom_threshold = v.clamp(0.0, 5.0);
+                            });
+                            ui.labeled("Threshold", |ui| {
+                                if ui.slider_f32(hash("rs_bloom_thr"), &mut pp.bloom_threshold, 0.0, 5.0).changed {
                                     *dirty = true;
                                 }
-                            }
-                            ui.muted_label("Soft Knee");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.2}", pp.bloom_soft_knee);
-                            if ui.slider(hash("rs_bloom_knee"), &mut input, 0.0, 1.0).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    pp.bloom_soft_knee = v.clamp(0.0, 1.0);
+                            });
+                            ui.labeled("Soft Knee", |ui| {
+                                if ui.slider_f32(hash("rs_bloom_knee"), &mut pp.bloom_soft_knee, 0.0, 1.0).changed {
                                     *dirty = true;
                                 }
-                            }
+                            });
                         }
 
                         // Tone mapping
@@ -1553,42 +1539,31 @@ impl Game for EditorApp {
                         }
 
                         if sc.enabled {
-                            ui.muted_label("Cascade Count");
-                            let mut cc = sc.cascade_count as f64;
-                            if ui.number_input_clamped(hash("rs_cascades"), &mut cc, 1.0, 2.0, 4.0).changed {
-                                sc.cascade_count = cc as usize;
-                                *dirty = true;
-                            }
-
-                            ui.muted_label("Shadow Distance");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.0}", sc.shadow_distance);
-                            if ui.slider(hash("rs_shadow_dist"), &mut input, 10.0, 500.0).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    sc.shadow_distance = v.clamp(10.0, 500.0);
+                            ui.labeled("Cascade Count", |ui| {
+                                let mut cc = sc.cascade_count as f64;
+                                if ui.number_input_clamped(hash("rs_cascades"), &mut cc, 1.0, 2.0, 4.0).changed {
+                                    sc.cascade_count = cc as usize;
                                     *dirty = true;
                                 }
-                            }
+                            });
 
-                            ui.muted_label("Depth Bias");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.4}", sc.depth_bias);
-                            if ui.slider(hash("rs_depth_bias"), &mut input, 0.0, 0.01).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    sc.depth_bias = v.clamp(0.0, 0.01);
+                            ui.labeled("Shadow Distance", |ui| {
+                                if ui.slider_f32(hash("rs_shadow_dist"), &mut sc.shadow_distance, 10.0, 500.0).changed {
                                     *dirty = true;
                                 }
-                            }
+                            });
 
-                            ui.muted_label("Normal Bias");
-                            let mut input = InputState::new();
-                            input.text = format!("{:.4}", sc.normal_bias);
-                            if ui.slider(hash("rs_normal_bias"), &mut input, 0.0, 0.1).changed {
-                                if let Ok(v) = input.text.parse::<f32>() {
-                                    sc.normal_bias = v.clamp(0.0, 0.1);
+                            ui.labeled("Depth Bias", |ui| {
+                                if ui.slider_f32(hash("rs_depth_bias"), &mut sc.depth_bias, 0.0, 0.01).changed {
                                     *dirty = true;
                                 }
-                            }
+                            });
+
+                            ui.labeled("Normal Bias", |ui| {
+                                if ui.slider_f32(hash("rs_normal_bias"), &mut sc.normal_bias, 0.0, 0.1).changed {
+                                    *dirty = true;
+                                }
+                            });
                         }
                     });
                 },

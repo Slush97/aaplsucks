@@ -124,6 +124,16 @@ pub struct Frame {
     phase_start: u32,
     /// When set, `push()` and `extend_instances()` stamp this clip rect onto every instance.
     active_clip: Option<[f32; 4]>,
+    /// Tile buckets for partial redraw. When `Some`, `push()` routes instances
+    /// to overlapping tiles by their position rect.
+    tile_buckets: Option<Vec<Vec<QuadInstance>>>,
+    /// Overlay instances that bypass tile routing (modals, toasts, tooltips).
+    overlay_instances: Vec<QuadInstance>,
+    /// Whether subsequent pushes should bypass tile routing.
+    overlay_mode: bool,
+    /// Reference to the tile grid (column count) for routing.
+    tile_cols: u16,
+    tile_rows: u16,
 }
 
 impl Frame {
@@ -138,6 +148,11 @@ impl Frame {
             phase_ranges: Vec::new(),
             phase_start: 0,
             active_clip: None,
+            tile_buckets: None,
+            overlay_instances: Vec::new(),
+            overlay_mode: false,
+            tile_cols: 0,
+            tile_rows: 0,
         }
     }
 
@@ -155,11 +170,36 @@ impl Frame {
     /// Push a single quad instance.
     ///
     /// If an active clip is set, the instance's `clip_rect` is overwritten.
+    /// When tile buckets are active, routes the instance to overlapping tiles
+    /// (or the overlay list if overlay mode is on).
     pub fn push(&mut self, mut instance: QuadInstance) {
         if let Some(clip) = self.active_clip {
             instance.clip_rect = clip;
         }
-        self.instances.push(instance);
+        if self.overlay_mode {
+            self.overlay_instances.push(instance);
+        } else if let Some(ref mut buckets) = self.tile_buckets {
+            // Route to tile buckets by instance rect.
+            let x = instance.rect[0];
+            let y = instance.rect[1];
+            let w = instance.rect[2];
+            let h = instance.rect[3];
+            let tile_size = crate::damage::TILE_SIZE;
+            let col_start = (x.max(0.0) as u32 / tile_size).min(self.tile_cols.saturating_sub(1) as u32) as u16;
+            let col_end = (((x + w).ceil() as u32 + tile_size - 1) / tile_size).min(self.tile_cols as u32) as u16;
+            let row_start = (y.max(0.0) as u32 / tile_size).min(self.tile_rows.saturating_sub(1) as u32) as u16;
+            let row_end = (((y + h).ceil() as u32 + tile_size - 1) / tile_size).min(self.tile_rows as u32) as u16;
+            for row in row_start..row_end {
+                for col in col_start..col_end {
+                    let idx = row as usize * self.tile_cols as usize + col as usize;
+                    if idx < buckets.len() {
+                        buckets[idx].push(instance);
+                    }
+                }
+            }
+        } else {
+            self.instances.push(instance);
+        }
     }
 
     /// Number of instances to draw.
@@ -182,6 +222,22 @@ impl Frame {
         }
         if index < self.instances.len() {
             self.instances[index] = inst;
+        }
+    }
+
+    /// Translate an existing instance by (dx, dy). Out-of-bounds indices are silently ignored.
+    pub fn translate_instance(&mut self, index: usize, dx: f32, dy: f32) {
+        if let Some(inst) = self.instances.get_mut(index) {
+            inst.rect[0] += dx;
+            inst.rect[1] += dy;
+        }
+    }
+
+    /// Scale the x-position of an instance relative to an origin.
+    /// new_x = origin + (old_x - origin) * scale. Out-of-bounds indices are silently ignored.
+    pub fn offset_instance_x(&mut self, index: usize, origin: f32, scale: f32) {
+        if let Some(inst) = self.instances.get_mut(index) {
+            inst.rect[0] = origin + (inst.rect[0] - origin) * scale;
         }
     }
 
@@ -209,6 +265,53 @@ impl Frame {
         self.phase_ranges.clear();
         self.phase_start = 0;
         self.active_clip = None;
+        self.tile_buckets = None;
+        self.overlay_instances.clear();
+        self.overlay_mode = false;
+    }
+
+    /// Begin tile-based partial redraw. Allocates tile buckets matching the
+    /// grid dimensions. Call before pushing any instances for this frame.
+    pub fn begin_partial(&mut self, grid: &crate::damage::TileGrid) {
+        let count = grid.tile_count();
+        let mut buckets = Vec::with_capacity(count);
+        buckets.resize_with(count, Vec::new);
+        self.tile_buckets = Some(buckets);
+        self.tile_cols = grid.cols();
+        self.tile_rows = grid.rows();
+        self.overlay_instances.clear();
+        self.overlay_mode = false;
+    }
+
+    /// Push an instance that bypasses tile routing (for overlays: modals, toasts, tooltips).
+    pub fn push_overlay(&mut self, mut instance: QuadInstance) {
+        if let Some(clip) = self.active_clip {
+            instance.clip_rect = clip;
+        }
+        self.overlay_instances.push(instance);
+    }
+
+    /// Enable or disable overlay mode. When enabled, all `push()` calls
+    /// route to the overlay list (bypassing tile buckets).
+    pub fn set_overlay_mode(&mut self, on: bool) {
+        self.overlay_mode = on;
+    }
+
+    /// Whether overlay mode is currently active.
+    pub fn overlay_mode(&self) -> bool {
+        self.overlay_mode
+    }
+
+    /// Finalize partial redraw: merge dirty/clean tiles and overlay into
+    /// the main instance list. Must be called before `build_batches()`.
+    pub fn finalize_partial(&mut self, grid: &mut crate::damage::TileGrid) {
+        if let Some(ref mut buckets) = self.tile_buckets {
+            let merged = grid.finalize(buckets, &self.overlay_instances);
+            self.instances = merged;
+            self.overlay_instances.clear();
+        }
+        self.tile_buckets = None;
+        self.overlay_mode = false;
     }
 
     /// Set the active clip rect. All subsequent `push()` / `extend_instances()` calls

@@ -26,6 +26,13 @@
 pub mod config;
 pub mod perf;
 pub mod sandbox;
+pub mod xdg;
+
+#[cfg(feature = "settings")]
+pub mod settings;
+
+#[cfg(feature = "portals")]
+pub mod portal;
 
 #[cfg(feature = "a11y")]
 pub mod atspi;
@@ -89,6 +96,9 @@ pub enum AppUserEvent {
     ShaderFileChanged,
     /// A render pipeline finished compiling on the background thread.
     PipelineReady,
+    /// The XDG portal bridge is connected and ready.
+    #[cfg(feature = "portals")]
+    PortalReady,
 }
 
 /// Trait for injecting application behavior into the platform event loop.
@@ -202,6 +212,10 @@ pub trait AppDelegate {
     /// Called once before the event loop starts, providing the proxy for
     /// background threads to wake the event loop.
     fn set_event_loop_proxy(&mut self, _proxy: EventLoopProxy<AppUserEvent>) {}
+
+    /// Called when the portal bridge is ready. Receive the handle to issue portal requests.
+    #[cfg(feature = "portals")]
+    fn set_portal_handle(&mut self, _handle: crate::portal::PortalHandle) {}
 
     /// Return a pending MSAA sample count change, consuming the value.
     ///
@@ -1665,18 +1679,54 @@ fn install_signal_handlers() {
     }
 }
 
-pub fn run(config: crate::config::PlatformConfig, delegate: Box<dyn AppDelegate>) -> Result<(), Error> {
+pub fn run(
+    #[cfg_attr(not(feature = "settings"), allow(unused_mut))]
+    mut config: crate::config::PlatformConfig,
+    delegate: Box<dyn AppDelegate>,
+) -> Result<(), Error> {
     install_signal_handlers();
+
+    // Auto-restore window state from settings if app_name is set.
+    #[cfg(feature = "settings")]
+    if let Some(ref app_name) = config.app_name {
+        let dirs = crate::xdg::AppDirs::new(app_name);
+        if let Some(ws) = crate::settings::WindowState::load(&dirs) {
+            tracing::info!("restored window state: {}x{}", ws.width, ws.height);
+            ws.apply_to(&mut config.window);
+        }
+    }
+
     let event_loop = winit::event_loop::EventLoop::<AppUserEvent>::with_user_event()
         .build()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
     let proxy = event_loop.create_proxy();
     let mut app = App::new(config, delegate);
     app.event_proxy = Some(proxy.clone());
-    app.delegate.set_event_loop_proxy(proxy);
+    app.delegate.set_event_loop_proxy(proxy.clone());
+
+    // Start portal bridge if feature is enabled.
+    #[cfg(feature = "portals")]
+    {
+        let handle = crate::portal::start_portal_bridge(proxy);
+        app.delegate.set_portal_handle(handle);
+    }
+
     event_loop
         .run_app(&mut app)
         .map_err(|e| Error::EventLoop(e.to_string()))?;
+
+    // Auto-save window state on exit.
+    #[cfg(feature = "settings")]
+    if let Some(ref app_name) = app.config.app_name {
+        if let Some(ref window) = app.window {
+            let dirs = crate::xdg::AppDirs::new(app_name);
+            let ws = crate::settings::WindowState::from_window(window);
+            if let Err(e) = ws.save(&dirs) {
+                tracing::warn!("failed to save window state: {e}");
+            }
+        }
+    }
+
     // Write report after event loop exits (covers normal close).
     app.write_perf_report();
     Ok(())

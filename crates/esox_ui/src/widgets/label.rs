@@ -4,22 +4,54 @@ use esox_gfx::Color;
 
 use crate::rich_text::RichText;
 use crate::state::{A11yNode, A11yRole};
+use crate::theme::TextSize;
 use crate::Ui;
 
 impl<'f> Ui<'f> {
     /// Draw a label with the standard text color.
     pub fn label(&mut self, text: &str) {
-        let rect = self.allocate_rect(self.region.w, self.theme.font_size + self.theme.label_pad_y);
+        let font_size = self.resolve_font_size();
+        let fg = self.resolve_fg();
+        let rect = self.allocate_rect(self.region.w, font_size + self.theme.label_pad_y);
         self.push_a11y_node(A11yNode {
             id: crate::id::fnv1a_runtime(text), role: A11yRole::Label,
             label: text.to_string(), value: None, rect, focused: false,
             disabled: false, expanded: None, selected: None, checked: None,
             value_range: None, children: Vec::new(),
         });
-        self.text.draw_ui_text(
+        if (font_size - self.theme.font_size).abs() < 0.01 {
+            self.text.draw_ui_text(
+                text,
+                rect.x,
+                rect.y,
+                fg,
+                self.frame,
+                self.gpu,
+                self.resources,
+            );
+        } else {
+            self.text.draw_text(
+                text,
+                rect.x,
+                rect.y,
+                font_size,
+                fg,
+                self.frame,
+                self.gpu,
+                self.resources,
+            );
+        }
+    }
+
+    /// Draw a label at a semantic text size.
+    pub fn label_sized(&mut self, text: &str, size: TextSize) {
+        let font_size = self.theme.resolve_text_size(size);
+        let rect = self.allocate_rect(self.region.w, font_size + self.theme.label_pad_y);
+        self.text.draw_text(
             text,
             rect.x,
             rect.y,
+            font_size,
             self.theme.fg,
             self.frame,
             self.gpu,

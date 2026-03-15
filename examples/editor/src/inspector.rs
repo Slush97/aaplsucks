@@ -98,27 +98,24 @@ fn draw_transform_section(
         let mut changed = false;
 
         ui.muted_label("Position");
-        ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
-            0 => { changed |= ui.number_input(super::hash("pos_x"), &mut px, 0.1).changed; }
-            1 => { changed |= ui.number_input(super::hash("pos_y"), &mut py, 0.1).changed; }
-            2 => { changed |= ui.number_input(super::hash("pos_z"), &mut pz, 0.1).changed; }
-            _ => {}
+        ui.flex_row().gap(4.0).show(|ui| {
+            changed |= ui.number_input(super::hash("pos_x"), &mut px, 0.1).changed;
+            changed |= ui.number_input(super::hash("pos_y"), &mut py, 0.1).changed;
+            changed |= ui.number_input(super::hash("pos_z"), &mut pz, 0.1).changed;
         });
 
         ui.muted_label("Rotation");
-        ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
-            0 => { changed |= ui.number_input(super::hash("rot_x"), &mut rx, 1.0).changed; }
-            1 => { changed |= ui.number_input(super::hash("rot_y"), &mut ry, 1.0).changed; }
-            2 => { changed |= ui.number_input(super::hash("rot_z"), &mut rz, 1.0).changed; }
-            _ => {}
+        ui.flex_row().gap(4.0).show(|ui| {
+            changed |= ui.number_input(super::hash("rot_x"), &mut rx, 1.0).changed;
+            changed |= ui.number_input(super::hash("rot_y"), &mut ry, 1.0).changed;
+            changed |= ui.number_input(super::hash("rot_z"), &mut rz, 1.0).changed;
         });
 
         ui.muted_label("Scale");
-        ui.columns(&[1.0, 1.0, 1.0], |ui, col| match col {
-            0 => { changed |= ui.number_input(super::hash("scl_x"), &mut sx, 0.1).changed; }
-            1 => { changed |= ui.number_input(super::hash("scl_y"), &mut sy, 0.1).changed; }
-            2 => { changed |= ui.number_input(super::hash("scl_z"), &mut sz, 0.1).changed; }
-            _ => {}
+        ui.flex_row().gap(4.0).show(|ui| {
+            changed |= ui.number_input(super::hash("scl_x"), &mut sx, 0.1).changed;
+            changed |= ui.number_input(super::hash("scl_y"), &mut sy, 0.1).changed;
+            changed |= ui.number_input(super::hash("scl_z"), &mut sz, 0.1).changed;
         });
 
         if changed {
@@ -159,26 +156,26 @@ fn draw_camera_section(
             return;
         }
         // FOV slider
-        let mut fov_input = InputState::new();
-        fov_input.text = format!("{:.0}", cam.fov_y.to_degrees());
-        ui.muted_label("FOV (degrees)");
-        if ui.slider(super::hash("cam_fov"), &mut fov_input, 1.0, 179.0).changed {
-            if let Ok(v) = fov_input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetCameraFov(entity, v.to_radians()));
+        let mut fov = cam.fov_y.to_degrees();
+        ui.labeled("FOV (degrees)", |ui| {
+            if ui.slider_f32(super::hash("cam_fov"), &mut fov, 1.0, 179.0).changed {
+                edits.push(PendingEdit::SetCameraFov(entity, fov.to_radians()));
             }
-        }
+        });
 
         let mut near = cam.near as f64;
         let mut far = cam.far as f64;
 
-        ui.muted_label("Near");
-        if ui.number_input_clamped(super::hash("cam_near"), &mut near, 0.01, 0.001, 100.0).changed {
-            edits.push(PendingEdit::SetCameraNear(entity, near as f32));
-        }
-        ui.muted_label("Far");
-        if ui.number_input_clamped(super::hash("cam_far"), &mut far, 1.0, 1.0, 10000.0).changed {
-            edits.push(PendingEdit::SetCameraFar(entity, far as f32));
-        }
+        ui.labeled("Near", |ui| {
+            if ui.number_input_clamped(super::hash("cam_near"), &mut near, 0.01, 0.001, 100.0).changed {
+                edits.push(PendingEdit::SetCameraNear(entity, near as f32));
+            }
+        });
+        ui.labeled("Far", |ui| {
+            if ui.number_input_clamped(super::hash("cam_far"), &mut far, 1.0, 1.0, 10000.0).changed {
+                edits.push(PendingEdit::SetCameraFar(entity, far as f32));
+            }
+        });
         ui.muted_label(if cam.active { "Active" } else { "Inactive" });
     });
 }
@@ -245,15 +242,11 @@ fn draw_mesh_renderer_section(
 
         let labels = ["R", "G", "B", "A"];
         for i in 0..4 {
-            ui.muted_label(labels[i]);
-            let mut input = InputState::new();
-            input.text = format!("{:.2}", tint[i]);
-            if ui.slider(super::hash(&format!("mr_tint_{i}")), &mut input, 0.0, 1.0).changed {
-                if let Ok(v) = input.text.parse::<f32>() {
-                    tint[i] = v.clamp(0.0, 1.0);
+            ui.labeled(labels[i], |ui| {
+                if ui.slider_f32(super::hash(&format!("mr_tint_{i}")), &mut tint[i], 0.0, 1.0).changed {
                     tint_changed = true;
                 }
-            }
+            });
         }
         if tint_changed {
             edits.push(PendingEdit::SetMeshTint(entity, tint));
@@ -304,53 +297,37 @@ fn draw_material_section(
         ui.muted_label("Albedo");
         let labels = ["R", "G", "B", "A"];
         for i in 0..4 {
-            ui.muted_label(labels[i]);
-            let mut input = InputState::new();
-            input.text = format!("{:.2}", new_desc.albedo[i]);
-            if ui.slider(super::hash(&format!("mat_alb_{i}")), &mut input, 0.0, 1.0).changed {
-                if let Ok(v) = input.text.parse::<f32>() {
-                    new_desc.albedo[i] = v.clamp(0.0, 1.0);
+            ui.labeled(labels[i], |ui| {
+                if ui.slider_f32(super::hash(&format!("mat_alb_{i}")), &mut new_desc.albedo[i], 0.0, 1.0).changed {
                     changed = true;
                 }
-            }
+            });
         }
 
         // Emissive RGB sliders (HDR range)
         ui.muted_label("Emissive");
         let em_labels = ["R", "G", "B"];
         for i in 0..3 {
-            ui.muted_label(em_labels[i]);
-            let mut input = InputState::new();
-            input.text = format!("{:.2}", new_desc.emissive[i]);
-            if ui.slider(super::hash(&format!("mat_em_{i}")), &mut input, 0.0, 10.0).changed {
-                if let Ok(v) = input.text.parse::<f32>() {
-                    new_desc.emissive[i] = v.clamp(0.0, 10.0);
+            ui.labeled(em_labels[i], |ui| {
+                if ui.slider_f32(super::hash(&format!("mat_em_{i}")), &mut new_desc.emissive[i], 0.0, 10.0).changed {
                     changed = true;
                 }
-            }
+            });
         }
 
         // PBR-only: metallic + roughness
         if new_desc.material_type == MaterialType::PBR {
-            ui.muted_label("Metallic");
-            let mut input = InputState::new();
-            input.text = format!("{:.2}", new_desc.metallic);
-            if ui.slider(super::hash("mat_metallic"), &mut input, 0.0, 1.0).changed {
-                if let Ok(v) = input.text.parse::<f32>() {
-                    new_desc.metallic = v.clamp(0.0, 1.0);
+            ui.labeled("Metallic", |ui| {
+                if ui.slider_f32(super::hash("mat_metallic"), &mut new_desc.metallic, 0.0, 1.0).changed {
                     changed = true;
                 }
-            }
+            });
 
-            ui.muted_label("Roughness");
-            let mut input = InputState::new();
-            input.text = format!("{:.2}", new_desc.roughness);
-            if ui.slider(super::hash("mat_roughness"), &mut input, 0.0, 1.0).changed {
-                if let Ok(v) = input.text.parse::<f32>() {
-                    new_desc.roughness = v.clamp(0.0, 1.0);
+            ui.labeled("Roughness", |ui| {
+                if ui.slider_f32(super::hash("mat_roughness"), &mut new_desc.roughness, 0.0, 1.0).changed {
                     changed = true;
                 }
-            }
+            });
         }
 
         // Blend mode select
@@ -394,15 +371,11 @@ fn draw_color_editor(
     let mut changed = false;
     let labels = ["R", "G", "B"];
     for i in 0..3 {
-        ui.muted_label(labels[i]);
-        let mut input = InputState::new();
-        input.text = format!("{:.2}", color[i]);
-        if ui.slider(super::hash(&format!("{id_base}_{i}")), &mut input, 0.0, 1.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                color[i] = v.clamp(0.0, 1.0);
+        ui.labeled(labels[i], |ui| {
+            if ui.slider_f32(super::hash(&format!("{id_base}_{i}")), &mut color[i], 0.0, 1.0).changed {
                 changed = true;
             }
-        }
+        });
     }
     changed
 }
@@ -431,24 +404,20 @@ fn draw_point_light_section(
         }
 
         // Intensity slider
-        ui.muted_label("Intensity");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", pl.intensity);
-        if ui.slider(super::hash("pl_intensity"), &mut input, 0.0, 1000.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetPointLightIntensity(entity, v));
+        let mut intensity = pl.intensity;
+        ui.labeled("Intensity", |ui| {
+            if ui.slider_f32(super::hash("pl_intensity"), &mut intensity, 0.0, 1000.0).changed {
+                edits.push(PendingEdit::SetPointLightIntensity(entity, intensity));
             }
-        }
+        });
 
         // Range slider
-        ui.muted_label("Range");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", pl.range);
-        if ui.slider(super::hash("pl_range"), &mut input, 0.1, 500.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetPointLightRange(entity, v));
+        let mut range = pl.range;
+        ui.labeled("Range", |ui| {
+            if ui.slider_f32(super::hash("pl_range"), &mut range, 0.1, 500.0).changed {
+                edits.push(PendingEdit::SetPointLightRange(entity, range));
             }
-        }
+        });
 
         // Shadow toggle
         let shadow_label = if pl.cast_shadows { "Shadows: ON" } else { "Shadows: OFF" };
@@ -482,44 +451,36 @@ fn draw_spot_light_section(
         }
 
         // Intensity slider
-        ui.muted_label("Intensity");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", sl.intensity);
-        if ui.slider(super::hash("sl_intensity"), &mut input, 0.0, 1000.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetSpotLightIntensity(entity, v));
+        let mut intensity = sl.intensity;
+        ui.labeled("Intensity", |ui| {
+            if ui.slider_f32(super::hash("sl_intensity"), &mut intensity, 0.0, 1000.0).changed {
+                edits.push(PendingEdit::SetSpotLightIntensity(entity, intensity));
             }
-        }
+        });
 
         // Range slider
-        ui.muted_label("Range");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", sl.range);
-        if ui.slider(super::hash("sl_range"), &mut input, 0.1, 500.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetSpotLightRange(entity, v));
+        let mut range = sl.range;
+        ui.labeled("Range", |ui| {
+            if ui.slider_f32(super::hash("sl_range"), &mut range, 0.1, 500.0).changed {
+                edits.push(PendingEdit::SetSpotLightRange(entity, range));
             }
-        }
+        });
 
         // Inner cone slider (degrees)
-        ui.muted_label("Inner Cone (deg)");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", sl.inner_cone_angle.to_degrees());
-        if ui.slider(super::hash("sl_inner"), &mut input, 0.0, 90.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetSpotLightInnerCone(entity, v.to_radians()));
+        let mut inner = sl.inner_cone_angle.to_degrees();
+        ui.labeled("Inner Cone (deg)", |ui| {
+            if ui.slider_f32(super::hash("sl_inner"), &mut inner, 0.0, 90.0).changed {
+                edits.push(PendingEdit::SetSpotLightInnerCone(entity, inner.to_radians()));
             }
-        }
+        });
 
         // Outer cone slider (degrees)
-        ui.muted_label("Outer Cone (deg)");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", sl.outer_cone_angle.to_degrees());
-        if ui.slider(super::hash("sl_outer"), &mut input, 0.0, 90.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetSpotLightOuterCone(entity, v.to_radians()));
+        let mut outer = sl.outer_cone_angle.to_degrees();
+        ui.labeled("Outer Cone (deg)", |ui| {
+            if ui.slider_f32(super::hash("sl_outer"), &mut outer, 0.0, 90.0).changed {
+                edits.push(PendingEdit::SetSpotLightOuterCone(entity, outer.to_radians()));
             }
-        }
+        });
 
         // Shadow toggle
         let shadow_label = if sl.cast_shadows { "Shadows: ON" } else { "Shadows: OFF" };
@@ -553,14 +514,12 @@ fn draw_dir_light_section(
         }
 
         // Intensity slider
-        ui.muted_label("Intensity");
-        let mut input = InputState::new();
-        input.text = format!("{:.1}", dl.intensity);
-        if ui.slider(super::hash("dl_intensity"), &mut input, 0.0, 100.0).changed {
-            if let Ok(v) = input.text.parse::<f32>() {
-                edits.push(PendingEdit::SetDirLightIntensity(entity, v));
+        let mut intensity = dl.intensity;
+        ui.labeled("Intensity", |ui| {
+            if ui.slider_f32(super::hash("dl_intensity"), &mut intensity, 0.0, 100.0).changed {
+                edits.push(PendingEdit::SetDirLightIntensity(entity, intensity));
             }
-        }
+        });
     });
 }
 

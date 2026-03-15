@@ -6,6 +6,29 @@ use esox_gfx::Color;
 
 use crate::paint::lerp_color;
 
+/// Semantic text size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextSize {
+    Xs,
+    Sm,
+    Base,
+    Lg,
+    Xl,
+    Xxl,
+    Custom(f32),
+}
+
+/// Per-widget style overrides, pushed onto a stack via `Ui::with_style`.
+#[derive(Debug, Clone, Default)]
+pub struct WidgetStyle {
+    pub bg: Option<Color>,
+    pub fg: Option<Color>,
+    pub border_color: Option<Color>,
+    pub font_size: Option<f32>,
+    pub corner_radius: Option<f32>,
+    pub height: Option<f32>,
+}
+
 /// Complete UI theme — all visual properties in one place.
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -130,6 +153,14 @@ pub struct Theme {
     pub modal_padding: f32,
     pub modal_min_width: f32,
     pub modal_max_width: f32,
+
+    // Type scale — semantic text sizes.
+    pub text_xs: f32,
+    pub text_sm: f32,
+    pub text_base: f32,
+    pub text_lg: f32,
+    pub text_xl: f32,
+    pub text_2xl: f32,
 
     // Form field helpers.
     pub form_label_gap: f32,
@@ -304,6 +335,12 @@ impl Theme {
             font_size: 16.0,
             heading_font_size: 24.0,
             header_font_size: 13.0,
+            text_xs: 12.0,
+            text_sm: 14.0,
+            text_base: 16.0,
+            text_lg: 18.0,
+            text_xl: 22.0,
+            text_2xl: 24.0,
             button_height: 40.0,
             item_height: 36.0,
             corner_radius: 2.0,
@@ -362,6 +399,12 @@ impl Theme {
         t.modal_min_width *= factor;
         t.modal_max_width *= factor;
         t.toast_margin *= factor;
+        t.text_xs *= factor;
+        t.text_sm *= factor;
+        t.text_base *= factor;
+        t.text_lg *= factor;
+        t.text_xl *= factor;
+        t.text_2xl *= factor;
         t.form_label_gap *= factor;
         t.form_helper_gap *= factor;
         t.form_helper_font_size *= factor;
@@ -464,12 +507,31 @@ impl Theme {
             modal_padding: snap.modal_padding,
             modal_min_width: snap.modal_min_width,
             modal_max_width: snap.modal_max_width,
+            text_xs: snap.text_xs,
+            text_sm: snap.text_sm,
+            text_base: snap.text_base,
+            text_lg: snap.text_lg,
+            text_xl: snap.text_xl,
+            text_2xl: snap.text_2xl,
             form_label_gap: snap.form_label_gap,
             form_helper_gap: snap.form_helper_gap,
             form_helper_font_size: snap.form_helper_font_size,
             toast_duration_ms: snap.toast_duration_ms,
             toast_max_visible: snap.toast_max_visible,
             toast_margin: snap.toast_margin,
+        }
+    }
+
+    /// Resolve a `TextSize` to a concrete pixel value.
+    pub fn resolve_text_size(&self, size: TextSize) -> f32 {
+        match size {
+            TextSize::Xs => self.text_xs,
+            TextSize::Sm => self.text_sm,
+            TextSize::Base => self.text_base,
+            TextSize::Lg => self.text_lg,
+            TextSize::Xl => self.text_xl,
+            TextSize::Xxl => self.text_2xl,
+            TextSize::Custom(v) => v,
         }
     }
 
@@ -569,6 +631,13 @@ impl Theme {
             modal_padding: 16.0,
             modal_min_width: 300.0,
             modal_max_width: 600.0,
+
+            text_xs: 10.0,
+            text_sm: 12.0,
+            text_base: 14.0,
+            text_lg: 16.0,
+            text_xl: 20.0,
+            text_2xl: 28.0,
 
             form_label_gap: 4.0,
             form_helper_gap: 2.0,

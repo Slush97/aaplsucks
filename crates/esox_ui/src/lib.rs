@@ -46,25 +46,187 @@ pub mod theme;
 mod widgets;
 
 pub use id::{fnv1a_mix, fnv1a_runtime, HOVER_SALT};
-pub use layout::{Constraints, Rect};
+pub use layout::{Align, Constraints, Justify, Rect};
 pub use paint::lerp_color;
 pub use response::Response;
 pub use rich_text::{RichText, Span};
 pub use state::{
-    A11yRole, A11yTree, ClipboardProvider, DragPayload, DropZoneState, Easing, ImeState,
+    A11yNode, A11yRole, A11yTree, ClipboardProvider, DragPayload, DropZoneState, Easing, ImeState,
     InputState, ModalAction, SelectState, SortDirection, TabState, TableState, ToastKind,
     ToastQueue, TooltipState, TreeState, UiState, VirtualScrollState, WidgetKind,
 };
 pub use text::TextRenderer;
-pub use theme::{Theme, ThemeBuilder, ThemeTransition};
+pub use theme::{TextSize, Theme, ThemeBuilder, ThemeTransition, WidgetStyle};
 pub use widgets::image::{ImageCache, ImageHandle};
 pub use widgets::table::{ColumnWidth, TableColumn};
 pub use widgets::form::FieldStatus;
 pub use widgets::tree::TreeNodeResponse;
 pub use widgets::menu_bar::{Menu, MenuEntry, MenuItem};
 
-use esox_gfx::{Frame, GpuContext, RenderResources};
+use esox_gfx::{Color, Frame, GpuContext, RenderResources};
 use layout::{Direction, LayoutContext, Vec2};
+
+/// Rendering access for custom widgets.
+///
+/// Obtained via [`Ui::painter()`], provides mutable access to the frame and
+/// text renderer plus shared access to GPU context, resources, and theme.
+pub struct Painter<'a> {
+    pub frame: &'a mut Frame,
+    pub text: &'a mut text::TextRenderer,
+    pub gpu: &'a GpuContext,
+    pub resources: &'a mut RenderResources,
+    pub theme: &'a theme::Theme,
+}
+
+/// Builder for flex row/column layouts with gap, alignment, and justification.
+pub struct FlexBuilder<'a, 'f> {
+    ui: &'a mut Ui<'f>,
+    direction: Direction,
+    gap: f32,
+    align: layout::Align,
+    justify: layout::Justify,
+}
+
+impl<'a, 'f> FlexBuilder<'a, 'f> {
+    /// Set the gap between children.
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    /// Set cross-axis alignment.
+    pub fn align(mut self, align: layout::Align) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Set main-axis justification.
+    pub fn justify(mut self, justify: layout::Justify) -> Self {
+        self.justify = justify;
+        self
+    }
+
+    /// Draw the flex layout with the given content closure.
+    pub fn show(self, f: impl FnOnce(&mut Ui<'f>)) {
+        let is_horizontal = self.direction == Direction::Horizontal;
+
+        match (self.justify, is_horizontal) {
+            (layout::Justify::Start, true) => {
+                // Fast path: same as row_spaced.
+                self.ui.row_spaced(self.gap, |ui| {
+                    f(ui);
+                });
+                // Apply cross-axis alignment if needed (Stretch handled below).
+                // For Start justification + Align::Start this is a no-op.
+            }
+            (layout::Justify::Start, false) => {
+                // Vertical start: just set spacing.
+                self.ui.with_spacing(self.gap, |ui| {
+                    f(ui);
+                });
+            }
+            (_, true) => {
+                // Two-pass: record instances, measure, then shift.
+                let saved_cursor = self.ui.cursor;
+                let saved_region = self.ui.region;
+                let saved_spacing = self.ui.spacing;
+
+                let start_idx = self.ui.frame.instance_len();
+                let start_x = self.ui.cursor.x;
+
+                // Push horizontal layout context.
+                self.ui.spacing = self.gap;
+                let ctx = LayoutContext {
+                    direction: Direction::Horizontal,
+                    origin: self.ui.cursor,
+                    region: self.ui.region,
+                    saved_cursor: self.ui.cursor,
+                    spacing: self.ui.spacing,
+                    max_cross: 0.0,
+                    clip_rect: None,
+                };
+                self.ui.layout_stack.push(ctx);
+                f(self.ui);
+                let ctx = self.ui.layout_stack.pop().unwrap();
+                let max_cross = ctx.max_cross;
+
+                let end_idx = self.ui.frame.instance_len();
+                let content_w = self.ui.cursor.x - start_x - self.gap; // subtract trailing gap
+                let available_w = saved_region.w;
+
+                // Compute horizontal offset.
+                let offset_x = match self.justify {
+                    layout::Justify::Center => (available_w - content_w) / 2.0,
+                    layout::Justify::End => available_w - content_w,
+                    layout::Justify::SpaceBetween => 0.0, // handled differently
+                    layout::Justify::Start => 0.0,
+                };
+
+                if self.justify == layout::Justify::SpaceBetween {
+                    // Count children by gaps: measure spacing intervals.
+                    // For SpaceBetween we need to redistribute. This is approximate:
+                    // shift each instance proportionally. For accurate results we'd
+                    // need per-child widths, but we approximate by scaling existing positions.
+                    if content_w > 0.0 && content_w < available_w {
+                        let scale = available_w / content_w;
+                        for i in start_idx..end_idx {
+                            self.ui.frame.offset_instance_x(i, start_x, scale);
+                        }
+                    }
+                } else if offset_x.abs() > 0.01 {
+                    for i in start_idx..end_idx {
+                        self.ui.frame.translate_instance(i, offset_x, 0.0);
+                    }
+                }
+
+                // Cross-axis alignment.
+                if self.align == layout::Align::Center && max_cross > 0.0 {
+                    // We'd need per-widget height tracking for precise centering.
+                    // Skip for now — Start is default behavior.
+                }
+
+                // Restore cursor.
+                self.ui.cursor.x = saved_cursor.x;
+                self.ui.cursor.y = saved_cursor.y + max_cross + saved_spacing;
+                self.ui.region = saved_region;
+                self.ui.spacing = saved_spacing;
+            }
+            (_, false) => {
+                // Vertical non-Start justification: two-pass.
+                let saved_cursor = self.ui.cursor;
+                let saved_region = self.ui.region;
+                let saved_spacing = self.ui.spacing;
+
+                let start_idx = self.ui.frame.instance_len();
+                let start_y = self.ui.cursor.y;
+
+                self.ui.spacing = self.gap;
+                f(self.ui);
+
+                let end_idx = self.ui.frame.instance_len();
+                let content_h = self.ui.cursor.y - start_y - self.gap;
+                let available_h = saved_region.h;
+
+                let offset_y = match self.justify {
+                    layout::Justify::Center => (available_h - content_h) / 2.0,
+                    layout::Justify::End => available_h - content_h,
+                    _ => 0.0,
+                };
+
+                if offset_y.abs() > 0.01 {
+                    for i in start_idx..end_idx {
+                        self.ui.frame.translate_instance(i, 0.0, offset_y);
+                    }
+                }
+
+                self.ui.cursor = saved_cursor;
+                self.ui.cursor.y += content_h + self.gap;
+                self.ui.region = saved_region;
+                self.ui.spacing = saved_spacing;
+            }
+        }
+    }
+}
 
 /// The main UI context. Created each frame, consumed by `finish()`.
 pub struct Ui<'f> {
@@ -84,6 +246,8 @@ pub struct Ui<'f> {
     hit_clip: Option<Rect>,
     /// Whether widgets are currently disabled (no interaction).
     disabled: bool,
+    /// Style override stack for per-widget styling.
+    style_stack: Vec<WidgetStyle>,
 }
 
 impl<'f> Ui<'f> {
@@ -99,6 +263,13 @@ impl<'f> Ui<'f> {
     ) -> Self {
         text.advance_generation();
         state.begin_frame();
+
+        // Set up tile grid for partial redraw if available.
+        if let Some(ref mut grid) = state.tile_grid {
+            grid.resize(viewport.w as u32, viewport.h as u32);
+            grid.begin_frame(&state.damage);
+            frame.begin_partial(grid);
+        }
 
         Self {
             frame,
@@ -116,18 +287,36 @@ impl<'f> Ui<'f> {
             spacing: theme.padding,
             hit_clip: None,
             disabled: false,
+            style_stack: Vec::new(),
         }
+    }
+
+    /// Enable tile-based partial redraw. Call once (e.g. after first resize)
+    /// to opt in to tile caching. The grid is created lazily from the viewport.
+    pub fn enable_partial_redraw(state: &mut UiState, viewport_w: u32, viewport_h: u32) {
+        state.tile_grid = Some(esox_gfx::TileGrid::new(viewport_w, viewport_h));
     }
 
     /// Finish the frame — draw modals, overlays, toasts, tooltips, clean up per-frame state.
     /// Returns any overlay selection that occurred: (id, selected_index).
     pub fn finish(mut self) -> Option<(u64, usize)> {
+        // Switch to overlay mode so modals/toasts/tooltips bypass tile routing.
+        if self.state.tile_grid.is_some() {
+            self.frame.set_overlay_mode(true);
+        }
+
         // Draw order: normal content (already drawn) → modals → dropdowns → toasts → tooltips
         self.draw_modals();
         let selection = self.draw_overlay();
         self.draw_deferred_menu_bar();
         self.draw_toasts();
         self.draw_tooltip();
+
+        // Finalize tile grid: merge dirty/clean tiles + overlay.
+        if let Some(ref mut grid) = self.state.tile_grid {
+            self.frame.finalize_partial(grid);
+        }
+
         self.state.end_frame();
         selection
     }
@@ -267,6 +456,30 @@ impl<'f> Ui<'f> {
             f(ui);
         });
         self.spacing = saved;
+    }
+
+    // ── Flex Layout ──
+
+    /// Create a horizontal flex layout builder.
+    pub fn flex_row(&mut self) -> FlexBuilder<'_, 'f> {
+        FlexBuilder {
+            ui: self,
+            direction: Direction::Horizontal,
+            gap: 0.0,
+            align: layout::Align::Start,
+            justify: layout::Justify::Start,
+        }
+    }
+
+    /// Create a vertical flex layout builder.
+    pub fn flex_col(&mut self) -> FlexBuilder<'_, 'f> {
+        FlexBuilder {
+            ui: self,
+            direction: Direction::Vertical,
+            gap: 0.0,
+            align: layout::Align::Start,
+            justify: layout::Justify::Start,
+        }
     }
 
     /// Center content horizontally within the current region.
@@ -544,7 +757,7 @@ impl<'f> Ui<'f> {
     ///
     /// When disabled, skips both hit_rects and focus_chain — no cursor
     /// icon change, no Tab focus, no click consumption.
-    pub(crate) fn register_widget(
+    pub fn register_widget(
         &mut self,
         id: u64,
         rect: Rect,
@@ -566,7 +779,7 @@ impl<'f> Ui<'f> {
 
     /// Compute the Response for a widget given its ID and rect.
     /// When disabled, returns an inert Response with `disabled: true`.
-    pub(crate) fn widget_response(&mut self, id: u64, rect: Rect) -> response::Response {
+    pub fn widget_response(&mut self, id: u64, rect: Rect) -> response::Response {
         if self.disabled {
             return response::Response {
                 clicked: false,
@@ -632,6 +845,26 @@ impl<'f> Ui<'f> {
         rect.contains(self.state.mouse.x, self.state.mouse.y)
     }
 
+    /// Borrow rendering resources for custom widget drawing.
+    pub fn painter(&mut self) -> Painter<'_> {
+        Painter {
+            frame: self.frame,
+            text: self.text,
+            gpu: self.gpu,
+            resources: self.resources,
+            theme: self.theme,
+        }
+    }
+
+    /// Get a hover animation value for a custom widget.
+    ///
+    /// Convenience wrapper around [`UiState::hover_t`]. Pass a unique `id`
+    /// (typically `widget_id ^ HOVER_SALT`), the current `hovered` state,
+    /// and the animation duration in milliseconds. Returns 0.0–1.0.
+    pub fn hover_t(&mut self, id: u64, hovered: bool, duration_ms: f32) -> f32 {
+        self.state.hover_t(id, hovered, duration_ms)
+    }
+
     /// Set the disabled flag directly.
     pub fn set_disabled(&mut self, disabled: bool) {
         self.disabled = disabled;
@@ -650,9 +883,108 @@ impl<'f> Ui<'f> {
         self.disabled
     }
 
+    // ── Widget Style Overrides ──
+
+    /// Run a closure with a widget style override pushed onto the stack.
+    pub fn with_style(&mut self, style: WidgetStyle, f: impl FnOnce(&mut Self)) {
+        self.style_stack.push(style);
+        f(self);
+        self.style_stack.pop();
+    }
+
+    /// Resolve foreground color: style stack override or theme default.
+    pub(crate) fn resolve_fg(&self) -> Color {
+        for s in self.style_stack.iter().rev() {
+            if let Some(c) = s.fg {
+                return c;
+            }
+        }
+        self.theme.fg
+    }
+
+    /// Resolve background color for interactive widgets.
+    pub(crate) fn resolve_bg(&self) -> Color {
+        for s in self.style_stack.iter().rev() {
+            if let Some(c) = s.bg {
+                return c;
+            }
+        }
+        self.theme.accent
+    }
+
+    /// Resolve font size: style stack override or theme default.
+    pub(crate) fn resolve_font_size(&self) -> f32 {
+        for s in self.style_stack.iter().rev() {
+            if let Some(v) = s.font_size {
+                return v;
+            }
+        }
+        self.theme.font_size
+    }
+
+    /// Resolve corner radius: style stack override or theme default.
+    pub(crate) fn resolve_corner_radius(&self) -> f32 {
+        for s in self.style_stack.iter().rev() {
+            if let Some(v) = s.corner_radius {
+                return v;
+            }
+        }
+        self.theme.corner_radius
+    }
+
+    /// Resolve button height: style stack override or theme default.
+    pub(crate) fn resolve_height(&self) -> f32 {
+        for s in self.style_stack.iter().rev() {
+            if let Some(v) = s.height {
+                return v;
+            }
+        }
+        self.theme.button_height
+    }
+
+    /// Resolve border color: style stack override or theme default.
+    #[allow(dead_code)]
+    pub(crate) fn resolve_border_color(&self) -> Color {
+        for s in self.style_stack.iter().rev() {
+            if let Some(c) = s.border_color {
+                return c;
+            }
+        }
+        self.theme.border
+    }
+
     /// Access the theme.
     pub fn theme(&self) -> &Theme {
         self.theme
+    }
+
+    // ── Convenience Combinators ──
+
+    /// Scrollable + padding + max_width in one call (common page layout).
+    pub fn page(&mut self, id: u64, scroll_h: f32, max_w: f32, f: impl FnOnce(&mut Self)) {
+        self.scrollable(id, scroll_h, |ui| {
+            ui.max_width(max_w, |ui| {
+                ui.padding(ui.theme.padding, f);
+            });
+        });
+    }
+
+    /// Label-widget pair in a row: "Label    [widget]"
+    pub fn labeled(&mut self, label: &str, f: impl FnOnce(&mut Self)) {
+        self.row(|ui| {
+            let label_w = ui.text.measure_text(label, ui.theme.font_size);
+            let rect = ui.allocate_rect(label_w, ui.theme.button_height);
+            ui.text.draw_ui_text(
+                label,
+                rect.x,
+                rect.y + (rect.h - ui.theme.font_size) / 2.0,
+                ui.theme.fg_label,
+                ui.frame,
+                ui.gpu,
+                ui.resources,
+            );
+            f(ui);
+        });
     }
 
     // ── Tooltip ──
@@ -813,7 +1145,7 @@ impl<'f> Ui<'f> {
     ///
     /// Widgets call this after `register_widget` to emit their a11y representation.
     /// If a11y is disabled, this is a no-op.
-    pub(crate) fn push_a11y_node(&mut self, node: state::A11yNode) {
+    pub fn push_a11y_node(&mut self, node: state::A11yNode) {
         if self.state.a11y_enabled {
             self.state.a11y_tree.push(node);
         }

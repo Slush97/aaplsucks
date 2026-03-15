@@ -39,7 +39,13 @@ impl<'f> Ui<'f> {
     }
 
     fn button_inner(&mut self, id: u64, label: &str, btn_w: f32) -> Response {
-        let rect = self.allocate_rect(btn_w, self.theme.button_height);
+        let height = self.resolve_height();
+        let corner_radius = self.resolve_corner_radius();
+        let font_size = self.resolve_font_size();
+        let bg_color = self.resolve_bg();
+        let fg_color = self.resolve_fg();
+
+        let rect = self.allocate_rect(btn_w, height);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);
@@ -58,7 +64,7 @@ impl<'f> Ui<'f> {
                 self.frame,
                 rect,
                 self.theme.accent_dim,
-                self.theme.corner_radius,
+                corner_radius,
                 self.theme.focus_ring_expand,
             );
         }
@@ -68,9 +74,9 @@ impl<'f> Ui<'f> {
             self.theme.disabled_bg
         } else {
             let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
-            paint::lerp_color(self.theme.accent, self.theme.accent_hover, t)
+            paint::lerp_color(bg_color, self.theme.accent_hover, t)
         };
-        paint::draw_rounded_rect(self.frame, rect, bg, self.theme.corner_radius);
+        paint::draw_rounded_rect(self.frame, rect, bg, corner_radius);
 
         // Dashed border when disabled.
         if disabled {
@@ -81,12 +87,12 @@ impl<'f> Ui<'f> {
         }
 
         // Centered label.
-        let text_color = if disabled { self.theme.disabled_fg } else { self.theme.fg };
-        let label_w = self.text.measure_text(label, self.theme.font_size);
+        let text_color = if disabled { self.theme.disabled_fg } else { fg_color };
+        let label_w = self.text.measure_text(label, font_size);
         self.text.draw_ui_text(
             label,
             rect.x + (rect.w - label_w) / 2.0,
-            rect.y + (rect.h - self.theme.font_size) / 2.0,
+            rect.y + (rect.h - font_size) / 2.0,
             text_color,
             self.frame,
             self.gpu,

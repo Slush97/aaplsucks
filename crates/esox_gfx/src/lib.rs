@@ -43,7 +43,7 @@ pub use atlas::{
 };
 pub use bloom::{BloomPass, PIPELINE_BLOOM_DOWNSAMPLE, PIPELINE_BLOOM_UPSAMPLE};
 pub use color::{Color, srgb_to_linear};
-pub use damage::{DamageRect, DamageTracker};
+pub use damage::{DamageRect, DamageTracker, TileGrid, TileIndex, TILE_SIZE};
 pub use error::Error;
 pub use frame::{
     ClipKey, ColorLoadOp, DrawBatch, Frame, FrameEncoder, FrameUniforms, PhaseRange,

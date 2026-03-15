@@ -40,6 +40,10 @@ pub struct PlatformConfig {
     pub accessibility: AccessibilityConfig,
     /// Frame timing settings.
     pub frame: FrameConfig,
+    /// Application name for XDG directories and settings persistence.
+    ///
+    /// When set, enables auto-save/restore of window state via `settings` feature.
+    pub app_name: Option<String>,
 }
 
 impl Default for PlatformConfig {
@@ -53,6 +57,7 @@ impl Default for PlatformConfig {
             security: SecurityConfig::default(),
             accessibility: AccessibilityConfig::default(),
             frame: FrameConfig::default(),
+            app_name: None,
         }
     }
 }

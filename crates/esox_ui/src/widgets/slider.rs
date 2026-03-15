@@ -8,6 +8,40 @@ use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
 use crate::Ui;
 
 impl<'f> Ui<'f> {
+    /// Typed f32 slider — takes `&mut f32` directly, no `InputState` boilerplate.
+    pub fn slider_f32(&mut self, id: u64, value: &mut f32, min: f32, max: f32) -> Response {
+        let mut input = InputState::new();
+        input.text = if (max - min) >= 10.0 {
+            format!("{}", (*value).round() as i32)
+        } else {
+            format!("{:.2}", *value)
+        };
+        let response = self.slider(id, &mut input, min, max);
+        if response.changed {
+            if let Ok(v) = input.text.parse::<f32>() {
+                *value = v.clamp(min, max);
+            }
+        }
+        response
+    }
+
+    /// Typed f64 slider — takes `&mut f64` directly, no `InputState` boilerplate.
+    pub fn slider_f64(&mut self, id: u64, value: &mut f64, min: f64, max: f64) -> Response {
+        let mut input = InputState::new();
+        input.text = if (max - min) >= 10.0 {
+            format!("{}", (*value).round() as i64)
+        } else {
+            format!("{:.2}", *value)
+        };
+        let response = self.slider(id, &mut input, min as f32, max as f32);
+        if response.changed {
+            if let Ok(v) = input.text.parse::<f64>() {
+                *value = v.clamp(min, max);
+            }
+        }
+        response
+    }
+
     /// Draw a horizontal slider. Value is stored in `input.text` as a decimal string.
     /// Clicking anywhere on the track sets the value proportionally.
     pub fn slider(

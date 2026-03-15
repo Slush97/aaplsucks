@@ -31,7 +31,21 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.serde]
+workspace = true
+optional = true
+
+[dependencies.toml]
+version = "0.8"
+optional = true
+
+[dependencies.ashpd]
+version = "0.10"
+optional = true
+
 [features]
 default = []
 sandbox = ["seccompiler", "landlock"]
 a11y = ["zbus", "tokio", "esox_ui"]
+settings = ["serde", "toml"]
+portals = ["ashpd", "tokio"]

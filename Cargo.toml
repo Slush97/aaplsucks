@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/esox_gfx",
     "crates/esox_font",
+    "crates/esox_input",
     "crates/esox_ui",
     "crates/esox_platform",
     "crates/esox_engine",
@@ -18,6 +19,7 @@ members = [
     "examples/moba_lane",
     "examples/combat_demo",
     "examples/layout_showcase",
+    "examples/material_showcase",
 ]
 exclude = ["apps/dwnldr-gui"]
 
@@ -33,6 +35,7 @@ esox_font = { path = "crates/esox_font" }
 esox_ui = { path = "crates/esox_ui" }
 esox_platform = { path = "crates/esox_platform" }
 esox_engine = { path = "crates/esox_engine" }
+esox_input = { path = "crates/esox_input" }
 
 # GPU / rendering
 wgpu = { version = "28.0", default-features = false, features = ["vulkan", "wgsl"] }

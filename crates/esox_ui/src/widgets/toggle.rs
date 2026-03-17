@@ -74,7 +74,7 @@ impl<'f> Ui<'f> {
         let track_color = if disabled {
             self.theme.disabled_bg
         } else {
-            let hover_t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let hover_t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             let off = paint::lerp_color(self.theme.bg_input, self.theme.bg_raised, hover_t);
             let on = paint::lerp_color(self.theme.accent, self.theme.accent_hover, hover_t);
             paint::lerp_color(off, on, t)
@@ -94,9 +94,9 @@ impl<'f> Ui<'f> {
                 self.frame,
                 track_rect,
                 self.theme.disabled_border,
-                6.0,
-                4.0,
-                1.0,
+                self.theme.disabled_dash_len,
+                self.theme.disabled_dash_gap,
+                self.theme.disabled_dash_thickness,
             );
         } else if !checked {
             paint::draw_border(self.frame, track_rect, self.theme.border);
@@ -111,7 +111,7 @@ impl<'f> Ui<'f> {
         let knob_color = if disabled {
             self.theme.disabled_fg
         } else {
-            esox_gfx::Color::new(1.0, 1.0, 1.0, 1.0)
+            self.theme.fg_on_accent
         };
         self.frame.push(
             ShapeBuilder::rect(knob_x, knob_y, knob_d, knob_d)

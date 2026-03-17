@@ -195,6 +195,34 @@ pub struct Theme {
     pub toast_duration_ms: u64,
     pub toast_max_visible: usize,
     pub toast_margin: f32,
+
+    // Disabled border dashes.
+    pub disabled_dash_len: f32,
+    pub disabled_dash_gap: f32,
+    pub disabled_dash_thickness: f32,
+
+    // Uniform hover animation speed.
+    pub hover_duration_ms: f32,
+
+    // Widget sizes.
+    pub checkbox_size: f32,
+    pub radio_size: f32,
+    pub radio_dot_size: f32,
+    pub slider_track_height: f32,
+    pub split_pane_divider: f32,
+    pub badge_pad_x: f32,
+    pub badge_pad_y: f32,
+    pub chip_pad_y: f32,
+
+    // Modal layout.
+    pub modal_max_height_ratio: f32,
+    pub modal_shadow_alpha: f32,
+    pub modal_margin: f32,
+    pub modal_close_btn_size: f32,
+    pub modal_vertical_offset: f32,
+
+    // Semantic colors.
+    pub fg_on_accent: Color,
 }
 
 impl Theme {
@@ -434,6 +462,20 @@ impl Theme {
         t.form_label_gap *= factor;
         t.form_helper_gap *= factor;
         t.form_helper_font_size *= factor;
+        t.disabled_dash_len *= factor;
+        t.disabled_dash_gap *= factor;
+        t.disabled_dash_thickness *= factor;
+        t.checkbox_size *= factor;
+        t.radio_size *= factor;
+        t.radio_dot_size *= factor;
+        t.slider_track_height *= factor;
+        t.split_pane_divider *= factor;
+        t.badge_pad_x *= factor;
+        t.badge_pad_y *= factor;
+        t.chip_pad_y *= factor;
+        t.modal_margin *= factor;
+        t.modal_close_btn_size *= factor;
+        // hover_duration_ms, modal_max_height_ratio, modal_shadow_alpha, modal_vertical_offset are ratios — don't scale.
         t
     }
 
@@ -549,6 +591,24 @@ impl Theme {
             toast_duration_ms: snap.toast_duration_ms,
             toast_max_visible: snap.toast_max_visible,
             toast_margin: snap.toast_margin,
+            disabled_dash_len: snap.disabled_dash_len,
+            disabled_dash_gap: snap.disabled_dash_gap,
+            disabled_dash_thickness: snap.disabled_dash_thickness,
+            hover_duration_ms: snap.hover_duration_ms,
+            checkbox_size: snap.checkbox_size,
+            radio_size: snap.radio_size,
+            radio_dot_size: snap.radio_dot_size,
+            slider_track_height: snap.slider_track_height,
+            split_pane_divider: snap.split_pane_divider,
+            badge_pad_x: snap.badge_pad_x,
+            badge_pad_y: snap.badge_pad_y,
+            chip_pad_y: snap.chip_pad_y,
+            modal_max_height_ratio: snap.modal_max_height_ratio,
+            modal_shadow_alpha: snap.modal_shadow_alpha,
+            modal_margin: snap.modal_margin,
+            modal_close_btn_size: snap.modal_close_btn_size,
+            modal_vertical_offset: snap.modal_vertical_offset,
+            fg_on_accent: lerp_color(a.fg_on_accent, b.fg_on_accent, t),
         }
     }
 
@@ -710,6 +770,29 @@ impl Theme {
             toast_duration_ms: 3000,
             toast_max_visible: 5,
             toast_margin: 12.0,
+
+            disabled_dash_len: 6.0,
+            disabled_dash_gap: 4.0,
+            disabled_dash_thickness: 1.0,
+
+            hover_duration_ms: 100.0,
+
+            checkbox_size: 16.0,
+            radio_size: 16.0,
+            radio_dot_size: 6.0,
+            slider_track_height: 4.0,
+            split_pane_divider: 5.0,
+            badge_pad_x: 6.0,
+            badge_pad_y: 2.0,
+            chip_pad_y: 4.0,
+
+            modal_max_height_ratio: 0.8,
+            modal_shadow_alpha: 0.3,
+            modal_margin: 32.0,
+            modal_close_btn_size: 24.0,
+            modal_vertical_offset: 0.15,
+
+            fg_on_accent: Color::new(1.0, 1.0, 1.0, 1.0),
         }
     }
 }

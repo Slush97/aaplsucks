@@ -13,7 +13,7 @@
 //! ```
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::HOVER_SALT;
 use crate::layout::Rect;
@@ -114,9 +114,9 @@ impl<'f> Ui<'f> {
                 self.frame,
                 rect,
                 self.theme.disabled_border,
-                6.0,
-                4.0,
-                1.0,
+                self.theme.disabled_dash_len,
+                self.theme.disabled_dash_gap,
+                self.theme.disabled_dash_thickness,
             );
 
             let text = format_number(*value);
@@ -224,12 +224,12 @@ impl<'f> Ui<'f> {
             if response.focused {
                 let keys: Vec<_> = self.state.keys.clone();
                 for (event, modifiers) in &keys {
-                    if !event.state.is_pressed() {
+                    if !event.pressed {
                         continue;
                     }
-                    let ctrl = modifiers.control_key();
+                    let ctrl = modifiers.ctrl();
 
-                    match &event.logical_key {
+                    match &event.key {
                         Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) => {
                             // Commit the edit.
                             if let Ok(v) = input.text.parse::<f64>() {
@@ -255,14 +255,14 @@ impl<'f> Ui<'f> {
                             input.delete_forward();
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
-                            if modifiers.shift_key() {
+                            if modifiers.shift() {
                                 input.move_left_extend();
                             } else {
                                 input.move_left();
                             }
                         }
                         Key::Named(NamedKey::ArrowRight) => {
-                            if modifiers.shift_key() {
+                            if modifiers.shift() {
                                 input.move_right_extend();
                             } else {
                                 input.move_right();
@@ -321,7 +321,7 @@ impl<'f> Ui<'f> {
                 rect,
                 self.theme.accent_dim,
                 self.theme.corner_radius,
-                1.0,
+                self.theme.focus_ring_expand,
             );
         }
 
@@ -343,7 +343,7 @@ impl<'f> Ui<'f> {
 
         // Minus button.
         let minus_hovered = minus_rect.contains(self.state.mouse.x, self.state.mouse.y);
-        let minus_t = self.state.hover_t(id ^ HOVER_SALT, minus_hovered, 100.0);
+        let minus_t = self.state.hover_t(id ^ HOVER_SALT, minus_hovered, self.theme.hover_duration_ms);
         let minus_bg = paint::lerp_color(
             self.theme.secondary_button_bg,
             self.theme.secondary_button_hover,
@@ -370,7 +370,7 @@ impl<'f> Ui<'f> {
         // Plus button.
         let plus_hovered = plus_rect.contains(self.state.mouse.x, self.state.mouse.y);
         // Use a different salt for plus so hover anims don't collide.
-        let plus_t = self.state.hover_t(edit_id ^ HOVER_SALT, plus_hovered, 100.0);
+        let plus_t = self.state.hover_t(edit_id ^ HOVER_SALT, plus_hovered, self.theme.hover_duration_ms);
         let plus_bg = paint::lerp_color(
             self.theme.secondary_button_bg,
             self.theme.secondary_button_hover,

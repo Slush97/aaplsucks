@@ -1,7 +1,7 @@
 //! Select widget — dropdown trigger + overlay menu.
 
 use esox_gfx::{BorderRadius, ShapeBuilder};
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::HOVER_SALT;
 use crate::layout::Rect;
@@ -50,7 +50,7 @@ impl<'f> Ui<'f> {
         // Handle Enter on focused select — toggle dropdown.
         if response.focused && !response.clicked && !disabled {
             let enter_pressed = self.state.keys.iter().any(|(event, _)| {
-                event.state.is_pressed() && event.logical_key == Key::Named(NamedKey::Enter)
+                event.pressed && event.key == Key::Named(NamedKey::Enter)
             });
             if enter_pressed {
                 self.toggle_overlay(id, rect, choices, select.selected_index);
@@ -65,10 +65,10 @@ impl<'f> Ui<'f> {
             );
             if !is_open && !choices.is_empty() {
                 for (event, _) in &self.state.keys.clone() {
-                    if !event.state.is_pressed() {
+                    if !event.pressed {
                         continue;
                     }
-                    match &event.logical_key {
+                    match &event.key {
                         Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => {
                             if select.selected_index == 0 {
                                 select.selected_index = choices.len() - 1;
@@ -109,7 +109,7 @@ impl<'f> Ui<'f> {
         let bg = if disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             paint::lerp_color(self.theme.bg_input, self.theme.bg_raised, t)
         };
         paint::draw_rounded_rect(self.frame, rect, bg, self.theme.corner_radius);
@@ -118,7 +118,7 @@ impl<'f> Ui<'f> {
         if disabled {
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         } else {
             let border_color = if response.focused {
@@ -240,10 +240,10 @@ impl<'f> Ui<'f> {
             };
             {
                 for (event, _) in &self.state.keys {
-                    if !event.state.is_pressed() {
+                    if !event.pressed {
                         continue;
                     }
-                    match &event.logical_key {
+                    match &event.key {
                         Key::Named(NamedKey::ArrowUp) => {
                             let cur = hovered.unwrap_or(0);
                             *hovered = Some(if cur == 0 {
@@ -411,10 +411,10 @@ impl<'f> Ui<'f> {
                 _ => return None,
             };
             for (event, _) in &self.state.keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::ArrowUp) => {
                         let cur = hovered.unwrap_or(0);
                         *hovered = Some(if cur == 0 {

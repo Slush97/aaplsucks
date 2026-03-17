@@ -4,8 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use winit::event::KeyEvent;
-use winit::keyboard::ModifiersState;
+use esox_input::{KeyEvent, Modifiers};
 
 use crate::layout::Rect;
 use crate::widgets::menu_bar::MenuBarDeferred;
@@ -597,7 +596,7 @@ pub enum WidgetKind {
     SplitDividerH,
     SplitDividerV,
     Combobox,
-    Custom(winit::window::CursorIcon),
+    Custom(esox_input::CursorIcon),
 }
 
 /// Overlay state (dropdown menus drawn on top of everything).
@@ -893,9 +892,9 @@ pub struct UiState {
     /// Mouse state.
     pub mouse: MouseState,
     /// Buffered key events — drained during the frame by widgets.
-    pub(crate) keys: Vec<(KeyEvent, ModifiersState)>,
+    pub(crate) keys: Vec<(KeyEvent, Modifiers)>,
     /// Current modifier keys state.
-    pub modifiers: ModifiersState,
+    pub modifiers: Modifiers,
     /// Cursor blink state.
     pub cursor_blink: bool,
     /// When the cursor blink last toggled.
@@ -1007,7 +1006,7 @@ impl UiState {
             hit_rects: Vec::new(),
             mouse: MouseState::default(),
             keys: Vec::new(),
-            modifiers: ModifiersState::empty(),
+            modifiers: Modifiers::empty(),
             cursor_blink: true,
             cursor_blink_time: Instant::now(),
             scroll_offsets: HashMap::new(),
@@ -1060,14 +1059,14 @@ impl UiState {
     }
 
     /// Buffer a key event for processing during the frame.
-    pub fn process_key(&mut self, event: KeyEvent, modifiers: ModifiersState) {
+    pub fn process_key(&mut self, event: KeyEvent, modifiers: Modifiers) {
         self.modifiers = modifiers;
         self.keys.push((event, modifiers));
         self.damage.invalidate_all();
     }
 
     /// Update modifier keys state.
-    pub fn process_modifiers(&mut self, modifiers: ModifiersState) {
+    pub fn process_modifiers(&mut self, modifiers: Modifiers) {
         self.modifiers = modifiers;
     }
 
@@ -1231,29 +1230,29 @@ impl UiState {
     }
 
     /// Get the cursor icon for the given position based on registered widgets.
-    pub fn cursor_icon(&self, x: f32, y: f32) -> winit::window::CursorIcon {
+    pub fn cursor_icon(&self, x: f32, y: f32) -> esox_input::CursorIcon {
         // Active drag overrides everything.
         if self.drag.is_some() {
-            return winit::window::CursorIcon::Grabbing;
+            return esox_input::CursorIcon::Grabbing;
         }
         // Active split-pane divider drag overrides cursor.
         if let Some((_, is_horizontal)) = self.split_drag {
             return if is_horizontal {
-                winit::window::CursorIcon::ColResize
+                esox_input::CursorIcon::ColResize
             } else {
-                winit::window::CursorIcon::RowResize
+                esox_input::CursorIcon::RowResize
             };
         }
         // Iterate in reverse so the topmost (last-registered) widget wins.
         for (rect, _id, kind) in self.hit_rects.iter().rev() {
             if rect.contains(x, y) {
                 return match kind {
-                    WidgetKind::TextInput => winit::window::CursorIcon::Text,
-                    WidgetKind::ColumnResize | WidgetKind::ResizeEW => winit::window::CursorIcon::ColResize,
-                    WidgetKind::ResizeNS => winit::window::CursorIcon::RowResize,
-                    WidgetKind::Grab => winit::window::CursorIcon::Grab,
-                    WidgetKind::Grabbing => winit::window::CursorIcon::Grabbing,
-                    WidgetKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                    WidgetKind::TextInput => esox_input::CursorIcon::Text,
+                    WidgetKind::ColumnResize | WidgetKind::ResizeEW => esox_input::CursorIcon::ColResize,
+                    WidgetKind::ResizeNS => esox_input::CursorIcon::RowResize,
+                    WidgetKind::Grab => esox_input::CursorIcon::Grab,
+                    WidgetKind::Grabbing => esox_input::CursorIcon::Grabbing,
+                    WidgetKind::NotAllowed => esox_input::CursorIcon::NotAllowed,
                     WidgetKind::Button
                     | WidgetKind::DropZone
                     | WidgetKind::Select
@@ -1262,17 +1261,17 @@ impl UiState {
                     | WidgetKind::Tab
                     | WidgetKind::TableRow
                     | WidgetKind::TreeNode
-                    | WidgetKind::Toggle => winit::window::CursorIcon::Pointer,
-                    WidgetKind::Hyperlink => winit::window::CursorIcon::Pointer,
-                    WidgetKind::Slider | WidgetKind::Scrollbar => winit::window::CursorIcon::Default,
-                    WidgetKind::SplitDividerH => winit::window::CursorIcon::ColResize,
-                    WidgetKind::SplitDividerV => winit::window::CursorIcon::RowResize,
-                    WidgetKind::Combobox => winit::window::CursorIcon::Text,
+                    | WidgetKind::Toggle => esox_input::CursorIcon::Pointer,
+                    WidgetKind::Hyperlink => esox_input::CursorIcon::Pointer,
+                    WidgetKind::Slider | WidgetKind::Scrollbar => esox_input::CursorIcon::Default,
+                    WidgetKind::SplitDividerH => esox_input::CursorIcon::ColResize,
+                    WidgetKind::SplitDividerV => esox_input::CursorIcon::RowResize,
+                    WidgetKind::Combobox => esox_input::CursorIcon::Text,
                     WidgetKind::Custom(icon) => *icon,
                 };
             }
         }
-        winit::window::CursorIcon::Default
+        esox_input::CursorIcon::Default
     }
 
     /// Whether the UI needs continuous redraw (cursor blink, overlay, tooltip delay, active animations, etc.).
@@ -1466,14 +1465,14 @@ impl UiState {
         // previous frame (set during register_widget calls). TextInput widgets
         // keep Tab for literal insertion.
         {
-            use winit::keyboard::{Key, NamedKey};
+            use esox_input::{Key, NamedKey};
             let is_text_input = matches!(self.focused_kind, Some(WidgetKind::TextInput));
             let mut tab_action: Option<bool> = None; // Some(true) = shift+tab, Some(false) = tab
             if !is_text_input {
                 for (event, mods) in &self.keys {
-                    if event.state.is_pressed() {
-                        if let Key::Named(NamedKey::Tab) = &event.logical_key {
-                            tab_action = Some(mods.shift_key());
+                    if event.pressed {
+                        if let Key::Named(NamedKey::Tab) = &event.key {
+                            tab_action = Some(mods.shift());
                             break;
                         }
                     }
@@ -1481,8 +1480,8 @@ impl UiState {
             }
             if let Some(shift) = tab_action {
                 self.keys.retain(|(event, _)| {
-                    !(event.state.is_pressed()
-                        && matches!(event.logical_key, Key::Named(NamedKey::Tab)))
+                    !(event.pressed
+                        && matches!(event.key, Key::Named(NamedKey::Tab)))
                 });
                 if shift {
                     self.focus_prev();

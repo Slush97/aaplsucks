@@ -9,7 +9,7 @@
 //! // resp.clicked when Confirm is pressed, resp.right_clicked reserved
 //! ```
 
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::{fnv1a_mix, HOVER_SALT};
 use crate::layout::Rect;
@@ -56,7 +56,7 @@ impl<'f> Ui<'f> {
         let opacity = self.state.anim_t(anim_id, 1.0, duration, Easing::EaseOutCubic);
 
         let vp = self.region;
-        let modal_w = width.clamp(self.theme.modal_min_width, self.theme.modal_max_width).min(vp.w - 32.0);
+        let modal_w = width.clamp(self.theme.modal_min_width, self.theme.modal_max_width).min(vp.w - self.theme.modal_margin * 2.0);
         let title_h = self.theme.modal_title_height;
         let pad = self.theme.modal_padding;
         let corner = self.theme.modal_corner_radius;
@@ -86,7 +86,7 @@ impl<'f> Ui<'f> {
 
         // Escape to close.
         for (event, _) in &self.state.keys.clone() {
-            if event.state.is_pressed() && event.logical_key == Key::Named(NamedKey::Escape) {
+            if event.pressed && event.key == Key::Named(NamedKey::Escape) {
                 close = true;
             }
         }
@@ -98,9 +98,9 @@ impl<'f> Ui<'f> {
 
         // Estimate modal height (we'll draw content, measure, then position).
         // For simplicity, center vertically in viewport with a reasonable max height.
-        let max_h = vp.h * 0.8;
+        let max_h = vp.h * self.theme.modal_max_height_ratio;
         let modal_x = vp.x + (vp.w - modal_w) / 2.0;
-        let modal_y_start = vp.y + vp.h * 0.15; // Start higher, will be clamped
+        let modal_y_start = vp.y + vp.h * self.theme.modal_vertical_offset; // Start higher, will be clamped
 
         // Draw modal background.
         let _modal_bg_rect = Rect::new(modal_x, modal_y_start, modal_w, max_h);
@@ -108,15 +108,15 @@ impl<'f> Ui<'f> {
         // Shadow.
         paint::draw_rounded_rect(
             self.frame,
-            Rect::new(modal_x + 2.0, modal_y_start + 2.0, modal_w, max_h.min(400.0)),
-            esox_gfx::Color::new(0.0, 0.0, 0.0, 0.3 * opacity),
+            Rect::new(modal_x + 2.0, modal_y_start + 2.0, modal_w, max_h),
+            esox_gfx::Color::new(0.0, 0.0, 0.0, self.theme.modal_shadow_alpha * opacity),
             corner,
         );
 
         // Background.
         paint::draw_rounded_rect(
             self.frame,
-            Rect::new(modal_x, modal_y_start, modal_w, max_h.min(400.0)),
+            Rect::new(modal_x, modal_y_start, modal_w, max_h),
             self.theme.bg_surface,
             corner,
         );
@@ -137,7 +137,7 @@ impl<'f> Ui<'f> {
         );
 
         // Close button (X).
-        let close_btn_size = 24.0;
+        let close_btn_size = self.theme.modal_close_btn_size;
         let close_x = modal_x + modal_w - pad - close_btn_size;
         let close_y = modal_y_start + (title_h - close_btn_size) / 2.0;
         let close_rect = Rect::new(close_x, close_y, close_btn_size, close_btn_size);
@@ -145,7 +145,7 @@ impl<'f> Ui<'f> {
         self.register_widget(close_id, close_rect, WidgetKind::Button);
         let close_resp = self.widget_response(close_id, close_rect);
 
-        let close_hover_t = self.state.hover_t(close_id ^ HOVER_SALT, close_resp.hovered, 100.0);
+        let close_hover_t = self.state.hover_t(close_id ^ HOVER_SALT, close_resp.hovered, self.theme.hover_duration_ms);
         let close_color = paint::lerp_color(self.theme.fg_muted, self.theme.red, close_hover_t);
         let x_text = "\u{2715}";
         let x_w = self.text.measure_text(x_text, self.theme.font_size);
@@ -164,7 +164,7 @@ impl<'f> Ui<'f> {
 
         // Set hit_clip to modal rect for focus trap.
         let content_rect = Rect::new(modal_x + pad, modal_y_start + title_h + pad, modal_w - pad * 2.0, max_h - title_h - pad * 2.0);
-        self.hit_clip = Some(Rect::new(modal_x, modal_y_start, modal_w, max_h.min(400.0)));
+        self.hit_clip = Some(Rect::new(modal_x, modal_y_start, modal_w, max_h));
 
         // Set cursor for content.
         self.cursor = crate::layout::Vec2 { x: content_rect.x, y: content_rect.y };
@@ -181,7 +181,7 @@ impl<'f> Ui<'f> {
         // Check backdrop click (outside modal).
         if let Some((cx, cy, ref mut consumed)) = self.state.mouse.pending_click {
             if !*consumed {
-                let modal_rect = Rect::new(modal_x, modal_y_start, modal_w, max_h.min(400.0));
+                let modal_rect = Rect::new(modal_x, modal_y_start, modal_w, max_h);
                 if !modal_rect.contains(cx, cy) {
                     close = true;
                     *consumed = true;

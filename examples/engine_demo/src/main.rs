@@ -21,19 +21,19 @@ impl Game for EngineDemo {
     fn init(&mut self, ctx: &mut Ctx) {
         // ── Input bindings ──
         ctx.input
-            .bind_action("exit", ActionBinding::Key(esox_engine::winit::keyboard::KeyCode::Escape));
+            .bind_action("exit", ActionBinding::Key(esox_engine::esox_input::KeyCode::Escape));
         ctx.input.bind_axis(
             "orbit",
             AxisBinding::Keys {
-                negative: esox_engine::winit::keyboard::KeyCode::KeyA,
-                positive: esox_engine::winit::keyboard::KeyCode::KeyD,
+                negative: esox_engine::esox_input::KeyCode::KeyA,
+                positive: esox_engine::esox_input::KeyCode::KeyD,
             },
         );
         ctx.input.bind_axis(
             "zoom",
             AxisBinding::Keys {
-                negative: esox_engine::winit::keyboard::KeyCode::KeyS,
-                positive: esox_engine::winit::keyboard::KeyCode::KeyW,
+                negative: esox_engine::esox_input::KeyCode::KeyS,
+                positive: esox_engine::esox_input::KeyCode::KeyW,
             },
         );
 

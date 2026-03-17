@@ -198,7 +198,7 @@ impl Platformer {
 impl Game for Platformer {
     fn init(&mut self, ctx: &mut Ctx) {
         // ── Input bindings ──
-        use esox_engine::winit::keyboard::KeyCode;
+        use esox_engine::esox_input::KeyCode;
 
         ctx.input.bind_axis("move_x", AxisBinding::Keys { negative: KeyCode::KeyA, positive: KeyCode::KeyD });
         ctx.input.bind_axis("move_z", AxisBinding::Keys { negative: KeyCode::KeyS, positive: KeyCode::KeyW });

@@ -1,6 +1,6 @@
 //! Axis bindings — named analog axes from digital or analog input.
 
-use winit::keyboard::KeyCode;
+use esox_input::KeyCode;
 
 /// A binding that produces an axis value in [-1, +1].
 #[derive(Debug, Clone)]

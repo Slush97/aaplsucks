@@ -1,7 +1,7 @@
 //! Collapsing header / accordion widget — expandable section with header row.
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::paint;
 use crate::response::Response;
@@ -76,10 +76,10 @@ impl<'f> Ui<'f> {
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, _mods) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::ArrowLeft) => {
                         if is_open {
                             self.state.collapsing_open.remove(&id);

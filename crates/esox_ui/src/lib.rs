@@ -460,7 +460,8 @@ impl<'a, 'f> FlexUi<'a, 'f> {
                     cross: self.current_wrap_cross,
                 });
                 // Reset cursor to start of next line.
-                let wrap_y_offset = self.wrap_lines.iter().map(|wl| wl.cross + self.gap).sum::<f32>();
+                let wrap_y_offset = self.wrap_lines.iter().map(|wl| wl.cross).sum::<f32>()
+                    + self.wrap_lines.len().saturating_sub(1) as f32 * self.gap;
                 self.ui.cursor.x = self.ui.region.x;
                 self.ui.cursor.y = self.ui.region.y + wrap_y_offset;
                 self.current_wrap_main = 0.0;
@@ -1134,7 +1135,7 @@ impl<'f> Ui<'f> {
 
         // Keyboard activation: Enter/Space triggers click for activatable widgets.
         if !clicked && focused && !self.disabled {
-            use winit::keyboard::{Key, NamedKey};
+            use esox_input::{Key, NamedKey};
             let activatable = matches!(
                 self.state.focused_kind,
                 Some(state::WidgetKind::Button)
@@ -1146,9 +1147,9 @@ impl<'f> Ui<'f> {
             );
             if activatable {
                 for (event, _) in &self.state.keys {
-                    if event.state.is_pressed() {
+                    if event.pressed {
                         if matches!(
-                            event.logical_key,
+                            event.key,
                             Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space)
                         ) {
                             clicked = true;
@@ -1463,7 +1464,7 @@ impl<'f> Ui<'f> {
             .find(|(r, _, _)| r.contains(mouse_x, mouse_y))
         {
             // Alt+click: log widget info instead of sending click.
-            if self.state.modifiers.alt_key() {
+            if self.state.modifiers.alt() {
                 if let Some((_, _, ref mut consumed)) = self.state.mouse.pending_click {
                     if !*consumed {
                         *consumed = true;

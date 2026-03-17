@@ -113,7 +113,7 @@ impl<'f> Ui<'f> {
             }
 
             let x_hovered = x_rect.contains(self.state.mouse.x, self.state.mouse.y);
-            let x_hover_t = self.state.hover_t(dismiss_id ^ HOVER_SALT, x_hovered, 100.0);
+            let x_hover_t = self.state.hover_t(dismiss_id ^ HOVER_SALT, x_hovered, self.theme.hover_duration_ms);
             let x_color = paint::lerp_color(
                 Color::new(self.theme.fg_muted.r, self.theme.fg_muted.g, self.theme.fg_muted.b, opacity),
                 Color::new(self.theme.fg.r, self.theme.fg.g, self.theme.fg.b, opacity),

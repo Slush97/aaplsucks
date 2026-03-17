@@ -1,7 +1,7 @@
 //! Text area widget — multi-line text input with vertical scroll.
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::layout::Rect;
 use crate::paint;
@@ -85,7 +85,7 @@ impl<'f> Ui<'f> {
             paint::draw_rounded_rect(self.frame, rect, self.theme.disabled_bg, self.theme.corner_radius);
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
             let text_x = rect.x + pad;
             let text_y = rect.y + pad;
@@ -128,14 +128,14 @@ impl<'f> Ui<'f> {
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, modifiers) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                let ctrl = modifiers.control_key();
-                let shift = modifiers.shift_key();
+                let ctrl = modifiers.ctrl();
+                let shift = modifiers.shift();
                 // Handle clipboard shortcuts.
                 if ctrl {
-                    if let Key::Character(ch) = &event.logical_key {
+                    if let Key::Character(ch) = &event.key {
                         match ch.as_str() {
                             "c" => {
                                 if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
@@ -170,7 +170,7 @@ impl<'f> Ui<'f> {
                         }
                     }
                 }
-                let changed = process_text_area_key(input, &event.logical_key, ctrl, shift, &mut self.text, font_size);
+                let changed = process_text_area_key(input, &event.key, ctrl, shift, &mut self.text, font_size);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -218,7 +218,7 @@ impl<'f> Ui<'f> {
                 rect,
                 self.theme.accent_dim,
                 self.theme.corner_radius,
-                1.0,
+                self.theme.focus_ring_expand,
             );
         }
 
@@ -412,7 +412,7 @@ impl<'f> Ui<'f> {
 
         if response.disabled {
             paint::draw_rounded_rect(self.frame, rect, self.theme.disabled_bg, self.theme.corner_radius);
-            paint::draw_dashed_border(self.frame, rect, self.theme.disabled_border, 6.0, 4.0, 1.0);
+            paint::draw_dashed_border(self.frame, rect, self.theme.disabled_border, self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness);
             let text_x = rect.x + pad;
             let text_y = rect.y + pad;
             if input.text.is_empty() {
@@ -461,14 +461,14 @@ impl<'f> Ui<'f> {
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, modifiers) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                let ctrl = modifiers.control_key();
-                let shift = modifiers.shift_key();
+                let ctrl = modifiers.ctrl();
+                let shift = modifiers.shift();
                 // Handle clipboard shortcuts.
                 if ctrl {
-                    if let Key::Character(ch) = &event.logical_key {
+                    if let Key::Character(ch) = &event.key {
                         match ch.as_str() {
                             "c" => {
                                 if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
@@ -504,7 +504,7 @@ impl<'f> Ui<'f> {
                     }
                 }
                 // Handle Up/Down/Home/End specially for visual lines.
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::ArrowUp) => {
                         let cur_vl = visual_line_of_offset(&visual_lines, input.cursor);
                         let new_pos = if cur_vl == 0 {
@@ -549,7 +549,7 @@ impl<'f> Ui<'f> {
                     }
                     _ => {}
                 }
-                let changed = process_text_area_key(input, &event.logical_key, ctrl, shift, &mut self.text, font_size);
+                let changed = process_text_area_key(input, &event.key, ctrl, shift, &mut self.text, font_size);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -594,7 +594,7 @@ impl<'f> Ui<'f> {
                 rect,
                 self.theme.accent_dim,
                 self.theme.corner_radius,
-                1.0,
+                self.theme.focus_ring_expand,
             );
         }
         paint::draw_rounded_rect(self.frame, rect, self.theme.bg_input, self.theme.corner_radius);

@@ -9,4 +9,3 @@ esox_platform = { workspace = true }
 glam = "0.29"
 tracing-subscriber = { workspace = true }
 wgpu = { workspace = true }
-winit = { workspace = true }

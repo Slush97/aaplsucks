@@ -10,7 +10,7 @@
 //! ```
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::layout::Rect;
 use crate::paint;
@@ -71,7 +71,7 @@ impl<'f> Ui<'f> {
             );
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
             let text_x = rect.x + self.theme.input_padding;
             let text_y = rect.y + (rect.h - self.theme.font_size) / 2.0;
@@ -127,14 +127,14 @@ impl<'f> Ui<'f> {
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, modifiers) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                let ctrl = modifiers.control_key();
-                let shift = modifiers.shift_key();
+                let ctrl = modifiers.ctrl();
+                let shift = modifiers.shift();
                 // Handle clipboard shortcuts.
                 if ctrl {
-                    if let Key::Character(ch) = &event.logical_key {
+                    if let Key::Character(ch) = &event.key {
                         match ch.as_str() {
                             "c" => {
                                 if let (Some(sel_text), Some(clip)) = (input.selected_text(), &self.state.clipboard) {
@@ -169,7 +169,7 @@ impl<'f> Ui<'f> {
                         }
                     }
                 }
-                let changed = process_text_key(input, &event.logical_key, ctrl, shift);
+                let changed = process_text_key(input, &event.key, ctrl, shift);
                 if changed {
                     response.changed = true;
                     self.state.reset_blink();
@@ -190,7 +190,7 @@ impl<'f> Ui<'f> {
                 rect,
                 self.theme.accent_dim,
                 self.theme.corner_radius,
-                1.0, // smaller expand for text inputs
+                self.theme.focus_ring_expand, // smaller expand for text inputs
             );
         }
 

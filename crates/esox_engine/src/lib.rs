@@ -64,7 +64,7 @@ pub use esox_gfx;
 pub use esox_platform;
 pub use glam;
 pub use hecs;
-pub use winit;
+pub use esox_input;
 #[cfg(feature = "ui")]
 pub use esox_ui;
 

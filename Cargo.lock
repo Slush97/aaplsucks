@@ -376,7 +376,6 @@ dependencies = [
  "glam 0.29.3",
  "tracing-subscriber",
  "wgpu",
- "winit",
 ]
 
 [[package]]
@@ -444,6 +443,15 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "borsh"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
+dependencies = [
+ "cfg_aliases",
 ]
 
 [[package]]
@@ -778,7 +786,6 @@ dependencies = [
  "esox_ui",
  "image",
  "tracing-subscriber",
- "winit",
 ]
 
 [[package]]
@@ -790,7 +797,6 @@ dependencies = [
  "glam 0.29.3",
  "tracing-subscriber",
  "wgpu",
- "winit",
 ]
 
 [[package]]
@@ -964,6 +970,7 @@ version = "0.1.0"
 dependencies = [
  "esox_font",
  "esox_gfx",
+ "esox_input",
  "esox_platform",
  "esox_ui",
  "gilrs",
@@ -978,7 +985,6 @@ dependencies = [
  "serde_json",
  "tracing",
  "wgpu",
- "winit",
 ]
 
 [[package]]
@@ -1010,12 +1016,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "esox_input"
+version = "0.1.0"
+dependencies = [
+ "smol_str 0.3.6",
+]
+
+[[package]]
 name = "esox_platform"
 version = "0.1.0"
 dependencies = [
  "arboard",
  "ashpd 0.10.3",
  "esox_gfx",
+ "esox_input",
  "esox_ui",
  "landlock",
  "libc",
@@ -1037,10 +1051,10 @@ version = "0.1.0"
 dependencies = [
  "esox_font",
  "esox_gfx",
+ "esox_input",
  "image",
  "tracing",
  "wgpu",
- "winit",
 ]
 
 [[package]]
@@ -1796,7 +1810,6 @@ dependencies = [
  "esox_platform",
  "esox_ui",
  "tracing-subscriber",
- "winit",
 ]
 
 [[package]]
@@ -1904,6 +1917,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "material_showcase"
+version = "0.1.0"
+dependencies = [
+ "esox_font",
+ "esox_gfx",
+ "esox_input",
+ "esox_platform",
+ "esox_ui",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3363,6 +3388,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smol_str"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
+dependencies = [
+ "borsh",
+ "serde_core",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4623,7 +4658,7 @@ dependencies = [
  "redox_syscall 0.4.1",
  "rustix 0.38.44",
  "smithay-client-toolkit",
- "smol_str",
+ "smol_str 0.2.2",
  "tracing",
  "unicode-segmentation",
  "wasm-bindgen",

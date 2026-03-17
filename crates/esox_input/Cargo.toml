@@ -1,0 +1,9 @@
+[package]
+name = "esox_input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Input type definitions for the esox toolkit"
+
+[dependencies]
+smol_str = "0.3"

@@ -17,7 +17,7 @@ ui = ["dep:esox_ui", "dep:esox_font"]
 esox_gfx = { workspace = true, features = ["mesh3d"] }
 esox_platform = { workspace = true }
 wgpu = { workspace = true }
-winit = { workspace = true }
+esox_input = { workspace = true }
 hecs = "0.10"
 glam = "0.29"
 tracing = { workspace = true }

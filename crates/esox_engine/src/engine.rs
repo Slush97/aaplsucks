@@ -394,14 +394,14 @@ impl AppDelegate for Engine {
 
     fn on_key(
         &mut self,
-        event: &winit::event::KeyEvent,
-        _modifiers: winit::keyboard::ModifiersState,
+        event: &esox_input::KeyEvent,
+        _modifiers: esox_input::Modifiers,
     ) {
         #[cfg(feature = "ui")]
         {
-            use winit::keyboard::{KeyCode, PhysicalKey};
-            if event.state.is_pressed()
-                && event.physical_key == PhysicalKey::Code(KeyCode::F3)
+            use esox_input::KeyCode;
+            if event.pressed
+                && event.physical_key == KeyCode::F3
             {
                 self.debug_overlay_visible = !self.debug_overlay_visible;
             }

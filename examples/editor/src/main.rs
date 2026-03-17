@@ -6,7 +6,7 @@ use esox_engine::esox_gfx::mesh3d::{
 };
 use esox_engine::glam::{self, Mat4, Quat, Vec3};
 use esox_engine::hecs;
-use esox_engine::winit::keyboard::KeyCode;
+use esox_engine::esox_input::KeyCode;
 use esox_engine::esox_ui::ToastKind;
 use esox_engine::{
     ActionBinding, Camera3D, Ctx, DirectionalLightComponent, EngineConfig, Game, GlobalTransform,

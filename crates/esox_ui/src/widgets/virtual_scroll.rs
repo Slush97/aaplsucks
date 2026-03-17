@@ -203,7 +203,7 @@ pub(crate) fn draw_scrollbar(
     let t = state.hover_t(
         thumb_hover_id,
         thumb_hovered || state.scrollbar_drag.map_or(false, |(did, _)| did == id),
-        120.0,
+        theme.hover_duration_ms,
     );
     let thumb_color = paint::lerp_color(theme.fg_dim, theme.fg_muted, t);
     paint::draw_rounded_rect(frame, thumb_rect, thumb_color, scrollbar_w / 2.0);

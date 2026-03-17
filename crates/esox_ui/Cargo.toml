@@ -10,5 +10,5 @@ esox_gfx = { workspace = true }
 esox_font = { workspace = true }
 image = { workspace = true }
 wgpu = { workspace = true }
-winit = { workspace = true }
+esox_input = { workspace = true }
 tracing = { workspace = true }

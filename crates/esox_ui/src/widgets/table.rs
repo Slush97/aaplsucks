@@ -16,7 +16,7 @@
 //! ```
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::fnv1a_mix;
 use crate::layout::{Rect, Vec2};
@@ -237,11 +237,11 @@ impl<'f> Ui<'f> {
         if table_focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, _mods) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                let shift = modifiers.shift_key();
-                match &event.logical_key {
+                let shift = modifiers.shift();
+                match &event.key {
                     Key::Named(NamedKey::ArrowUp) => {
                         if let Some(sel) = state.selected_row {
                             if sel > 0 {
@@ -304,8 +304,8 @@ impl<'f> Ui<'f> {
         let accent_dim = self.theme.accent_dim;
         let bg_base = self.theme.bg_base;
         let zebra_bg = self.theme.table_zebra_bg;
-        let ctrl = modifiers.control_key();
-        let shift = modifiers.shift_key();
+        let ctrl = modifiers.ctrl();
+        let shift = modifiers.shift();
 
         self.virtual_scroll(id, &mut vs_state, item_h, visible_height, |ui, row| {
             let row_rect = Rect::new(ui.cursor.x, ui.cursor.y, total_w, item_h);
@@ -335,7 +335,7 @@ impl<'f> Ui<'f> {
             if row_resp.hovered && !is_selected {
                 ui.frame.push(
                     ShapeBuilder::rect(row_rect.x, row_rect.y, row_rect.w, row_rect.h)
-                        .color(esox_gfx::Color::new(1.0, 1.0, 1.0, 0.03))
+                        .color(esox_gfx::Color::new(ui.theme.fg.r, ui.theme.fg.g, ui.theme.fg.b, 0.03))
                         .build(),
                 );
             }

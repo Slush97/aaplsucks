@@ -7,7 +7,7 @@ pub mod gamepad;
 
 use std::collections::HashMap;
 
-use winit::keyboard::KeyCode;
+use esox_input::KeyCode;
 
 pub use action::ActionBinding;
 pub use axis::{AxisBinding, MouseAxis};
@@ -211,19 +211,17 @@ impl InputManager {
 
     // ── Internal event handlers (called by Engine) ──
 
-    pub(crate) fn handle_key_event(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::PhysicalKey;
-        if let PhysicalKey::Code(code) = event.physical_key {
-            if event.state.is_pressed() {
-                // Only mark just_pressed on initial press, not repeats.
-                if !self.keys_down.get(&code).copied().unwrap_or(false) {
-                    self.keys_just_pressed.insert(code, true);
-                }
-                self.keys_down.insert(code, true);
-            } else {
-                self.keys_down.insert(code, false);
-                self.keys_just_released.insert(code, true);
+    pub(crate) fn handle_key_event(&mut self, event: &esox_input::KeyEvent) {
+        let code = event.physical_key;
+        if event.pressed {
+            // Only mark just_pressed on initial press, not repeats.
+            if !self.keys_down.get(&code).copied().unwrap_or(false) {
+                self.keys_just_pressed.insert(code, true);
             }
+            self.keys_down.insert(code, true);
+        } else {
+            self.keys_down.insert(code, false);
+            self.keys_just_released.insert(code, true);
         }
     }
 
@@ -369,21 +367,14 @@ impl InputManager {
 mod tests {
     use super::*;
 
-    fn make_key_event(code: KeyCode, pressed: bool) -> winit::event::KeyEvent {
-        // Safety: KeyEvent requires platform-specific data that is not Default.
-        // We construct via unsafe zeroed memory — only safe for testing input logic,
-        // not for passing to winit internals.
-        let mut event: winit::event::KeyEvent = unsafe { std::mem::zeroed() };
-        event.physical_key = winit::keyboard::PhysicalKey::Code(code);
-        event.logical_key =
-            winit::keyboard::Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
-        event.state = if pressed {
-            winit::event::ElementState::Pressed
-        } else {
-            winit::event::ElementState::Released
-        };
-        event.repeat = false;
-        event
+    fn make_key_event(code: KeyCode, pressed: bool) -> esox_input::KeyEvent {
+        esox_input::KeyEvent {
+            key: esox_input::Key::Unidentified,
+            physical_key: code,
+            pressed,
+            repeat: false,
+            text: None,
+        }
     }
 
     #[test]

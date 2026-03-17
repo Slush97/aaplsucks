@@ -22,8 +22,6 @@ use crate::Ui;
 
 use esox_gfx::ShapeBuilder;
 
-/// Width of the draggable divider strip in logical pixels.
-const DIVIDER_WIDTH: f32 = 5.0;
 
 impl<'f> Ui<'f> {
     /// Horizontal split pane: left | right with a draggable vertical divider.
@@ -82,20 +80,20 @@ impl<'f> Ui<'f> {
 
         // Calculate panel rects and divider rect.
         let (first_rect, divider_rect, second_rect) = if horizontal {
-            let available = total_w - DIVIDER_WIDTH;
+            let available = total_w - self.theme.split_pane_divider;
             let left_w = available * ratio;
             let right_w = available - left_w;
             let lr = Rect::new(origin_x, origin_y, left_w, total_h);
-            let dr = Rect::new(origin_x + left_w, origin_y, DIVIDER_WIDTH, total_h);
-            let rr = Rect::new(origin_x + left_w + DIVIDER_WIDTH, origin_y, right_w, total_h);
+            let dr = Rect::new(origin_x + left_w, origin_y, self.theme.split_pane_divider, total_h);
+            let rr = Rect::new(origin_x + left_w + self.theme.split_pane_divider, origin_y, right_w, total_h);
             (lr, dr, rr)
         } else {
-            let available = total_h - DIVIDER_WIDTH;
+            let available = total_h - self.theme.split_pane_divider;
             let top_h = available * ratio;
             let bottom_h = available - top_h;
             let tr = Rect::new(origin_x, origin_y, total_w, top_h);
-            let dr = Rect::new(origin_x, origin_y + top_h, total_w, DIVIDER_WIDTH);
-            let br = Rect::new(origin_x, origin_y + top_h + DIVIDER_WIDTH, total_w, bottom_h);
+            let dr = Rect::new(origin_x, origin_y + top_h, total_w, self.theme.split_pane_divider);
+            let br = Rect::new(origin_x, origin_y + top_h + self.theme.split_pane_divider, total_w, bottom_h);
             (tr, dr, br)
         };
 
@@ -122,16 +120,16 @@ impl<'f> Ui<'f> {
         if let Some((drag_id, _)) = self.state.split_drag {
             if drag_id == id && self.state.mouse_pressed {
                 let new_ratio = if horizontal {
-                    let available = total_w - DIVIDER_WIDTH;
+                    let available = total_w - self.theme.split_pane_divider;
                     if available > 0.0 {
-                        (self.state.mouse.x - origin_x - DIVIDER_WIDTH / 2.0) / available
+                        (self.state.mouse.x - origin_x - self.theme.split_pane_divider / 2.0) / available
                     } else {
                         ratio
                     }
                 } else {
-                    let available = total_h - DIVIDER_WIDTH;
+                    let available = total_h - self.theme.split_pane_divider;
                     if available > 0.0 {
-                        (self.state.mouse.y - origin_y - DIVIDER_WIDTH / 2.0) / available
+                        (self.state.mouse.y - origin_y - self.theme.split_pane_divider / 2.0) / available
                     } else {
                         ratio
                     }

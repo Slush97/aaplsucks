@@ -195,12 +195,12 @@ impl AppDelegate for BenchApp {
 
     fn on_key(
         &mut self,
-        event: &winit::event::KeyEvent,
-        _modifiers: winit::keyboard::ModifiersState,
+        event: &esox_platform::esox_input::KeyEvent,
+        _modifiers: esox_platform::esox_input::Modifiers,
     ) {
-        use winit::keyboard::{Key, NamedKey};
-        if event.state.is_pressed() {
-            if let Key::Named(NamedKey::Escape) = &event.logical_key {
+        use esox_platform::esox_input::{Key, NamedKey};
+        if event.pressed {
+            if let Key::Named(NamedKey::Escape) = &event.key {
                 std::process::exit(0);
             }
         }

@@ -144,15 +144,15 @@ fn spawn_skinned_entity(
 impl Game for CombatDemo {
     fn init(&mut self, ctx: &mut Ctx) {
         // ── Input bindings ──
-        ctx.input.bind_action("exit", ActionBinding::Key(winit::keyboard::KeyCode::Escape));
-        ctx.input.bind_action("attack", ActionBinding::Key(winit::keyboard::KeyCode::Space));
+        ctx.input.bind_action("exit", ActionBinding::Key(esox_engine::esox_input::KeyCode::Escape));
+        ctx.input.bind_action("attack", ActionBinding::Key(esox_engine::esox_input::KeyCode::Space));
         ctx.input.bind_axis("move_x", AxisBinding::Keys {
-            negative: winit::keyboard::KeyCode::KeyA,
-            positive: winit::keyboard::KeyCode::KeyD,
+            negative: esox_engine::esox_input::KeyCode::KeyA,
+            positive: esox_engine::esox_input::KeyCode::KeyD,
         });
         ctx.input.bind_axis("move_z", AxisBinding::Keys {
-            negative: winit::keyboard::KeyCode::KeyS,
-            positive: winit::keyboard::KeyCode::KeyW,
+            negative: esox_engine::esox_input::KeyCode::KeyS,
+            positive: esox_engine::esox_input::KeyCode::KeyW,
         });
 
         // ── Load Knight ──

@@ -170,7 +170,7 @@ impl<'f> Ui<'f> {
             // Hover animation on thumb.
             let thumb_hovered = thumb_rect.contains(self.state.mouse.x, self.state.mouse.y);
             let thumb_hover_id = id.wrapping_mul(0x517cc1b727220a95);
-            let t = self.state.hover_t(thumb_hover_id, thumb_hovered || self.state.scrollbar_drag.map_or(false, |(did, _)| did == id), 120.0);
+            let t = self.state.hover_t(thumb_hover_id, thumb_hovered || self.state.scrollbar_drag.map_or(false, |(did, _)| did == id), self.theme.hover_duration_ms);
             let thumb_color = paint::lerp_color(self.theme.fg_dim, self.theme.fg_muted, t);
             paint::draw_rounded_rect(
                 self.frame,
@@ -334,7 +334,7 @@ impl<'f> Ui<'f> {
 
             let thumb_hovered = thumb_rect.contains(self.state.mouse.x, self.state.mouse.y);
             let thumb_hover_id = id.wrapping_mul(0x517cc1b727220a95);
-            let t = self.state.hover_t(thumb_hover_id, thumb_hovered, 120.0);
+            let t = self.state.hover_t(thumb_hover_id, thumb_hovered, self.theme.hover_duration_ms);
             let thumb_color = paint::lerp_color(self.theme.fg_dim, self.theme.fg_muted, t);
             paint::draw_rounded_rect(
                 self.frame, thumb_rect, thumb_color, scrollbar_w / 2.0,
@@ -467,7 +467,7 @@ impl<'f> Ui<'f> {
             };
             let thumb_rect = Rect::new(track_x, thumb_y, scrollbar_w, thumb_h);
             let thumb_hover_id = id.wrapping_mul(0x517cc1b727220a95);
-            let t = self.state.hover_t(thumb_hover_id, thumb_rect.contains(self.state.mouse.x, self.state.mouse.y), 120.0);
+            let t = self.state.hover_t(thumb_hover_id, thumb_rect.contains(self.state.mouse.x, self.state.mouse.y), self.theme.hover_duration_ms);
             paint::draw_rounded_rect(
                 self.frame, thumb_rect,
                 paint::lerp_color(self.theme.fg_dim, self.theme.fg_muted, t),
@@ -494,7 +494,7 @@ impl<'f> Ui<'f> {
             };
             let thumb_rect = Rect::new(thumb_x, track_y, thumb_w, scrollbar_w);
             let thumb_hover_id = id.wrapping_mul(0x7a2b3c4d5e6f0a1b);
-            let t = self.state.hover_t(thumb_hover_id, thumb_rect.contains(self.state.mouse.x, self.state.mouse.y), 120.0);
+            let t = self.state.hover_t(thumb_hover_id, thumb_rect.contains(self.state.mouse.x, self.state.mouse.y), self.theme.hover_duration_ms);
             paint::draw_rounded_rect(
                 self.frame, thumb_rect,
                 paint::lerp_color(self.theme.fg_dim, self.theme.fg_muted, t),

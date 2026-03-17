@@ -535,8 +535,8 @@ impl AppDelegate for DemoApp {
 
     fn on_key(
         &mut self,
-        event: &winit::event::KeyEvent,
-        modifiers: winit::keyboard::ModifiersState,
+        event: &esox_platform::esox_input::KeyEvent,
+        modifiers: esox_platform::esox_input::Modifiers,
     ) {
         self.ui_state.process_key(event.clone(), modifiers);
     }
@@ -591,7 +591,7 @@ impl AppDelegate for DemoApp {
         self.ui_state.needs_continuous_redraw()
     }
 
-    fn cursor_icon(&self, x: f64, y: f64) -> winit::window::CursorIcon {
+    fn cursor_icon(&self, x: f64, y: f64) -> esox_platform::esox_input::CursorIcon {
         self.ui_state.cursor_icon(x as f32, y as f32)
     }
 

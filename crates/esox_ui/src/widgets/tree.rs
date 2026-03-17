@@ -1,7 +1,7 @@
 //! Tree widget — expandable hierarchy with selection and multi-select.
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::paint;
 use crate::response::Response;
@@ -72,8 +72,8 @@ impl<'f> Ui<'f> {
         // Click: toggle expand + select (with modifier support).
         let modifiers = self.state.modifiers;
         if response.clicked {
-            let ctrl = modifiers.control_key();
-            let shift = modifiers.shift_key();
+            let ctrl = modifiers.ctrl();
+            let shift = modifiers.shift();
 
             if ctrl {
                 // Ctrl+click: toggle in set.
@@ -109,10 +109,10 @@ impl<'f> Ui<'f> {
         if response.focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, _mods) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
                         if has_children {
                             if is_expanded {

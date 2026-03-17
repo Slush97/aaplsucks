@@ -199,7 +199,7 @@ impl DungeonExplorer {
 
 impl Game for DungeonExplorer {
     fn init(&mut self, ctx: &mut Ctx) {
-        use esox_engine::winit::keyboard::KeyCode;
+        use esox_engine::esox_input::KeyCode;
 
         // ── Input bindings ──
         ctx.input.bind_axis("move_x", AxisBinding::Keys { negative: KeyCode::KeyA, positive: KeyCode::KeyD });

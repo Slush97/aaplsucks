@@ -32,7 +32,7 @@
 //! ```
 
 use esox_gfx::{BorderRadius, ShapeBuilder};
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::layout::Rect;
 use crate::paint;
@@ -151,8 +151,8 @@ impl<'f> Ui<'f> {
         let mut escape_pressed = false;
         if menu_bar_open.is_some() {
             for (event, _) in &self.state.keys {
-                if event.state.is_pressed() {
-                    if let Key::Named(NamedKey::Escape) = &event.logical_key {
+                if event.pressed {
+                    if let Key::Named(NamedKey::Escape) = &event.key {
                         escape_pressed = true;
                     }
                 }

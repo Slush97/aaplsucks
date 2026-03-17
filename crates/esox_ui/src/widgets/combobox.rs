@@ -15,7 +15,7 @@
 //! ```
 
 use esox_gfx::{BorderRadius, ShapeBuilder};
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::HOVER_SALT;
 use crate::layout::Rect;
@@ -115,12 +115,12 @@ impl<'f> Ui<'f> {
 
             // First pass: navigation keys (arrow, enter, escape).
             for (event, modifiers) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                let ctrl = modifiers.control_key();
+                let ctrl = modifiers.ctrl();
 
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::Escape) => {
                         close_dropdown = true;
                         break;
@@ -171,11 +171,11 @@ impl<'f> Ui<'f> {
                     _ => {
                         // Text editing keys — process through InputState.
                         let input = self.state.combobox_inputs.get_mut(&id).unwrap();
-                        let shift = modifiers.shift_key();
+                        let shift = modifiers.shift();
 
                         // Handle clipboard shortcuts.
                         if ctrl {
-                            if let Key::Character(ch) = &event.logical_key {
+                            if let Key::Character(ch) = &event.key {
                                 match ch.as_str() {
                                     "v" => {
                                         if let Some(clip) = &self.state.clipboard {
@@ -206,7 +206,7 @@ impl<'f> Ui<'f> {
                             }
                         }
 
-                        let changed = process_combobox_text_key(input, &event.logical_key, ctrl, shift);
+                        let changed = process_combobox_text_key(input, &event.key, ctrl, shift);
                         if changed {
                             text_changed = true;
                             self.state.reset_blink();
@@ -335,13 +335,13 @@ impl<'f> Ui<'f> {
                 rect,
                 self.theme.accent_dim,
                 self.theme.corner_radius,
-                1.0,
+                self.theme.focus_ring_expand,
             );
         }
 
         // Background.
         let bg = {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             paint::lerp_color(self.theme.bg_input, self.theme.bg_raised, t)
         };
         paint::draw_rounded_rect(self.frame, rect, bg, self.theme.corner_radius);
@@ -467,9 +467,9 @@ impl<'f> Ui<'f> {
             self.frame,
             rect,
             self.theme.disabled_border,
-            6.0,
-            4.0,
-            1.0,
+            self.theme.disabled_dash_len,
+            self.theme.disabled_dash_gap,
+            self.theme.disabled_dash_thickness,
         );
 
         let text_y = rect.y + (rect.h - self.theme.font_size) / 2.0;

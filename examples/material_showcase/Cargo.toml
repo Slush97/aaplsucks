@@ -1,5 +1,5 @@
 [package]
-name = "demo"
+name = "material_showcase"
 version.workspace = true
 edition.workspace = true
 
@@ -8,5 +8,5 @@ esox_gfx = { workspace = true }
 esox_font = { workspace = true }
 esox_ui = { workspace = true }
 esox_platform = { workspace = true }
-image = { workspace = true }
+esox_input = { workspace = true }
 tracing-subscriber = { workspace = true }

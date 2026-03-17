@@ -31,7 +31,7 @@ impl<'f> Ui<'f> {
     pub fn chip_colored(&mut self, id: u64, label: &str, color: Color) -> Response {
         let font_size = self.theme.font_size;
         let pad_x = self.theme.input_padding;
-        let pad_y = 4.0;
+        let pad_y = self.theme.chip_pad_y;
 
         // Measure: label + gap + "×"
         let label_w = self.text.measure_text(label, font_size);
@@ -66,7 +66,7 @@ impl<'f> Ui<'f> {
         let bg = if response.disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             paint::lerp_color(color, self.theme.accent_hover, t)
         };
         paint::draw_rounded_rect(self.frame, rect, bg, radius);

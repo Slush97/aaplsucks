@@ -28,6 +28,10 @@ pub mod perf;
 pub mod sandbox;
 pub mod xdg;
 
+// Re-export esox_input so downstream crates can access input types
+// through esox_platform without a direct dependency.
+pub use esox_input;
+
 #[cfg(feature = "settings")]
 pub mod settings;
 
@@ -101,6 +105,206 @@ pub enum AppUserEvent {
     PortalReady,
 }
 
+/// Handle for background threads to wake the event loop.
+///
+/// Wraps the backend-specific event loop proxy so that `AppDelegate`
+/// implementors can request redraws without knowing about winit.
+#[derive(Clone)]
+pub struct Waker {
+    proxy: EventLoopProxy<AppUserEvent>,
+}
+
+impl Waker {
+    /// Wake the event loop, causing a redraw.
+    pub fn wake(&self) {
+        let _ = self.proxy.send_event(AppUserEvent::TimerTick);
+    }
+}
+
+impl std::fmt::Debug for Waker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Waker").finish()
+    }
+}
+
+// ── Winit → esox_input conversions (crate-internal) ──
+
+/// Convert a winit `ModifiersState` to `esox_input::Modifiers`.
+pub(crate) fn convert_modifiers(m: winit::keyboard::ModifiersState) -> esox_input::Modifiers {
+    esox_input::Modifiers::from_flags(
+        m.shift_key(),
+        m.control_key(),
+        m.alt_key(),
+        m.super_key(),
+    )
+}
+
+/// Convert a winit `KeyEvent` to `esox_input::KeyEvent`.
+pub(crate) fn convert_key_event(e: &winit::event::KeyEvent) -> esox_input::KeyEvent {
+    esox_input::KeyEvent {
+        key: convert_key(&e.logical_key),
+        physical_key: convert_key_code(e.physical_key),
+        pressed: e.state.is_pressed(),
+        repeat: e.repeat,
+        text: e.text.as_ref().map(|s| esox_input::SmolStr::new(s.as_str())),
+    }
+}
+
+/// Convert a winit logical `Key` to `esox_input::Key`.
+fn convert_key(key: &winit::keyboard::Key) -> esox_input::Key {
+    use winit::keyboard::Key as WKey;
+    match key {
+        WKey::Named(n) => match convert_named_key(*n) {
+            Some(nk) => esox_input::Key::Named(nk),
+            None => esox_input::Key::Unidentified,
+        },
+        WKey::Character(s) => esox_input::Key::Character(esox_input::SmolStr::new(s.as_str())),
+        _ => esox_input::Key::Unidentified,
+    }
+}
+
+/// Convert a winit `NamedKey` to `esox_input::NamedKey`.
+fn convert_named_key(key: winit::keyboard::NamedKey) -> Option<esox_input::NamedKey> {
+    use winit::keyboard::NamedKey as W;
+    use esox_input::NamedKey as N;
+    Some(match key {
+        W::Enter => N::Enter,
+        W::Tab => N::Tab,
+        W::Space => N::Space,
+        W::Backspace => N::Backspace,
+        W::Delete => N::Delete,
+        W::Escape => N::Escape,
+        W::ArrowUp => N::ArrowUp,
+        W::ArrowDown => N::ArrowDown,
+        W::ArrowLeft => N::ArrowLeft,
+        W::ArrowRight => N::ArrowRight,
+        W::Home => N::Home,
+        W::End => N::End,
+        W::PageUp => N::PageUp,
+        W::PageDown => N::PageDown,
+        W::F1 => N::F1,
+        W::F2 => N::F2,
+        W::F3 => N::F3,
+        W::F4 => N::F4,
+        W::F5 => N::F5,
+        W::F6 => N::F6,
+        W::F7 => N::F7,
+        W::F8 => N::F8,
+        W::F9 => N::F9,
+        W::F10 => N::F10,
+        W::F11 => N::F11,
+        W::F12 => N::F12,
+        _ => return None,
+    })
+}
+
+/// Convert a winit `PhysicalKey` to `esox_input::KeyCode`.
+fn convert_key_code(key: winit::keyboard::PhysicalKey) -> esox_input::KeyCode {
+    use winit::keyboard::{KeyCode as WK, PhysicalKey};
+    use esox_input::KeyCode as K;
+    match key {
+        PhysicalKey::Code(c) => match c {
+            WK::KeyA => K::KeyA,
+            WK::KeyB => K::KeyB,
+            WK::KeyC => K::KeyC,
+            WK::KeyD => K::KeyD,
+            WK::KeyE => K::KeyE,
+            WK::KeyF => K::KeyF,
+            WK::KeyG => K::KeyG,
+            WK::KeyH => K::KeyH,
+            WK::KeyI => K::KeyI,
+            WK::KeyJ => K::KeyJ,
+            WK::KeyK => K::KeyK,
+            WK::KeyL => K::KeyL,
+            WK::KeyM => K::KeyM,
+            WK::KeyN => K::KeyN,
+            WK::KeyO => K::KeyO,
+            WK::KeyP => K::KeyP,
+            WK::KeyQ => K::KeyQ,
+            WK::KeyR => K::KeyR,
+            WK::KeyS => K::KeyS,
+            WK::KeyT => K::KeyT,
+            WK::KeyU => K::KeyU,
+            WK::KeyV => K::KeyV,
+            WK::KeyW => K::KeyW,
+            WK::KeyX => K::KeyX,
+            WK::KeyY => K::KeyY,
+            WK::KeyZ => K::KeyZ,
+            WK::Digit0 => K::Digit0,
+            WK::Digit1 => K::Digit1,
+            WK::Digit2 => K::Digit2,
+            WK::Digit3 => K::Digit3,
+            WK::Digit4 => K::Digit4,
+            WK::Digit5 => K::Digit5,
+            WK::Digit6 => K::Digit6,
+            WK::Digit7 => K::Digit7,
+            WK::Digit8 => K::Digit8,
+            WK::Digit9 => K::Digit9,
+            WK::F1 => K::F1,
+            WK::F2 => K::F2,
+            WK::F3 => K::F3,
+            WK::F4 => K::F4,
+            WK::F5 => K::F5,
+            WK::F6 => K::F6,
+            WK::F7 => K::F7,
+            WK::F8 => K::F8,
+            WK::F9 => K::F9,
+            WK::F10 => K::F10,
+            WK::F11 => K::F11,
+            WK::F12 => K::F12,
+            WK::ArrowUp => K::ArrowUp,
+            WK::ArrowDown => K::ArrowDown,
+            WK::ArrowLeft => K::ArrowLeft,
+            WK::ArrowRight => K::ArrowRight,
+            WK::Home => K::Home,
+            WK::End => K::End,
+            WK::PageUp => K::PageUp,
+            WK::PageDown => K::PageDown,
+            WK::Space => K::Space,
+            WK::Enter => K::Enter,
+            WK::Tab => K::Tab,
+            WK::Backspace => K::Backspace,
+            WK::Delete => K::Delete,
+            WK::Escape => K::Escape,
+            WK::ShiftLeft => K::ShiftLeft,
+            WK::ShiftRight => K::ShiftRight,
+            WK::ControlLeft => K::ControlLeft,
+            WK::ControlRight => K::ControlRight,
+            WK::AltLeft => K::AltLeft,
+            WK::AltRight => K::AltRight,
+            WK::SuperLeft => K::SuperLeft,
+            WK::SuperRight => K::SuperRight,
+            WK::Minus => K::Minus,
+            WK::Equal => K::Equal,
+            WK::BracketLeft => K::BracketLeft,
+            WK::BracketRight => K::BracketRight,
+            WK::Backslash => K::Backslash,
+            WK::Semicolon => K::Semicolon,
+            WK::Quote => K::Quote,
+            WK::Backquote => K::Backquote,
+            WK::Comma => K::Comma,
+            WK::Period => K::Period,
+            WK::Slash => K::Slash,
+            _ => K::Escape, // fallback for unmapped codes
+        },
+        PhysicalKey::Unidentified(_) => K::Escape,
+    }
+}
+
+/// Convert an `esox_input::CursorIcon` to `winit::window::CursorIcon`.
+pub(crate) fn convert_cursor_icon(icon: esox_input::CursorIcon) -> winit::window::CursorIcon {
+    match icon {
+        esox_input::CursorIcon::Default => winit::window::CursorIcon::Default,
+        esox_input::CursorIcon::Text => winit::window::CursorIcon::Text,
+        esox_input::CursorIcon::Pointer => winit::window::CursorIcon::Pointer,
+        esox_input::CursorIcon::Grab => winit::window::CursorIcon::Grab,
+        esox_input::CursorIcon::Grabbing => winit::window::CursorIcon::Grabbing,
+        esox_input::CursorIcon::ColResize => winit::window::CursorIcon::ColResize,
+        esox_input::CursorIcon::RowResize => winit::window::CursorIcon::RowResize,
+        esox_input::CursorIcon::NotAllowed => winit::window::CursorIcon::NotAllowed,
+    }
+}
+
 /// Trait for injecting application behavior into the platform event loop.
 ///
 /// The binary crate implements this to wire terminal logic without
@@ -135,8 +339,8 @@ pub trait AppDelegate {
     /// Called when a keyboard event is received.
     fn on_key(
         &mut self,
-        event: &winit::event::KeyEvent,
-        modifiers: winit::keyboard::ModifiersState,
+        event: &esox_input::KeyEvent,
+        modifiers: esox_input::Modifiers,
     );
 
     /// Called when the window is resized.
@@ -209,9 +413,9 @@ pub trait AppDelegate {
         None
     }
 
-    /// Called once before the event loop starts, providing the proxy for
+    /// Called once before the event loop starts, providing a waker for
     /// background threads to wake the event loop.
-    fn set_event_loop_proxy(&mut self, _proxy: EventLoopProxy<AppUserEvent>) {}
+    fn set_waker(&mut self, _waker: Waker) {}
 
     /// Called when the portal bridge is ready. Receive the handle to issue portal requests.
     #[cfg(feature = "portals")]
@@ -239,7 +443,7 @@ pub trait AppDelegate {
     }
 
     /// Called just before the window is destroyed (close or exit).
-    fn on_close(&mut self, _window: &winit::window::Window) {}
+    fn on_close(&mut self) {}
 
     /// Whether the current frame has damage that requires GPU submission.
     ///
@@ -299,8 +503,8 @@ pub trait AppDelegate {
     ///
     /// Called on every mouse move so the platform can update the OS cursor.
     /// Defaults to `Text` (IBeam) for the terminal grid.
-    fn cursor_icon(&self, _x: f64, _y: f64) -> winit::window::CursorIcon {
-        winit::window::CursorIcon::Text
+    fn cursor_icon(&self, _x: f64, _y: f64) -> esox_input::CursorIcon {
+        esox_input::CursorIcon::Text
     }
 
     /// Whether the cursor should be grabbed (confined to the window) and hidden.
@@ -355,7 +559,7 @@ pub enum MouseInputEvent {
 /// Uses the physical key to be layout-independent. Accepts two modifier
 /// sources to work around Wayland timing issues where `ModifiersChanged`
 /// may arrive late.
-pub fn is_copy_shortcut(
+pub(crate) fn is_copy_shortcut(
     physical_key: winit::keyboard::PhysicalKey,
     logical_key: &winit::keyboard::Key,
     modifiers: winit::keyboard::ModifiersState,
@@ -382,7 +586,7 @@ pub fn is_copy_shortcut(
 /// Detect whether a key event represents Ctrl+Shift+V (paste shortcut).
 ///
 /// Mirror of [`is_copy_shortcut`] for the V key.
-pub fn is_paste_shortcut(
+pub(crate) fn is_paste_shortcut(
     physical_key: winit::keyboard::PhysicalKey,
     logical_key: &winit::keyboard::Key,
     modifiers: winit::keyboard::ModifiersState,
@@ -791,9 +995,7 @@ impl ApplicationHandler<AppUserEvent> for App {
         match event {
             WindowEvent::CloseRequested => {
                 self.write_perf_report();
-                if let Some(w) = self.window.as_ref() {
-                    self.delegate.on_close(w);
-                }
+                self.delegate.on_close();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -930,7 +1132,9 @@ impl ApplicationHandler<AppUserEvent> for App {
 
                 // Forward both press AND release events so the input system
                 // can track key-up state (axes, held, just_released).
-                self.delegate.on_key(&event, self.current_modifiers);
+                let converted = convert_key_event(&event);
+                let mods = convert_modifiers(self.current_modifiers);
+                self.delegate.on_key(&converted, mods);
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -951,7 +1155,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                 if !self.cursor_grabbed {
                     if let Some(window) = self.window.as_ref() {
                         let icon = self.delegate.cursor_icon(position.x, position.y);
-                        window.set_cursor(winit::window::Cursor::Icon(icon));
+                        window.set_cursor(winit::window::Cursor::Icon(convert_cursor_icon(icon)));
                     }
                 }
             }
@@ -1518,9 +1722,7 @@ impl ApplicationHandler<AppUserEvent> for App {
                 // Check if the delegate wants to exit.
                 if self.delegate.should_exit() {
                     self.write_perf_report();
-                    if let Some(w) = self.window.as_ref() {
-                        self.delegate.on_close(w);
-                    }
+                    self.delegate.on_close();
                     event_loop.exit();
                     return;
                 }
@@ -1595,9 +1797,7 @@ impl ApplicationHandler<AppUserEvent> for App {
         // Check for signal-triggered exit (SIGTERM/SIGINT).
         if SIGNAL_EXIT.load(Ordering::SeqCst) {
             self.write_perf_report();
-            if let Some(w) = self.window.as_ref() {
-                self.delegate.on_close(w);
-            }
+            self.delegate.on_close();
             event_loop.exit();
             // Exit cleanly to avoid winit teardown issues from signal context.
             std::process::exit(0);
@@ -1702,7 +1902,7 @@ pub fn run(
     let proxy = event_loop.create_proxy();
     let mut app = App::new(config, delegate);
     app.event_proxy = Some(proxy.clone());
-    app.delegate.set_event_loop_proxy(proxy.clone());
+    app.delegate.set_waker(Waker { proxy: proxy.clone() });
 
     // Start portal bridge if feature is enabled.
     #[cfg(feature = "portals")]

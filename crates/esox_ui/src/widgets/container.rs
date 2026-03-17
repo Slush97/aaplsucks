@@ -73,7 +73,7 @@ impl<'a, 'f> ContainerBuilder<'a, 'f> {
         let end_y = self.ui.cursor.y;
 
         let container_rect = Rect::new(
-            self.ui.cursor.x,
+            self.ui.region.x,
             start_y,
             self.ui.region.w,
             end_y - start_y,
@@ -167,7 +167,7 @@ impl<'f> Ui<'f> {
         let end_y = self.cursor.y;
 
         let card_rect = Rect::new(
-            self.cursor.x,
+            self.region.x,
             start_y,
             self.region.w,
             end_y - start_y,
@@ -232,7 +232,7 @@ impl<'f> Ui<'f> {
         let end_y = self.cursor.y;
 
         let surface_rect = Rect::new(
-            self.cursor.x,
+            self.region.x,
             start_y,
             self.region.w,
             end_y - start_y,

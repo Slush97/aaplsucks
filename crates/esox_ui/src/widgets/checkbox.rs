@@ -6,9 +6,6 @@ use crate::response::Response;
 use crate::state::{A11yNode, A11yRole, InputState, WidgetKind};
 use crate::Ui;
 
-/// Box size in logical pixels.
-const BOX_SIZE: f32 = 16.0;
-
 impl<'f> Ui<'f> {
     /// Draw a labeled checkbox. State stored in `input.text` as "true" or "false".
     pub fn checkbox(&mut self, id: u64, input: &mut InputState, label: &str) -> Response {
@@ -35,8 +32,8 @@ impl<'f> Ui<'f> {
 
         // Box position — vertically centered.
         let box_x = rect.x;
-        let box_y = rect.y + (row_h - BOX_SIZE) / 2.0;
-        let box_rect = crate::layout::Rect::new(box_x, box_y, BOX_SIZE, BOX_SIZE);
+        let box_y = rect.y + (row_h - self.theme.checkbox_size) / 2.0;
+        let box_rect = crate::layout::Rect::new(box_x, box_y, self.theme.checkbox_size, self.theme.checkbox_size);
 
         // Focus ring.
         if response.focused && !disabled {
@@ -44,7 +41,7 @@ impl<'f> Ui<'f> {
                 self.frame,
                 box_rect,
                 self.theme.accent_dim,
-                3.0,
+                self.theme.corner_radius,
                 self.theme.focus_ring_expand,
             );
         }
@@ -53,20 +50,20 @@ impl<'f> Ui<'f> {
         let bg = if disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             if checked {
                 paint::lerp_color(self.theme.accent, self.theme.accent_hover, t)
             } else {
                 paint::lerp_color(self.theme.bg_input, self.theme.bg_raised, t)
             }
         };
-        paint::draw_rounded_rect(self.frame, box_rect, bg, 3.0);
+        paint::draw_rounded_rect(self.frame, box_rect, bg, self.theme.corner_radius);
 
         // Box border.
         if disabled {
             paint::draw_dashed_border(
                 self.frame, box_rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         } else {
             let border = if checked || response.focused {
@@ -84,8 +81,8 @@ impl<'f> Ui<'f> {
             let check_color = if disabled { self.theme.disabled_fg } else { self.theme.fg };
             self.text.draw_ui_text(
                 check,
-                box_x + (BOX_SIZE - check_w) / 2.0,
-                box_y + (BOX_SIZE - 12.0) / 2.0,
+                box_x + (self.theme.checkbox_size - check_w) / 2.0,
+                box_y + (self.theme.checkbox_size - 12.0) / 2.0,
                 check_color,
                 self.frame,
                 self.gpu,
@@ -103,7 +100,7 @@ impl<'f> Ui<'f> {
         };
         self.text.draw_ui_text(
             label,
-            rect.x + BOX_SIZE + self.theme.input_padding,
+            rect.x + self.theme.checkbox_size + self.theme.input_padding,
             rect.y + (row_h - self.theme.font_size) / 2.0,
             label_color,
             self.frame,

@@ -14,7 +14,7 @@
 //! ```
 
 use esox_gfx::ShapeBuilder;
-use winit::keyboard::{Key, NamedKey};
+use esox_input::{Key, NamedKey};
 
 use crate::id::fnv1a_mix;
 use crate::layout::Rect;
@@ -64,10 +64,10 @@ impl<'f> Ui<'f> {
         if bar_focused {
             let keys: Vec<_> = self.state.keys.clone();
             for (event, _mods) in &keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::ArrowLeft) if state.selected > 0 => {
                         state.selected -= 1;
                         response.changed = true;
@@ -133,7 +133,7 @@ impl<'f> Ui<'f> {
             });
 
             // Hover animation.
-            let hover_t = self.state.hover_t(tab_id, tab_response.hovered && !selected, 120.0);
+            let hover_t = self.state.hover_t(tab_id, tab_response.hovered && !selected, self.theme.hover_duration_ms);
 
             // Text color.
             let text_color = if selected {

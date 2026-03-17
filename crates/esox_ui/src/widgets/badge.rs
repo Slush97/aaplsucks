@@ -12,7 +12,7 @@
 //! ui.badge_dot();
 //! ```
 
-use esox_gfx::{BorderRadius, Color, ShapeBuilder};
+use esox_gfx::{BorderRadius, ShapeBuilder};
 
 use crate::Ui;
 
@@ -26,8 +26,8 @@ impl<'f> Ui<'f> {
         };
 
         let font_size = self.theme.font_size * 0.75; // smaller text
-        let pad_x = 6.0;
-        let pad_y = 2.0;
+        let pad_x = self.theme.badge_pad_x;
+        let pad_y = self.theme.badge_pad_y;
         let text_w = self.text.measure_text(&text, font_size);
         let badge_w = (text_w + pad_x * 2.0).max(font_size + pad_y * 2.0); // at least circular
         let badge_h = font_size + pad_y * 2.0;
@@ -45,7 +45,7 @@ impl<'f> Ui<'f> {
         );
 
         // White text, centered.
-        let white = Color::new(1.0, 1.0, 1.0, 1.0);
+        let white = self.theme.fg_on_accent;
         self.text.draw_text(
             &text,
             rect.x + (rect.w - text_w) / 2.0,

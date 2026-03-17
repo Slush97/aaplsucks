@@ -73,7 +73,7 @@ impl<'f> Ui<'f> {
         let bg = if disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             paint::lerp_color(bg_color, self.theme.accent_hover, t)
         };
         paint::draw_rounded_rect(self.frame, rect, bg, corner_radius);
@@ -82,7 +82,7 @@ impl<'f> Ui<'f> {
         if disabled {
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         }
 
@@ -121,7 +121,7 @@ impl<'f> Ui<'f> {
 
         // Hover fill — subtle accent tint.
         if !disabled {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 120.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             if t > 0.0 {
                 let fill = Color::new(
                     self.theme.accent.r,
@@ -137,7 +137,7 @@ impl<'f> Ui<'f> {
         if disabled {
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         } else {
             let border = if response.focused || response.hovered {
@@ -218,7 +218,7 @@ impl<'f> Ui<'f> {
         let bg = if disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             paint::lerp_color(bg_normal, bg_hover, t)
         };
         paint::draw_rounded_rect(self.frame, rect, bg, self.theme.corner_radius);
@@ -226,7 +226,7 @@ impl<'f> Ui<'f> {
         if disabled {
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         }
 
@@ -266,7 +266,7 @@ impl<'f> Ui<'f> {
         let bg = if disabled {
             self.theme.disabled_bg
         } else {
-            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, 100.0);
+            let t = self.state.hover_t(id ^ HOVER_SALT, response.hovered, self.theme.hover_duration_ms);
             Color::new(
                 (bg_color.r + 0.08 * t).min(1.0),
                 (bg_color.g + 0.08 * t).min(1.0),

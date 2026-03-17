@@ -1,6 +1,6 @@
 //! Action bindings — named boolean actions triggered by input.
 
-use winit::keyboard::KeyCode;
+use esox_input::KeyCode;
 
 /// A binding that triggers an action.
 #[derive(Debug, Clone, PartialEq)]

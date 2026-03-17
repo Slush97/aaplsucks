@@ -87,9 +87,9 @@ impl<'f> Ui<'f> {
 
         // Keyboard: arrow keys adjust value.
         if response.focused && !disabled {
-            use winit::keyboard::{Key, NamedKey};
+            use esox_input::{Key, NamedKey};
             for (event, _) in &self.state.keys {
-                if !event.state.is_pressed() {
+                if !event.pressed {
                     continue;
                 }
                 let step = if (max - min) >= 10.0 {
@@ -97,7 +97,7 @@ impl<'f> Ui<'f> {
                 } else {
                     (max - min) / 20.0
                 };
-                match &event.logical_key {
+                match &event.key {
                     Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowDown) => {
                         value = (value - step).clamp(min, max);
                         let formatted = if (max - min) >= 10.0 {
@@ -144,7 +144,7 @@ impl<'f> Ui<'f> {
         if disabled {
             paint::draw_dashed_border(
                 self.frame, rect, self.theme.disabled_border,
-                6.0, 4.0, 1.0,
+                self.theme.disabled_dash_len, self.theme.disabled_dash_gap, self.theme.disabled_dash_thickness,
             );
         } else {
             let border_color = if response.focused {
@@ -159,7 +159,7 @@ impl<'f> Ui<'f> {
         let track_x = rect.x + self.theme.input_padding;
         let track_y = rect.y + rect.h / 2.0 - 2.0;
         let track_w = rect.w - self.theme.input_padding * 2.0;
-        let track_h = 4.0;
+        let track_h = self.theme.slider_track_height;
 
         // Track background.
         self.frame.push(

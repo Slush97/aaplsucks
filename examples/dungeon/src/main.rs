@@ -342,7 +342,7 @@ fn build_exit_chamber(ctx: &mut Ctx, offset: Vec3, cube_mesh: MeshHandle) -> Vec
 
 impl Game for Dungeon {
     fn init(&mut self, ctx: &mut Ctx) {
-        use esox_engine::winit::keyboard::KeyCode;
+        use esox_engine::esox_input::KeyCode;
 
         // Input bindings: WASD + mouse look + E interact + F5/F9 save/load + Esc
         ctx.input.bind_axis("move_x", AxisBinding::Keys { negative: KeyCode::KeyA, positive: KeyCode::KeyD });

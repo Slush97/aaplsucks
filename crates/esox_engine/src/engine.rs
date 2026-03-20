@@ -27,6 +27,10 @@ pub struct EngineConfig {
     pub clear_color: wgpu::Color,
     /// Enable post-processing (bloom, tone mapping, SSAO).
     pub postprocess: bool,
+    /// Post-process settings (bloom intensity, tone mapping, SSAO, fog).
+    /// Only used when `postprocess` is `true`. Defaults to
+    /// `PostProcess3DConfig::default()`.
+    pub postprocess_config: esox_gfx::mesh3d::PostProcess3DConfig,
     /// Enable shadows.
     pub shadows: bool,
     /// Optional physics backend. Defaults to `NullPhysics` if `None`.
@@ -52,17 +56,25 @@ impl Default for EngineConfig {
                 a: 1.0,
             },
             postprocess: true,
+            postprocess_config: esox_gfx::mesh3d::PostProcess3DConfig {
+                ssao_enabled: true,
+                ..esox_gfx::mesh3d::PostProcess3DConfig::default()
+            },
             shadows: true,
             physics: None,
         }
     }
 }
 
-/// The engine manages the game loop, ECS world, and all subsystems.
-pub(crate) struct Engine {
-    pub config: EngineConfig,
-    game: Box<dyn Game>,
-    renderer: Option<Renderer3D>,
+// ── Engine subsystem state ──────────────────────────────────────────────────
+//
+// Separated from `Game` and `Renderer3D` so the borrow checker can split
+// borrows cleanly: `self.game`, `self.renderer`, and `self.state` are three
+// independent fields that can be borrowed simultaneously.
+
+/// All engine subsystem state except the game logic and the 3D renderer.
+struct EngineState {
+    config: EngineConfig,
     world: hecs::World,
     input: InputManager,
     timestep: FixedTimestep,
@@ -70,6 +82,7 @@ pub(crate) struct Engine {
     physics: Box<dyn PhysicsBackend>,
     entity_map: PhysicsEntityMap,
     viewport: (u32, u32),
+    frame_count: u32,
     initialized: bool,
     #[cfg(feature = "audio")]
     audio: Option<crate::audio::AudioManager>,
@@ -87,64 +100,146 @@ pub(crate) struct Engine {
     theme: esox_ui::Theme,
 }
 
+impl EngineState {
+    /// Build a [`Ctx`] from engine state plus an externally-borrowed renderer.
+    ///
+    /// This borrows **all** of `EngineState` mutably, so nothing else on
+    /// `self` can be accessed while the returned `Ctx` is alive. Use this
+    /// for the game callbacks (`init`, `update`, `render`) where the game
+    /// gets full access to every subsystem.
+    fn make_ctx<'a>(
+        &'a mut self,
+        gpu: &'a GpuContext,
+        renderer: &'a mut Renderer3D,
+    ) -> Ctx<'a> {
+        Ctx {
+            world: &mut self.world,
+            input: &mut self.input,
+            time: &self.timestep.time_state_cache,
+            renderer,
+            gpu,
+            assets: &mut self.assets,
+            physics: &mut *self.physics,
+            entity_map: &mut self.entity_map,
+            viewport: self.viewport,
+            #[cfg(feature = "audio")]
+            audio: self.audio.as_mut(),
+        }
+    }
+
+    /// Process completed asset uploads and poll hot-reload.
+    fn process_assets(&mut self, gpu: &GpuContext, renderer: &mut Renderer3D) {
+        self.assets.process_uploads(gpu, renderer);
+        #[cfg(feature = "hot-reload")]
+        self.assets.poll_asset_reload(gpu, renderer);
+    }
+
+    /// Run built-in ECS systems: hierarchy, lights, render extraction,
+    /// animation, and particles.
+    fn run_ecs_systems(&mut self, gpu: &GpuContext, renderer: &mut Renderer3D) {
+        hierarchy_system(&mut self.world);
+
+        let lights = light_collection_system(&self.world);
+        renderer.set_lights(&lights);
+
+        render_extraction_system(&self.world, renderer);
+
+        let frame_dt = self.timestep.time_state_cache.frame_dt;
+        animation_system(&mut self.world, renderer, gpu, frame_dt);
+        particle_system(&mut self.world, renderer, gpu, frame_dt, self.frame_count);
+        self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
+    /// Dispatch GPU compute work (skinning, particles).
+    fn dispatch_compute(
+        &self,
+        gpu: &GpuContext,
+        renderer: &mut Renderer3D,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let mut cmd_bufs = Vec::new();
+        if let Some(skin_cmd) = renderer.dispatch_skinning(gpu) {
+            cmd_bufs.push(skin_cmd);
+        }
+        if let Some(particle_cmd) = renderer.dispatch_particles(gpu) {
+            cmd_bufs.push(particle_cmd);
+        }
+        cmd_bufs
+    }
+
+    /// Sync the active camera from ECS and update the audio listener.
+    fn sync_camera_and_audio(&mut self) -> esox_gfx::mesh3d::Camera {
+        let camera = camera_sync_system(&self.world).unwrap_or_default();
+        #[cfg(feature = "audio")]
+        if let Some(ref mut audio) = self.audio {
+            let cam_forward = (camera.target - camera.position).normalize_or_zero();
+            audio.set_listener(camera.position, cam_forward, camera.up);
+        }
+        camera
+    }
+}
+
+// ── Engine ──────────────────────────────────────────────────────────────────
+
+/// The engine manages the game loop, ECS world, and all subsystems.
+pub(crate) struct Engine {
+    game: Box<dyn Game>,
+    renderer: Option<Renderer3D>,
+    state: EngineState,
+}
+
 impl Engine {
     pub fn new(mut config: EngineConfig, game: Box<dyn Game>) -> Self {
         let tick_rate = config.platform.frame.tick_rate;
         let physics = config.physics.take().unwrap_or_else(|| Box::new(NullPhysics));
         Self {
-            config,
             game,
             renderer: None,
-            world: hecs::World::new(),
-            input: InputManager::new(),
-            timestep: FixedTimestep::new(tick_rate),
-            assets: AssetManager::new(),
-            physics,
-            entity_map: PhysicsEntityMap::new(),
-            viewport: (1280, 720),
-            initialized: false,
-            #[cfg(feature = "audio")]
-            audio: crate::audio::AudioManager::new(),
-            #[cfg(feature = "ui")]
-            debug_overlay_visible: false,
-            #[cfg(feature = "ui")]
-            last_batch_stats: esox_gfx::mesh3d::BatchStats3D::default(),
-            #[cfg(feature = "ui")]
-            last_physics_us: 0,
-            #[cfg(feature = "ui")]
-            ui_state: esox_ui::UiState::new(),
-            #[cfg(feature = "ui")]
-            text_renderer: None,
-            #[cfg(feature = "ui")]
-            theme: esox_ui::Theme::dark(),
+            state: EngineState {
+                config,
+                world: hecs::World::new(),
+                input: InputManager::new(),
+                timestep: FixedTimestep::new(tick_rate),
+                assets: AssetManager::new(),
+                physics,
+                entity_map: PhysicsEntityMap::new(),
+                viewport: (1280, 720),
+                frame_count: 0,
+                initialized: false,
+                #[cfg(feature = "audio")]
+                audio: crate::audio::AudioManager::new(),
+                #[cfg(feature = "ui")]
+                debug_overlay_visible: false,
+                #[cfg(feature = "ui")]
+                last_batch_stats: esox_gfx::mesh3d::BatchStats3D::default(),
+                #[cfg(feature = "ui")]
+                last_physics_us: 0,
+                #[cfg(feature = "ui")]
+                ui_state: esox_ui::UiState::new(),
+                #[cfg(feature = "ui")]
+                text_renderer: None,
+                #[cfg(feature = "ui")]
+                theme: esox_ui::Theme::dark(),
+            },
         }
     }
 
-    #[allow(dead_code)]
-    pub fn set_physics(&mut self, physics: Box<dyn PhysicsBackend>) {
-        self.physics = physics;
-    }
 }
+
+// ── AppDelegate impl ────────────────────────────────────────────────────────
 
 impl AppDelegate for Engine {
     fn on_init(&mut self, gpu: &GpuContext, _resources: &mut RenderResources) {
         let mut renderer = Renderer3D::new(gpu);
 
-        if self.config.postprocess {
+        if self.state.config.postprocess {
             renderer.enable_postprocess(gpu);
-            renderer.set_postprocess(esox_gfx::mesh3d::PostProcess3DConfig {
-                bloom_enabled: true,
-                bloom_intensity: 0.3,
-                bloom_threshold: 1.0,
-                bloom_soft_knee: 0.5,
-                tone_map_enabled: true,
-                ssao_enabled: true,
-                motion_blur_enabled: false,
-            });
-            renderer.enable_ssao(gpu);
+            renderer.set_postprocess(self.state.config.postprocess_config);
+            if self.state.config.postprocess_config.ssao_enabled {
+                renderer.enable_ssao(gpu);
+            }
         }
 
-        if self.config.shadows {
+        if self.state.config.shadows {
             renderer.enable_shadows(gpu);
             renderer.enable_point_shadows(gpu);
             renderer.enable_spot_shadows(gpu);
@@ -153,30 +248,17 @@ impl AppDelegate for Engine {
         #[cfg(feature = "ui")]
         {
             match esox_ui::TextRenderer::new(gpu) {
-                Ok(tr) => self.text_renderer = Some(tr),
+                Ok(tr) => self.state.text_renderer = Some(tr),
                 Err(e) => tracing::warn!("Failed to init TextRenderer: {e}"),
             }
         }
 
-        // Call game init.
-        self.timestep.time_state_cache = self.timestep.time_state(0);
-        let mut ctx = Ctx {
-            world: &mut self.world,
-            input: &mut self.input,
-            time: &self.timestep.time_state_cache,
-            renderer: &mut renderer,
-            gpu,
-            assets: &mut self.assets,
-            physics: &mut *self.physics,
-            entity_map: &mut self.entity_map,
-            viewport: self.viewport,
-            #[cfg(feature = "audio")]
-            audio: self.audio.as_mut(),
-        };
+        self.state.timestep.time_state_cache = self.state.timestep.time_state(0);
+        let mut ctx = self.state.make_ctx(gpu, &mut renderer);
         self.game.init(&mut ctx);
 
         self.renderer = Some(renderer);
-        self.initialized = true;
+        self.state.initialized = true;
     }
 
     fn on_pre_render(
@@ -189,137 +271,78 @@ impl AppDelegate for Engine {
             None => return vec![],
         };
 
-        // 0. Poll shader hot-reload.
+        // 1. Hot-reload.
         #[cfg(feature = "hot-reload")]
         renderer.poll_shader_reload(gpu);
 
-        // 1. Advance timestep.
-        let (tick_count, alpha) = self.timestep.advance();
-        self.timestep.time_state_cache = self.timestep.time_state(tick_count);
+        // 2. Advance timestep.
+        let (tick_count, alpha) = self.state.timestep.advance();
+        self.state.timestep.time_state_cache = self.state.timestep.time_state(tick_count);
 
-        // 2. Process completed asset uploads.
-        self.assets.process_uploads(gpu, renderer);
+        // 3. Process assets.
+        self.state.process_assets(gpu, renderer);
 
-        // 2.1. Poll asset hot-reload.
-        #[cfg(feature = "hot-reload")]
-        self.assets.poll_asset_reload(gpu, renderer);
-
-        // 3. Fixed-rate update loop.
+        // 4. Fixed-rate update loop.
         #[cfg(feature = "ui")]
         let mut physics_us: u64 = 0;
-        self.input.begin_frame(tick_count);
+        self.state.input.begin_frame(tick_count);
         for tick_i in 0..tick_count {
-            self.input.pre_update();
-
-            self.timestep.time_state_cache = self.timestep.time_state(tick_i + 1);
+            self.state.input.pre_update();
+            self.state.timestep.time_state_cache = self.state.timestep.time_state(tick_i + 1);
             {
-                let mut ctx = Ctx {
-                    world: &mut self.world,
-                    input: &mut self.input,
-                    time: &self.timestep.time_state_cache,
-                    renderer,
-                    gpu,
-                    assets: &mut self.assets,
-                    physics: &mut *self.physics,
-                    entity_map: &mut self.entity_map,
-                    viewport: self.viewport,
-                    #[cfg(feature = "audio")]
-                    audio: self.audio.as_mut(),
-                };
+                let mut ctx = self.state.make_ctx(gpu, renderer);
                 self.game.update(&mut ctx);
             }
 
             #[cfg(feature = "ui")]
             let phys_start = std::time::Instant::now();
-            self.physics.step(self.timestep.tick_dt);
+            self.state.physics.step(self.state.timestep.tick_dt);
             #[cfg(feature = "ui")]
             {
                 physics_us += phys_start.elapsed().as_micros() as u64;
             }
 
-            physics_sync_system(&mut self.world, &*self.physics);
-
-            self.input.post_update();
+            physics_sync_system(&mut self.state.world, &*self.state.physics);
+            self.state.input.post_update();
         }
-        self.input.end_frame();
+        self.state.input.end_frame();
         #[cfg(feature = "ui")]
         {
-            self.last_physics_us = physics_us;
+            self.state.last_physics_us = physics_us;
         }
 
-        // 4. Variable-rate render callback.
+        // 5. Variable-rate render.
         {
-            self.timestep.time_state_cache = self.timestep.time_state(tick_count);
-            let mut ctx = Ctx {
-                world: &mut self.world,
-                input: &mut self.input,
-                time: &self.timestep.time_state_cache,
-                renderer,
-                gpu,
-                assets: &mut self.assets,
-                physics: &mut *self.physics,
-                entity_map: &mut self.entity_map,
-                viewport: self.viewport,
-                #[cfg(feature = "audio")]
-                audio: self.audio.as_mut(),
-            };
+            self.state.timestep.time_state_cache = self.state.timestep.time_state(tick_count);
+            let mut ctx = self.state.make_ctx(gpu, renderer);
             self.game.render(&mut ctx, alpha);
         }
 
-        // 5. Run ECS systems.
-        hierarchy_system(&mut self.world);
+        // 6. ECS systems.
+        self.state.run_ecs_systems(gpu, renderer);
 
-        // 6. Light collection.
-        let lights = light_collection_system(&self.world);
-        renderer.set_lights(&lights);
+        // 7. Dispatch compute.
+        let mut cmd_bufs = self.state.dispatch_compute(gpu, renderer);
 
-        // 7. Render extraction — issue draw calls from ECS entities.
-        render_extraction_system(&self.world, renderer);
+        // 8. Camera + audio sync.
+        let camera = self.state.sync_camera_and_audio();
 
-        // 7.5. Animation — advance players and upload joint matrices.
-        let frame_dt = self.timestep.time_state_cache.frame_dt;
-        animation_system(&mut self.world, renderer, gpu, frame_dt);
-
-        // 7.6. Particle system — advance emitters and queue particle draws.
-        particle_system(&mut self.world, renderer, gpu, frame_dt);
-
-        // 8. Dispatch skinning compute (if any).
-        let mut cmd_bufs = Vec::new();
-        if let Some(skin_cmd) = renderer.dispatch_skinning(gpu) {
-            cmd_bufs.push(skin_cmd);
-        }
-
-        // 8.1. Dispatch particle compute (if any).
-        if let Some(particle_cmd) = renderer.dispatch_particles(gpu) {
-            cmd_bufs.push(particle_cmd);
-        }
-
-        // 9. Camera sync.
-        let camera = camera_sync_system(&self.world).unwrap_or_default();
-
-        // 9.1. Sync audio listener from camera.
-        #[cfg(feature = "audio")]
-        if let Some(ref mut audio) = self.audio {
-            let cam_forward = (camera.target - camera.position).normalize_or_zero();
-            audio.set_listener(camera.position, cam_forward, camera.up);
-        }
-
-        // 10. Encode 3D render pass.
-        let elapsed = self.timestep.time_state_cache.elapsed;
-        let dt = self.timestep.time_state_cache.frame_dt;
+        // 9. Encode 3D render pass.
+        let elapsed = self.state.timestep.time_state_cache.elapsed;
+        let dt = self.state.timestep.time_state_cache.frame_dt;
         let (render_cmd, batch_stats) = renderer.encode(
             gpu,
             surface_view,
             &camera,
-            self.viewport.0,
-            self.viewport.1,
+            self.state.viewport.0,
+            self.state.viewport.1,
             elapsed,
             dt,
-            self.config.clear_color,
+            self.state.config.clear_color,
         );
         #[cfg(feature = "ui")]
         {
-            self.last_batch_stats = batch_stats;
+            self.state.last_batch_stats = batch_stats;
         }
         #[cfg(not(feature = "ui"))]
         let _ = batch_stats;
@@ -337,56 +360,56 @@ impl AppDelegate for Engine {
     ) {
         #[cfg(feature = "ui")]
         {
-            let text = match self.text_renderer.as_mut() {
+            let text = match self.state.text_renderer.as_mut() {
                 Some(t) => t,
                 None => return,
             };
 
-            self.ui_state.update_blink(self.theme.cursor_blink_ms);
+            self.state.ui_state.update_blink(self.state.theme.cursor_blink_ms);
 
             let vp = esox_ui::Rect::new(
                 0.0,
                 0.0,
-                self.viewport.0 as f32,
-                self.viewport.1 as f32,
+                self.state.viewport.0 as f32,
+                self.state.viewport.1 as f32,
             );
 
             let renderer = self.renderer.as_mut().unwrap();
-            let time_state = &self.timestep.time_state_cache;
+            let time_state = &self.state.timestep.time_state_cache;
 
             let ctx = Ctx {
-                world: &mut self.world,
-                input: &mut self.input,
+                world: &mut self.state.world,
+                input: &mut self.state.input,
                 time: time_state,
                 renderer,
                 gpu: _gpu,
-                assets: &mut self.assets,
-                physics: &mut *self.physics,
-                entity_map: &mut self.entity_map,
-                viewport: self.viewport,
+                assets: &mut self.state.assets,
+                physics: &mut *self.state.physics,
+                entity_map: &mut self.state.entity_map,
+                viewport: self.state.viewport,
                 #[cfg(feature = "audio")]
-                audio: self.audio.as_mut(),
+                audio: self.state.audio.as_mut(),
             };
 
             let mut ui = esox_ui::Ui::begin(
                 _frame, _gpu, _resources, text,
-                &mut self.ui_state, &self.theme, vp,
+                &mut self.state.ui_state, &self.state.theme, vp,
             );
 
             self.game.ui(&mut ui, &ctx);
 
             ui.finish();
 
-            if self.debug_overlay_visible {
-                let text = self.text_renderer.as_mut().unwrap();
+            if self.state.debug_overlay_visible {
+                let text = self.state.text_renderer.as_mut().unwrap();
                 let stats = EngineStats {
-                    physics_step_us: self.last_physics_us,
-                    batch_stats: self.last_batch_stats,
-                    entity_count: self.world.len() as usize,
+                    physics_step_us: self.state.last_physics_us,
+                    batch_stats: self.state.last_batch_stats,
+                    entity_count: self.state.world.len() as usize,
                 };
                 draw_debug_overlay(
                     _frame, _gpu, _resources, text,
-                    &stats, _perf, self.viewport,
+                    &stats, _perf, self.state.viewport,
                 );
             }
         }
@@ -403,28 +426,28 @@ impl AppDelegate for Engine {
             if event.pressed
                 && event.physical_key == KeyCode::F3
             {
-                self.debug_overlay_visible = !self.debug_overlay_visible;
+                self.state.debug_overlay_visible = !self.state.debug_overlay_visible;
             }
         }
-        self.input.handle_key_event(event);
+        self.state.input.handle_key_event(event);
         #[cfg(feature = "ui")]
-        self.ui_state.process_key(event.clone(), _modifiers);
+        self.state.ui_state.process_key(event.clone(), _modifiers);
     }
 
     fn on_resize(&mut self, width: u32, height: u32, _gpu: &GpuContext) {
-        self.viewport = (width, height);
+        self.state.viewport = (width, height);
     }
 
     fn on_mouse(&mut self, event: MouseInputEvent) {
         match event {
             MouseInputEvent::Moved { x, y } => {
-                self.input.handle_mouse_move(x, y);
+                self.state.input.handle_mouse_move(x, y);
                 #[cfg(feature = "ui")]
-                self.ui_state.process_mouse_move(
+                self.state.ui_state.process_mouse_move(
                     x as f32,
                     y as f32,
-                    self.theme.item_height,
-                    self.theme.dropdown_gap,
+                    self.state.theme.item_height,
+                    self.state.theme.dropdown_gap,
                 );
             }
             MouseInputEvent::Press {
@@ -432,30 +455,30 @@ impl AppDelegate for Engine {
                 x: _x,
                 y: _y,
             } => {
-                self.input.handle_mouse_button(button, true);
+                self.state.input.handle_mouse_button(button, true);
                 #[cfg(feature = "ui")]
                 if button == 0 {
-                    self.ui_state.process_mouse_click(_x as f32, _y as f32);
+                    self.state.ui_state.process_mouse_click(_x as f32, _y as f32);
                 } else if button == 2 {
-                    self.ui_state.process_right_click(_x as f32, _y as f32);
+                    self.state.ui_state.process_right_click(_x as f32, _y as f32);
                 }
             }
             MouseInputEvent::Release { button, .. } => {
-                self.input.handle_mouse_button(button, false);
+                self.state.input.handle_mouse_button(button, false);
                 #[cfg(feature = "ui")]
-                self.ui_state.process_mouse_release();
+                self.state.ui_state.process_mouse_release();
             }
             MouseInputEvent::Scroll {
                 x: _x,
                 y: _y,
                 delta_y: _delta_y,
             } => {
-                self.input.handle_scroll(_delta_y);
+                self.state.input.handle_scroll(_delta_y);
                 #[cfg(feature = "ui")]
-                self.ui_state.process_scroll(_x as f32, _y as f32, _delta_y);
+                self.state.ui_state.process_scroll(_x as f32, _y as f32, _delta_y);
             }
             MouseInputEvent::RawMotion { dx, dy } => {
-                self.input.handle_raw_mouse_motion(dx, dy);
+                self.state.input.handle_raw_mouse_motion(dx, dy);
             }
             MouseInputEvent::Left => {}
         }
@@ -463,7 +486,7 @@ impl AppDelegate for Engine {
 
     fn on_focus_changed(&mut self, focused: bool) {
         if !focused {
-            self.input.clear_all_state();
+            self.state.input.clear_all_state();
         }
     }
 
@@ -471,22 +494,22 @@ impl AppDelegate for Engine {
 
     fn on_paste(&mut self, _text: &str) {
         #[cfg(feature = "ui")]
-        self.ui_state.on_ime_commit(_text.to_string());
+        self.state.ui_state.on_ime_commit(_text.to_string());
     }
 
     fn on_ime_commit(&mut self, _text: &str) {
         #[cfg(feature = "ui")]
-        self.ui_state.on_ime_commit(_text.to_string());
+        self.state.ui_state.on_ime_commit(_text.to_string());
     }
 
     fn on_ime_preedit(&mut self, _text: String, _cursor: Option<(usize, usize)>) {
         #[cfg(feature = "ui")]
-        self.ui_state.on_ime_preedit(_text, _cursor);
+        self.state.ui_state.on_ime_preedit(_text, _cursor);
     }
 
     fn on_ime_enabled(&mut self, _enabled: bool) {
         #[cfg(feature = "ui")]
-        self.ui_state.on_ime_enabled(_enabled);
+        self.state.ui_state.on_ime_enabled(_enabled);
     }
 
     fn on_copy(&mut self) -> Option<String> {
@@ -498,7 +521,7 @@ impl AppDelegate for Engine {
     }
 
     fn cursor_grabbed(&self) -> bool {
-        self.input.cursor_grabbed()
+        self.state.input.cursor_grabbed()
     }
 
     fn should_exit(&self) -> bool {

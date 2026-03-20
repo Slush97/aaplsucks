@@ -12,14 +12,13 @@ members = [
     "examples/bench3d",
     "examples/engine_demo",
     "examples/platformer",
-    "examples/dungeon",
-    "examples/dungeon_explorer",
     "examples/editor",
     "examples/shadow_test",
-    "examples/moba_lane",
     "examples/combat_demo",
     "examples/layout_showcase",
     "examples/material_showcase",
+    "examples/pokemon",
+    "examples/pokemon_viewer",
 ]
 exclude = ["apps/dwnldr-gui"]
 
@@ -75,6 +74,12 @@ rapier3d = { version = "0.22", features = ["simd-stable"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Compile dependencies with optimizations in debug builds — massively speeds
+# up GPU-heavy crates (wgpu, naga, rapier, image, etc.) while keeping our
+# own code debuggable.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 overflow-checks = true

@@ -55,7 +55,7 @@ impl<'f> Ui<'f> {
         let indicator_h = self.theme.tab_indicator_height;
         let bar_height = font_size + pad * 2.0 + indicator_h;
 
-        let bar_rect = self.allocate_rect(self.region.w, bar_height);
+        let bar_rect = self.allocate_rect_keyed(id, self.region.w, bar_height);
 
         let mut response = Response::default();
 

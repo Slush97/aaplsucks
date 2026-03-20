@@ -16,6 +16,8 @@ pub enum MaterialType {
     Lit,
     /// Cook-Torrance PBR with metallic-roughness workflow.
     PBR,
+    /// Wind Waker-style cel shading with quantized diffuse bands.
+    Toon,
 }
 
 /// Blend mode for 3D materials.
@@ -77,6 +79,12 @@ pub struct MaterialDescriptor {
     pub emissive_texture: Option<TextureHandle>,
     /// Normal map scale factor (default 1.0).
     pub normal_scale: f32,
+    /// Number of toon diffuse bands (2 or 3). Toon only.
+    pub toon_bands: f32,
+    /// Rim lighting Fresnel exponent. Toon only.
+    pub rim_power: f32,
+    /// Rim lighting intensity. Toon only.
+    pub rim_intensity: f32,
 }
 
 impl Default for MaterialDescriptor {
@@ -95,6 +103,9 @@ impl Default for MaterialDescriptor {
             metallic_roughness_texture: None,
             emissive_texture: None,
             normal_scale: 1.0,
+            toon_bands: 3.0,
+            rim_power: 3.0,
+            rim_intensity: 0.4,
         }
     }
 }
@@ -126,7 +137,7 @@ pub struct MaterialUniforms {
     pub roughness_opacity_flags: [f32; 4],
     /// Texture presence flags: (has_albedo, has_normal, has_mr, has_emissive).
     pub texture_flags: [f32; 4],
-    /// Extra parameters: (normal_scale, 0, 0, 0).
+    /// Extra parameters: (normal_scale, toon_bands, rim_power, rim_intensity).
     pub extra: [f32; 4],
 }
 
@@ -137,6 +148,7 @@ impl MaterialDescriptor {
             MaterialType::Unlit => 0.0,
             MaterialType::Lit => 1.0,
             MaterialType::PBR => 2.0,
+            MaterialType::Toon => 3.0,
         };
         MaterialUniforms {
             albedo: self.albedo,
@@ -165,7 +177,7 @@ impl MaterialDescriptor {
                     0.0
                 },
             ],
-            extra: [self.normal_scale, 0.0, 0.0, 0.0],
+            extra: [self.normal_scale, self.toon_bands, self.rim_power, self.rim_intensity],
         }
     }
 }

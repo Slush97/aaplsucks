@@ -400,7 +400,6 @@ impl Game for EditorApp {
         // Enable post-processing and shadows
         ctx.renderer.enable_postprocess(ctx.gpu);
         ctx.renderer.enable_ssao(ctx.gpu);
-        ctx.renderer.enable_motion_blur(ctx.gpu);
         ctx.renderer.enable_shadows(ctx.gpu);
         ctx.renderer.enable_point_shadows(ctx.gpu);
         ctx.renderer.enable_spot_shadows(ctx.gpu);
@@ -1523,12 +1522,6 @@ impl Game for EditorApp {
                             *dirty = true;
                         }
 
-                        // Motion blur
-                        let mb_label = if pp.motion_blur_enabled { "Motion Blur: ON" } else { "Motion Blur: OFF" };
-                        if ui.button(hash("rs_motionblur"), mb_label).clicked {
-                            pp.motion_blur_enabled = !pp.motion_blur_enabled;
-                            *dirty = true;
-                        }
                     });
 
                     ui.collapsing_header(hash("rs_shadows"), "Shadows", true, |ui| {

@@ -11,11 +11,13 @@ use glam::{Quat, Vec3};
 pub struct BodyHandle(pub u32);
 
 /// Shape of a physics collider.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ColliderShape {
     Box { half_extents: Vec3 },
     Sphere { radius: f32 },
     Capsule { half_height: f32, radius: f32 },
+    ConvexHull { points: Vec<Vec3> },
+    TriMesh { vertices: Vec<Vec3>, indices: Vec<[u32; 3]> },
 }
 
 /// Description for creating a collider.
@@ -25,6 +27,11 @@ pub struct ColliderDesc {
     pub friction: f32,
     pub restitution: f32,
     pub is_sensor: bool,
+    /// Collision group membership bits (default: all bits set).
+    pub collision_group: u32,
+    /// Collision filter mask — collides only with bodies whose group bits
+    /// overlap this mask (default: all bits set).
+    pub collision_mask: u32,
 }
 
 impl Default for ColliderDesc {
@@ -36,6 +43,8 @@ impl Default for ColliderDesc {
             friction: 0.5,
             restitution: 0.0,
             is_sensor: false,
+            collision_group: 0xFFFF_FFFF,
+            collision_mask: 0xFFFF_FFFF,
         }
     }
 }
@@ -114,6 +123,35 @@ pub trait PhysicsBackend: 'static {
 
     /// Set the gravity vector.
     fn set_gravity(&mut self, _gravity: Vec3) {}
+
+    /// Get the linear velocity of a body.
+    fn get_linear_velocity(&self, _handle: BodyHandle) -> Option<Vec3> { None }
+
+    /// Set the linear velocity of a body.
+    fn set_linear_velocity(&mut self, _handle: BodyHandle, _vel: Vec3) {}
+
+    /// Get the angular velocity of a body.
+    fn get_angular_velocity(&self, _handle: BodyHandle) -> Option<Vec3> { None }
+
+    /// Set the angular velocity of a body.
+    fn set_angular_velocity(&mut self, _handle: BodyHandle, _vel: Vec3) {}
+
+    /// Find all bodies whose colliders overlap a sphere.
+    fn overlap_sphere(&self, _center: Vec3, _radius: f32) -> Vec<BodyHandle> { vec![] }
+
+    /// Find all bodies whose colliders overlap an axis-aligned box.
+    fn overlap_box(&self, _center: Vec3, _half_extents: Vec3) -> Vec<BodyHandle> { vec![] }
+
+    /// Cast a shape along a direction and return the first hit.
+    fn shape_cast(
+        &self,
+        _shape: &ColliderShape,
+        _from: Vec3,
+        _dir: Vec3,
+        _max_dist: f32,
+    ) -> Option<RayHit> {
+        None
+    }
 }
 
 /// No-op physics backend (default).

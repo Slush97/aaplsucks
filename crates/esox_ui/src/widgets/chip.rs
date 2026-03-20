@@ -42,7 +42,7 @@ impl<'f> Ui<'f> {
         let chip_h = font_size + pad_y * 2.0;
         let radius = chip_h / 2.0; // capsule
 
-        let rect = self.allocate_rect(chip_w, chip_h);
+        let rect = self.allocate_rect_keyed(id, chip_w, chip_h);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);

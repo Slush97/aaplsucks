@@ -39,7 +39,7 @@ impl<'f> Ui<'f> {
         options: &[&str],
         selected: &mut Option<usize>,
     ) -> Response {
-        let rect = self.allocate_rect(self.region.w, self.theme.button_height);
+        let rect = self.allocate_rect_keyed(id, self.region.w, self.theme.button_height);
         self.register_widget(id, rect, WidgetKind::Combobox);
 
         let mut response = self.widget_response(id, rect);

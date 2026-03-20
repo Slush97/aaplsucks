@@ -22,4 +22,6 @@ pub struct ColliderComponent {
     pub friction: f32,
     pub restitution: f32,
     pub is_sensor: bool,
+    pub collision_group: u32,
+    pub collision_mask: u32,
 }

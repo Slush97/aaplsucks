@@ -131,9 +131,9 @@ pub fn particle_system(
     renderer: &mut Renderer3D,
     gpu: &GpuContext,
     dt: f32,
+    frame_count: u32,
 ) {
-    static FRAME_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let frame = FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let frame = frame_count;
 
     for (_e, (gt, emitter)) in world.query_mut::<(&GlobalTransform, &mut ParticleEmitter)>() {
         if !emitter.active {

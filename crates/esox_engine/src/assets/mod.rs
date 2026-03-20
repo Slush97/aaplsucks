@@ -53,7 +53,6 @@ pub struct AssetManager {
     /// Reverse map from asset ID to a string name, per asset kind.
     mesh_names: HashMap<AssetId, String>,
     material_names: HashMap<AssetId, String>,
-    texture_names: HashMap<AssetId, String>,
     parse_tx: mpsc::Sender<loader::ParseResult>,
     parse_rx: mpsc::Receiver<loader::ParseResult>,
     #[cfg(feature = "hot-reload")]
@@ -70,7 +69,6 @@ impl AssetManager {
             path_map: HashMap::new(),
             mesh_names: HashMap::new(),
             material_names: HashMap::new(),
-            texture_names: HashMap::new(),
             parse_tx: tx,
             parse_rx: rx,
             #[cfg(feature = "hot-reload")]

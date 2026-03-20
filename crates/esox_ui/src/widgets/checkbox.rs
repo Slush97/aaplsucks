@@ -10,7 +10,7 @@ impl<'f> Ui<'f> {
     /// Draw a labeled checkbox. State stored in `input.text` as "true" or "false".
     pub fn checkbox(&mut self, id: u64, input: &mut InputState, label: &str) -> Response {
         let row_h = self.theme.button_height;
-        let rect = self.allocate_rect(self.region.w, row_h);
+        let rect = self.allocate_rect_keyed(id, self.region.w, row_h);
         self.register_widget(id, rect, WidgetKind::Checkbox);
 
         let mut response = self.widget_response(id, rect);

@@ -8,6 +8,8 @@
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
+use crate::pipeline::GpuContext;
+use super::camera::Camera;
 use super::instance::instance_buffer_layout;
 use super::vertex::vertex_buffer_layout;
 
@@ -281,6 +283,172 @@ pub fn compute_cascade_matrices(
     matrices
 }
 
+// ── ShadowState ──
+
+/// Bundled shadow map state for the 3D renderer.
+pub(super) struct ShadowState {
+    pub(super) shadow_pass: Option<ShadowPass>,
+    pub(super) shadow_uniform_buffer: wgpu::Buffer,
+    pub(super) comparison_sampler: wgpu::Sampler,
+    pub(super) fallback_shadow_depth_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    pub(super) fallback_shadow_depth_texture: wgpu::Texture,
+    pub(super) point_shadow_pass: Option<PointShadowPass>,
+    pub(super) spot_shadow_pass: Option<SpotShadowPass>,
+    pub(super) omni_shadow_uniform_buffer: wgpu::Buffer,
+    pub(super) fallback_point_shadow_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    pub(super) fallback_point_shadow_texture: wgpu::Texture,
+    pub(super) fallback_spot_shadow_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    pub(super) fallback_spot_shadow_texture: wgpu::Texture,
+}
+
+impl ShadowState {
+    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let shadow_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("esox_3d_shadow_uniforms"),
+            size: size_of::<ShadowUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Comparison sampler for shadow mapping.
+        let comparison_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("esox_3d_comparison_sampler"),
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Fallback 1x1 depth texture array (4 layers) for when shadows are disabled.
+        let fallback_shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_fallback_shadow_depth"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: MAX_SHADOW_CASCADES as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fallback_shadow_depth_view =
+            fallback_shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("esox_3d_fallback_shadow_depth_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+
+        // Fallback 1x1 depth texture arrays for point/spot shadows when disabled.
+        let fallback_point_shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_fallback_point_shadow_depth"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: (MAX_SHADOW_POINT_LIGHTS * 6) as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fallback_point_shadow_view =
+            fallback_point_shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("esox_3d_fallback_point_shadow_depth_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+
+        let fallback_spot_shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("esox_3d_fallback_spot_shadow_depth"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: MAX_SHADOW_SPOT_LIGHTS as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fallback_spot_shadow_view =
+            fallback_spot_shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("esox_3d_fallback_spot_shadow_depth_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+
+        // Clear all fallback shadow depth textures to 1.0 (fully lit) so that
+        // sampling them before real shadow passes run never produces garbage.
+        {
+            let clear_textures: &[(&wgpu::Texture, u32)] = &[
+                (&fallback_shadow_depth_texture, MAX_SHADOW_CASCADES as u32),
+                (&fallback_point_shadow_texture, (MAX_SHADOW_POINT_LIGHTS * 6) as u32),
+                (&fallback_spot_shadow_texture, MAX_SHADOW_SPOT_LIGHTS as u32),
+            ];
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("esox_3d_fallback_shadow_clear"),
+            });
+            for &(tex, layers) in clear_textures {
+                for layer in 0..layers {
+                    let view = tex.create_view(&wgpu::TextureViewDescriptor {
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: layer,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    });
+                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("esox_3d_fallback_shadow_clear_pass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                }
+            }
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // Omni shadow uniform buffer.
+        let omni_shadow_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("esox_3d_omni_shadow_uniforms"),
+            size: size_of::<OmniShadowUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            shadow_pass: None,
+            shadow_uniform_buffer,
+            comparison_sampler,
+            fallback_shadow_depth_view,
+            fallback_shadow_depth_texture,
+            point_shadow_pass: None,
+            spot_shadow_pass: None,
+            omni_shadow_uniform_buffer,
+            fallback_point_shadow_view,
+            fallback_point_shadow_texture,
+            fallback_spot_shadow_view,
+            fallback_spot_shadow_texture,
+        }
+    }
+}
+
 // ── ShadowPass ──
 
 /// Owns the shadow depth texture array, shadow pipeline, and per-cascade uniform
@@ -289,6 +457,8 @@ pub fn compute_cascade_matrices(
 /// for each cascade to render depth.
 pub struct ShadowPass {
     /// 2D array depth texture (`Depth32Float`, `MAX_SHADOW_CASCADES` layers).
+    /// Kept alive so the GPU texture isn't deallocated while the view is in use.
+    #[allow(dead_code)]
     pub(crate) depth_texture: wgpu::Texture,
     /// View of the entire depth texture array (for binding as a sampled texture).
     pub(crate) depth_view: wgpu::TextureView,
@@ -875,6 +1045,212 @@ impl SpotShadowPass {
                 light_vp: vp.to_cols_array_2d(),
             }),
         );
+    }
+}
+
+// ── Shadow pass encoding (Renderer3D integration) ──
+
+impl super::renderer::Renderer3D {
+    /// Encode CSM, point-light, and spot-light shadow passes.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode_shadow_passes(
+        &self,
+        gpu: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        camera: &Camera,
+        viewport_width: u32,
+        viewport_height: u32,
+        shadow_opaque_cmds: &[(u32, u32, u32)],
+    ) {
+        // ── Shadow pass (before scene) ──
+        // Skip shadow rendering when directional light intensity is negligible —
+        // CSM shadows only apply to the directional light, so there's nothing to shadow.
+        let dir_intensity = self.light_env.directional.intensity;
+        if let Some(shadow_pass) = &self.shadow_state.shadow_pass {
+            if shadow_pass.config.enabled && dir_intensity > 0.001 {
+                let aspect = viewport_width as f32 / viewport_height.max(1) as f32;
+                let shadow_uniforms = shadow_pass.update_cascades(
+                    &gpu.queue,
+                    camera,
+                    self.light_env.directional.direction,
+                    aspect,
+                );
+                gpu.queue.write_buffer(
+                    &self.shadow_state.shadow_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&shadow_uniforms),
+                );
+
+                // Render depth from light's perspective for each cascade.
+                // Use pre-cull draw data so shadow casters outside the camera
+                // frustum still cast visible shadows into the view.
+                let cascade_count = shadow_pass.config.cascade_count.clamp(2, MAX_SHADOW_CASCADES);
+                for cascade in 0..cascade_count {
+                    let mut pass = shadow_pass.begin_cascade_pass(encoder, cascade);
+
+                    // Bind mega-buffer and instance buffer, draw all opaque meshes.
+                    pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.mega_buffer.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+                    for &(mesh_raw, inst_offset, inst_count) in shadow_opaque_cmds {
+                        let mesh_idx = mesh_raw as usize;
+                        if mesh_idx >= self.mesh_regions.len() {
+                            continue;
+                        }
+                        let r = &self.mesh_regions[mesh_idx];
+                        pass.draw_indexed(
+                            r.index_offset..r.index_offset + r.index_count,
+                            r.vertex_offset as i32,
+                            inst_offset..inst_offset + inst_count,
+                        );
+                    }
+                }
+            } else {
+                // Write zeroed shadow uniforms (shadow_config.w = 0 -> shadow_factor returns 1).
+                let zeroed = ShadowUniforms {
+                    light_vp: [[[0.0; 4]; 4]; MAX_SHADOW_CASCADES],
+                    splits_count: [0.0; 4],
+                    shadow_config: [0.0, 0.0, 0.0, 0.0],
+                };
+                gpu.queue.write_buffer(
+                    &self.shadow_state.shadow_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&zeroed),
+                );
+            }
+        } else {
+            // No shadow pass: write zeroed shadow uniforms.
+            let zeroed = ShadowUniforms {
+                light_vp: [[[0.0; 4]; 4]; MAX_SHADOW_CASCADES],
+                splits_count: [0.0; 4],
+                shadow_config: [0.0, 0.0, 0.0, 0.0],
+            };
+            gpu.queue.write_buffer(
+                &self.shadow_state.shadow_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&zeroed),
+            );
+        }
+
+        // ── Point / Spot light shadow passes ──
+        {
+            let (point_shadow_count, spot_shadow_count) = self.light_env.shadow_casting_counts();
+            let mut omni = OmniShadowUniforms {
+                point_light_vp: [[[0.0; 4]; 4]; 24],
+                spot_light_vp: [[[0.0; 4]; 4]; MAX_SHADOW_SPOT_LIGHTS],
+                omni_config: [0.0; 4],
+                omni_config2: [0.0; 4],
+            };
+
+            let shadow_cfg = self
+                .shadow_state.shadow_pass
+                .as_ref()
+                .map(|sp| sp.config)
+                .unwrap_or_default();
+
+            // Point light shadows.
+            if let Some(point_pass) = &self.shadow_state.point_shadow_pass {
+                // Sort shadow-casters first (to_uniforms already did this).
+                let sorted_points: Vec<_> = self.light_env.point_lights.iter()
+                    .filter(|pl| pl.cast_shadows)
+                    .take(MAX_SHADOW_POINT_LIGHTS)
+                    .collect();
+
+                for (li, pl) in sorted_points.iter().enumerate() {
+                    let pos = glam::Vec3::from(pl.position);
+                    let face_mats = point_light_face_matrices(pos, pl.range);
+
+                    for (fi, mat) in face_mats.iter().enumerate() {
+                        let idx = li * 6 + fi;
+                        omni.point_light_vp[idx] = mat.to_cols_array_2d();
+                        point_pass.update_face(&gpu.queue, idx, mat);
+                    }
+
+                    // Render 6 depth-only passes for this point light.
+                    let pipeline = &self.shadow_state.shadow_pass.as_ref().unwrap().pipeline;
+                    for fi in 0..6 {
+                        let face_idx = li * 6 + fi;
+                        let mut pass = point_pass.begin_face_pass(encoder, face_idx, pipeline);
+
+                        pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.mega_buffer.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+                        for &(mesh_raw, inst_offset, inst_count) in shadow_opaque_cmds {
+                            let mesh_idx = mesh_raw as usize;
+                            let r = &self.mesh_regions[mesh_idx];
+                            pass.draw_indexed(
+                                r.index_offset..r.index_offset + r.index_count,
+                                r.vertex_offset as i32,
+                                inst_offset..inst_offset + inst_count,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Spot light shadows.
+            if let Some(spot_pass) = &self.shadow_state.spot_shadow_pass {
+                let sorted_spots: Vec<_> = self.light_env.spot_lights.iter()
+                    .filter(|sl| sl.cast_shadows)
+                    .take(MAX_SHADOW_SPOT_LIGHTS)
+                    .collect();
+
+                for (li, sl) in sorted_spots.iter().enumerate() {
+                    let pos = glam::Vec3::from(sl.position);
+                    let dir = glam::Vec3::from(sl.direction);
+                    let vp = spot_light_vp(pos, dir, sl.outer_cone_angle, sl.range);
+                    omni.spot_light_vp[li] = vp.to_cols_array_2d();
+                    spot_pass.update_layer(&gpu.queue, li, &vp);
+
+                    let pipeline = &self.shadow_state.shadow_pass.as_ref().unwrap().pipeline;
+                    let mut pass = spot_pass.begin_layer_pass(encoder, li, pipeline);
+
+                    pass.set_vertex_buffer(0, self.mega_buffer.vertex_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.mega_buffer.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+                    for &(mesh_raw, inst_offset, inst_count) in shadow_opaque_cmds {
+                        let mesh_idx = mesh_raw as usize;
+                        let r = &self.mesh_regions[mesh_idx];
+                        pass.draw_indexed(
+                            r.index_offset..r.index_offset + r.index_count,
+                            r.vertex_offset as i32,
+                            inst_offset..inst_offset + inst_count,
+                        );
+                    }
+                }
+            }
+
+            omni.omni_config = [
+                point_shadow_count as f32,
+                spot_shadow_count as f32,
+                shadow_cfg.point_depth_bias,
+                shadow_cfg.point_normal_bias,
+            ];
+            omni.omni_config2 = [
+                shadow_cfg.spot_depth_bias,
+                shadow_cfg.spot_normal_bias,
+                0.0,
+                0.0,
+            ];
+
+            gpu.queue.write_buffer(
+                &self.shadow_state.omni_shadow_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&omni),
+            );
+        }
     }
 }
 

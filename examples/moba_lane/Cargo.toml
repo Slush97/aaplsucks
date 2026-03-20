@@ -1,8 +1,0 @@
-[package]
-name = "moba_lane"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-esox_engine = { workspace = true, features = ["ui"] }
-tracing-subscriber = { workspace = true }

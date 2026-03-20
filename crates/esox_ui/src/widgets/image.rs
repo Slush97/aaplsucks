@@ -148,7 +148,7 @@ impl<'f> Ui<'f> {
         width: f32,
         height: f32,
     ) -> Response {
-        let rect = self.allocate_rect(width, height);
+        let rect = self.allocate_rect_keyed(id, width, height);
         self.register_widget(id, rect, WidgetKind::Button);
         let response = self.widget_response(id, rect);
 

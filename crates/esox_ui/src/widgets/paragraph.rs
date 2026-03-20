@@ -18,7 +18,7 @@ impl<'f> Ui<'f> {
 
         let (_, measured_h) = self.text.measure_text_wrapped(text, size, max_width, line_spacing);
         let total_height = measured_h + self.theme.label_pad_y;
-        let rect = self.allocate_rect(max_width, total_height);
+        let rect = self.allocate_rect_keyed(id, max_width, total_height);
 
         let lines = self.text.wrap_lines(text, size, max_width);
         let step = line_height + line_spacing;

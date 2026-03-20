@@ -134,10 +134,10 @@ impl MeshData {
                 let br = bl + 1;
 
                 if ring != 0 {
-                    indices.extend_from_slice(&[tl, bl, tr]);
+                    indices.extend_from_slice(&[tl, tr, bl]);
                 }
                 if ring != rings - 1 {
-                    indices.extend_from_slice(&[tr, bl, br]);
+                    indices.extend_from_slice(&[tr, br, bl]);
                 }
             }
         }
@@ -212,7 +212,7 @@ impl MeshData {
             let br = (i + 1) * 2;
             let tl = bl + 1;
             let tr = br + 1;
-            indices.extend_from_slice(&[bl, br, tl, tl, br, tr]);
+            indices.extend_from_slice(&[bl, tl, br, tl, tr, br]);
         }
 
         // Top cap.
@@ -234,7 +234,7 @@ impl MeshData {
         }
         for i in 0..segments {
             let rim = top_center + 1 + i;
-            indices.extend_from_slice(&[top_center, rim, rim + 1]);
+            indices.extend_from_slice(&[top_center, rim + 1, rim]);
         }
 
         // Bottom cap.
@@ -256,7 +256,7 @@ impl MeshData {
         }
         for i in 0..segments {
             let rim = bot_center + 1 + i;
-            indices.extend_from_slice(&[bot_center, rim + 1, rim]);
+            indices.extend_from_slice(&[bot_center, rim, rim + 1]);
         }
 
         Self { vertices, indices }
@@ -298,7 +298,7 @@ impl MeshData {
             let base = i * 2;
             let next_base = (i + 1) * 2;
             let apex = base + 1;
-            indices.extend_from_slice(&[base, next_base, apex]);
+            indices.extend_from_slice(&[base, apex, next_base]);
         }
 
         // Base cap.
@@ -320,7 +320,7 @@ impl MeshData {
         }
         for i in 0..segments {
             let rim = bot_center + 1 + i;
-            indices.extend_from_slice(&[bot_center, rim + 1, rim]);
+            indices.extend_from_slice(&[bot_center, rim, rim + 1]);
         }
 
         Self { vertices, indices }
@@ -375,7 +375,7 @@ impl MeshData {
                 let tr = tl + 1;
                 let bl = tl + stride;
                 let br = bl + 1;
-                indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+                indices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
             }
         }
 

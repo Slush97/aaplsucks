@@ -71,7 +71,7 @@ impl<'f> Ui<'f> {
     ) -> Response {
         let total_w = self.region.w;
         let h = self.theme.button_height;
-        let rect = self.allocate_rect(total_w, h);
+        let rect = self.allocate_rect_keyed(id, total_w, h);
         self.register_widget(id, rect, WidgetKind::TextInput);
 
         let mut response = self.widget_response(id, rect);

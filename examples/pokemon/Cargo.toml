@@ -1,0 +1,9 @@
+[package]
+name = "pokemon"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_engine = { workspace = true, features = ["rapier"] }
+tracing-subscriber = { workspace = true }
+image = { workspace = true }

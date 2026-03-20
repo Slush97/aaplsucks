@@ -45,7 +45,7 @@ impl<'f> Ui<'f> {
         let bg_color = self.resolve_bg();
         let fg_color = self.resolve_fg();
 
-        let rect = self.allocate_rect(btn_w, height);
+        let rect = self.allocate_rect_keyed(id, btn_w, height);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);
@@ -106,7 +106,7 @@ impl<'f> Ui<'f> {
     pub fn ghost_button(&mut self, id: u64, label: &str) -> Response {
         let label_w = self.text.measure_text(label, self.theme.font_size);
         let btn_w = (label_w + self.theme.input_padding * 4.0).max(self.theme.small_button_min_w);
-        let rect = self.allocate_rect(btn_w, self.theme.small_button_height);
+        let rect = self.allocate_rect_keyed(id, btn_w, self.theme.small_button_height);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);
@@ -195,7 +195,7 @@ impl<'f> Ui<'f> {
         bg_hover: esox_gfx::Color,
         text_color: esox_gfx::Color,
     ) -> Response {
-        let rect = self.allocate_rect(btn_w, self.theme.button_height);
+        let rect = self.allocate_rect_keyed(id, btn_w, self.theme.button_height);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);
@@ -249,7 +249,7 @@ impl<'f> Ui<'f> {
     pub fn small_button(&mut self, id: u64, label: &str, bg_color: Color) -> Response {
         let label_w = self.text.measure_text(label, self.theme.font_size);
         let btn_w = (label_w + self.theme.input_padding * 4.0).max(self.theme.small_button_min_w);
-        let rect = self.allocate_rect(btn_w, self.theme.small_button_height);
+        let rect = self.allocate_rect_keyed(id, btn_w, self.theme.small_button_height);
         self.register_widget(id, rect, WidgetKind::Button);
 
         let response = self.widget_response(id, rect);

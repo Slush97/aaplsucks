@@ -58,8 +58,11 @@ pub struct BloomPass {
     up_bind_groups: Vec<wgpu::BindGroup>,
     /// Linear sampler for bloom texture sampling.
     sampler: wgpu::Sampler,
-    /// Uniform buffer for per-pass bloom parameters.
-    params_buffer: wgpu::Buffer,
+    /// Per-pass uniform buffers for bloom parameters (one per downsample + one per upsample).
+    /// Separate buffers avoid the issue where multiple `queue.write_buffer` calls to the
+    /// same offset only preserve the last write.
+    down_params_buffers: Vec<wgpu::Buffer>,
+    up_params_buffers: Vec<wgpu::Buffer>,
     /// Scene texture dimensions used to detect resize.
     scene_width: u32,
     /// Scene texture dimensions used to detect resize.
@@ -86,14 +89,10 @@ impl BloomPass {
             ..Default::default()
         });
 
-        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bloom_params_buffer"),
-            size: size_of::<BloomParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let mips = Self::create_mip_chain(device, scene_width, scene_height, format);
+
+        let down_params_buffers = Self::create_params_buffers(device, mips.len(), "bloom_down_params");
+        let up_params_buffers = Self::create_params_buffers(device, mips.len().saturating_sub(1), "bloom_up_params");
 
         let down_bind_groups = Self::create_down_bind_groups(
             device,
@@ -101,7 +100,7 @@ impl BloomPass {
             scene_sample_view,
             &mips,
             &sampler,
-            &params_buffer,
+            &down_params_buffers,
         );
 
         let up_bind_groups = Self::create_up_bind_groups(
@@ -109,7 +108,7 @@ impl BloomPass {
             &bind_group_layout,
             &mips,
             &sampler,
-            &params_buffer,
+            &up_params_buffers,
         );
 
         Self {
@@ -118,7 +117,8 @@ impl BloomPass {
             down_bind_groups,
             up_bind_groups,
             sampler,
-            params_buffer,
+            down_params_buffers,
+            up_params_buffers,
             scene_width,
             scene_height,
             format,
@@ -139,20 +139,22 @@ impl BloomPass {
         self.scene_width = scene_width;
         self.scene_height = scene_height;
         self.mips = Self::create_mip_chain(device, scene_width, scene_height, self.format);
+        self.down_params_buffers = Self::create_params_buffers(device, self.mips.len(), "bloom_down_params");
+        self.up_params_buffers = Self::create_params_buffers(device, self.mips.len().saturating_sub(1), "bloom_up_params");
         self.down_bind_groups = Self::create_down_bind_groups(
             device,
             &self.bind_group_layout,
             scene_sample_view,
             &self.mips,
             &self.sampler,
-            &self.params_buffer,
+            &self.down_params_buffers,
         );
         self.up_bind_groups = Self::create_up_bind_groups(
             device,
             &self.bind_group_layout,
             &self.mips,
             &self.sampler,
-            &self.params_buffer,
+            &self.up_params_buffers,
         );
         true
     }
@@ -169,7 +171,7 @@ impl BloomPass {
             scene_sample_view,
             &self.mips,
             &self.sampler,
-            &self.params_buffer,
+            &self.down_params_buffers,
         );
     }
 
@@ -193,6 +195,7 @@ impl BloomPass {
         }
 
         // ── Downsample chain: scene → mip0 → mip1 → ... → mip[N-1] ──
+        // Each pass writes to its own params buffer to avoid write_buffer coalescing.
         for i in 0..mip_count {
             let (src_w, src_h) = if i == 0 {
                 (self.scene_width, self.scene_height)
@@ -200,14 +203,12 @@ impl BloomPass {
                 (self.mips[i - 1].width, self.mips[i - 1].height)
             };
 
-            // Only the first downsample (scene → mip0) applies the brightness
-            // threshold. Subsequent levels just blur.
             let params = BloomParams {
                 texel_size: [1.0 / src_w.max(1) as f32, 1.0 / src_h.max(1) as f32],
                 threshold: if i == 0 { threshold } else { 0.0 },
                 soft_knee: if i == 0 { soft_knee } else { 0.0 },
             };
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+            queue.write_buffer(&self.down_params_buffers[i], 0, bytemuck::bytes_of(&params));
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bloom_downsample"),
@@ -230,7 +231,6 @@ impl BloomPass {
         }
 
         // ── Upsample chain: mip[N-1] → mip[N-2] → ... → mip0 ──
-        // Uses additive blending to accumulate bloom.
         for i in (0..mip_count - 1).rev() {
             let src_w = self.mips[i + 1].width;
             let src_h = self.mips[i + 1].height;
@@ -240,7 +240,7 @@ impl BloomPass {
                 threshold: 0.0,
                 soft_knee: 0.0,
             };
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+            queue.write_buffer(&self.up_params_buffers[i], 0, bytemuck::bytes_of(&params));
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bloom_upsample"),
@@ -356,6 +356,20 @@ impl BloomPass {
         mips
     }
 
+    /// Create per-pass params buffers.
+    fn create_params_buffers(device: &wgpu::Device, count: usize, label: &str) -> Vec<wgpu::Buffer> {
+        (0..count)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{label}_{i}")),
+                    size: size_of::<BloomParams>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect()
+    }
+
     /// Create downsample bind groups: scene → mip0, mip0 → mip1, ...
     fn create_down_bind_groups(
         device: &wgpu::Device,
@@ -363,7 +377,7 @@ impl BloomPass {
         scene_view: &wgpu::TextureView,
         mips: &[BloomMip],
         sampler: &wgpu::Sampler,
-        params_buffer: &wgpu::Buffer,
+        params_buffers: &[wgpu::Buffer],
     ) -> Vec<wgpu::BindGroup> {
         let mut groups = Vec::with_capacity(mips.len());
 
@@ -388,7 +402,7 @@ impl BloomPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: params_buffer.as_entire_binding(),
+                        resource: params_buffers[i].as_entire_binding(),
                     },
                 ],
             }));
@@ -403,7 +417,7 @@ impl BloomPass {
         layout: &wgpu::BindGroupLayout,
         mips: &[BloomMip],
         sampler: &wgpu::Sampler,
-        params_buffer: &wgpu::Buffer,
+        params_buffers: &[wgpu::Buffer],
     ) -> Vec<wgpu::BindGroup> {
         let mut groups = Vec::with_capacity(mips.len().saturating_sub(1));
 
@@ -424,7 +438,7 @@ impl BloomPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: params_buffer.as_entire_binding(),
+                        resource: params_buffers[i].as_entire_binding(),
                     },
                 ],
             }));
@@ -471,10 +485,25 @@ struct BloomParams {
 /// On the first downsample (threshold > 0), applies a soft brightness prefilter
 /// so only HDR-bright pixels contribute to bloom.
 pub const BLOOM_DOWNSAMPLE_FRAGMENT: &str = r"
+// Clamp HDR sample to prevent Inf/NaN from entering the bloom chain.
+fn safe_hdr(s: vec4<f32>) -> vec4<f32> {
+    return clamp(s, vec4<f32>(0.0), vec4<f32>(65000.0));
+}
+
+// Luminance helper.
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Karis average weight: suppresses extremely bright pixels to prevent fireflies.
+fn karis_weight(color: vec3<f32>) -> f32 {
+    return 1.0 / (1.0 + luma(color));
+}
+
 // Soft brightness thresholding: smoothly ramps from 0 at (threshold - knee)
 // to full brightness at (threshold + knee). Returns the color contribution.
 fn prefilter(color: vec3<f32>, threshold: f32, knee: f32) -> vec3<f32> {
-    let brightness = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let brightness = luma(color);
     // Soft knee curve: quadratic ramp in the transition region.
     let soft = brightness - threshold + knee;
     let soft_clamped = clamp(soft, 0.0, 2.0 * knee);
@@ -490,11 +519,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let ts = params.texel_size;
 
-    var center = textureSample(src_texture, src_sampler, uv);
-    var tl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x, -ts.y));
-    var tr = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x, -ts.y));
-    var bl = textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x,  ts.y));
-    var br = textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x,  ts.y));
+    var center = safe_hdr(textureSample(src_texture, src_sampler, uv));
+    var tl = safe_hdr(textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x, -ts.y)));
+    var tr = safe_hdr(textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x, -ts.y)));
+    var bl = safe_hdr(textureSample(src_texture, src_sampler, uv + vec2<f32>(-ts.x,  ts.y)));
+    var br = safe_hdr(textureSample(src_texture, src_sampler, uv + vec2<f32>( ts.x,  ts.y)));
 
     // Apply brightness threshold on first downsample only (threshold > 0).
     if params.threshold > 0.0 {
@@ -503,6 +532,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         tr = vec4<f32>(prefilter(tr.rgb, params.threshold, params.soft_knee), tr.a);
         bl = vec4<f32>(prefilter(bl.rgb, params.threshold, params.soft_knee), bl.a);
         br = vec4<f32>(prefilter(br.rgb, params.threshold, params.soft_knee), br.a);
+
+        // Karis average: weight each sample by 1/(1+luma) to suppress fireflies.
+        let wc = karis_weight(center.rgb);
+        let wtl = karis_weight(tl.rgb);
+        let wtr = karis_weight(tr.rgb);
+        let wbl = karis_weight(bl.rgb);
+        let wbr = karis_weight(br.rgb);
+        let total = wc * 4.0 + wtl + wtr + wbl + wbr;
+        return (center * wc * 4.0 + tl * wtl + tr * wtr + bl * wbl + br * wbr) / total;
     }
 
     return (center * 4.0 + tl + tr + bl + br) / 8.0;

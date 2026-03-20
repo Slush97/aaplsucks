@@ -1,0 +1,11 @@
+[package]
+name = "pokemon_viewer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_gfx = { workspace = true, features = ["mesh3d"] }
+esox_platform = { workspace = true }
+glam = "0.29"
+tracing-subscriber = { workspace = true }
+wgpu = { workspace = true }

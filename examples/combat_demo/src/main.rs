@@ -412,7 +412,10 @@ impl Game for CombatDemo {
             bloom_soft_knee: 0.1,
             tone_map_enabled: true,
             ssao_enabled: true,
-            motion_blur_enabled: false,
+            fog_enabled: false,
+            fog_color: [0.75, 0.82, 0.90],
+            fog_start: 50.0,
+            fog_end: 200.0,
         });
     }
 

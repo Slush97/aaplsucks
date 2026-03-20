@@ -27,7 +27,7 @@ impl<'f> Ui<'f> {
     ) -> Response {
         let scrollbar_w = self.theme.scrollbar_width;
         let content_width = self.region.w - scrollbar_w;
-        let container = self.allocate_rect(self.region.w, visible_height);
+        let container = self.allocate_rect_keyed(id, self.region.w, visible_height);
 
         let content_height = state.item_count as f32 * item_height;
         let max_scroll = (content_height - visible_height).max(0.0);

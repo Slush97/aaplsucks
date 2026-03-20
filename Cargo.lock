@@ -859,22 +859,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "dungeon"
-version = "0.1.0"
-dependencies = [
- "esox_engine",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "dungeon_explorer"
-version = "0.1.0"
-dependencies = [
- "esox_engine",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "editor"
 version = "0.1.0"
 dependencies = [
@@ -1994,14 +1978,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "moba_lane"
-version = "0.1.0"
-dependencies = [
- "esox_engine",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2774,6 +2750,26 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
+]
+
+[[package]]
+name = "pokemon"
+version = "0.1.0"
+dependencies = [
+ "esox_engine",
+ "image",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pokemon_viewer"
+version = "0.1.0"
+dependencies = [
+ "esox_gfx",
+ "esox_platform",
+ "glam 0.29.3",
+ "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]

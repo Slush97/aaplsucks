@@ -953,29 +953,55 @@ impl ApplicationHandler<AppUserEvent> for App {
         self.clear_color = clear.premultiplied();
 
         // Query the monitor refresh rate for frame throttling.
+        // Filter video modes to the monitor's native resolution so we don't
+        // pick up a higher Hz from a lower resolution (e.g. 1080p@240 on a
+        // 4K@144 panel). Fall back to 240Hz when no modes are reported
+        // (common on Wayland) so the GPU present mode provides real sync.
         if let Some(monitor) = window.current_monitor() {
+            let native_size = monitor.size();
             let modes: Vec<_> = monitor.video_modes().collect();
-            if let Some(hz) = modes
+
+            // Best: max Hz at the monitor's current resolution.
+            let hz_at_native = modes
+                .iter()
+                .filter(|m| m.size() == native_size)
+                .map(|m| (m.refresh_rate_millihertz() + 999) / 1000)
+                .max()
+                .filter(|&hz| hz > 0);
+
+            if let Some(hz) = hz_at_native {
+                self.monitor_refresh_hz = hz;
+                tracing::info!(
+                    "monitor: {:?}, {}x{} @ {}Hz ({} modes total)",
+                    monitor.name(),
+                    native_size.width,
+                    native_size.height,
+                    hz,
+                    modes.len(),
+                );
+            } else if let Some(hz) = modes
                 .iter()
                 .map(|m| (m.refresh_rate_millihertz() + 999) / 1000)
                 .max()
                 .filter(|&hz| hz > 0)
             {
+                // No modes at native size — use max across all modes as last resort.
                 self.monitor_refresh_hz = hz;
+                tracing::info!(
+                    "monitor: {:?}, no modes at {}x{}, best across all: {}Hz",
+                    monitor.name(),
+                    native_size.width,
+                    native_size.height,
+                    hz,
+                );
             } else {
-                // On Wayland, video_modes() often returns an empty list.
-                // Default to 240Hz so we don't artificially cap below the
-                // actual refresh rate — the GPU present mode (Mailbox/Fifo)
-                // will still provide the real sync.
                 self.monitor_refresh_hz = 240;
-                tracing::info!("no video modes reported (Wayland?), defaulting to {}Hz cap", self.monitor_refresh_hz);
+                tracing::info!(
+                    "monitor: {:?}, no video modes reported (Wayland?), defaulting to {}Hz cap",
+                    monitor.name(),
+                    self.monitor_refresh_hz,
+                );
             }
-            tracing::info!(
-                "monitor: {:?}, {} video modes, detected {}Hz",
-                monitor.name(),
-                modes.len(),
-                self.monitor_refresh_hz,
-            );
         } else {
             self.monitor_refresh_hz = 240;
             tracing::warn!("no monitor detected, defaulting to {}Hz cap", self.monitor_refresh_hz);

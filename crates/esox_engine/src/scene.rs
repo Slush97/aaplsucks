@@ -112,9 +112,14 @@ pub struct SerializedCollider {
     pub restitution: f32,
     #[serde(default)]
     pub is_sensor: bool,
+    #[serde(default = "default_collision_bits")]
+    pub collision_group: u32,
+    #[serde(default = "default_collision_bits")]
+    pub collision_mask: u32,
 }
 
 fn default_friction() -> f32 { 0.5 }
+fn default_collision_bits() -> u32 { 0xFFFF_FFFF }
 
 /// Serializable collider shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +127,8 @@ pub enum SerializedColliderShape {
     Box { half_extents: [f32; 3] },
     Sphere { radius: f32 },
     Capsule { half_height: f32, radius: f32 },
+    ConvexHull { points: Vec<[f32; 3]> },
+    TriMesh { vertices: Vec<[f32; 3]>, indices: Vec<[u32; 3]> },
 }
 
 impl From<ColliderShape> for SerializedColliderShape {
@@ -132,6 +139,13 @@ impl From<ColliderShape> for SerializedColliderShape {
             },
             ColliderShape::Sphere { radius } => Self::Sphere { radius },
             ColliderShape::Capsule { half_height, radius } => Self::Capsule { half_height, radius },
+            ColliderShape::ConvexHull { points } => Self::ConvexHull {
+                points: points.iter().map(|p| [p.x, p.y, p.z]).collect(),
+            },
+            ColliderShape::TriMesh { vertices, indices } => Self::TriMesh {
+                vertices: vertices.iter().map(|v| [v.x, v.y, v.z]).collect(),
+                indices,
+            },
         }
     }
 }
@@ -146,6 +160,13 @@ impl From<SerializedColliderShape> for ColliderShape {
             SerializedColliderShape::Capsule { half_height, radius } => {
                 Self::Capsule { half_height, radius }
             }
+            SerializedColliderShape::ConvexHull { points } => Self::ConvexHull {
+                points: points.into_iter().map(Vec3::from).collect(),
+            },
+            SerializedColliderShape::TriMesh { vertices, indices } => Self::TriMesh {
+                vertices: vertices.into_iter().map(Vec3::from).collect(),
+                indices,
+            },
         }
     }
 }
@@ -230,10 +251,12 @@ pub fn save_scene(world: &World, assets: &AssetManager) -> SceneFile {
             .get::<&ColliderComponent>(entity)
             .ok()
             .map(|c| SerializedCollider {
-                shape: c.shape.into(),
+                shape: c.shape.clone().into(),
                 friction: c.friction,
                 restitution: c.restitution,
                 is_sensor: c.is_sensor,
+                collision_group: c.collision_group,
+                collision_mask: c.collision_mask,
             });
 
         // TriggerVolume implies a sensor collider; if we have one but no
@@ -394,6 +417,8 @@ pub fn load_scene(
                     friction: c.friction,
                     restitution: c.restitution,
                     is_sensor: c.is_sensor,
+                    collision_group: c.collision_group,
+                    collision_mask: c.collision_mask,
                 });
                 let body_type: BodyType = rb.body_type.into();
                 let handle = physics.add_body(BodyDesc {
@@ -410,6 +435,8 @@ pub fn load_scene(
                         friction: c.friction,
                         restitution: c.restitution,
                         is_sensor: c.is_sensor,
+                        collision_group: c.collision_group,
+                        collision_mask: c.collision_mask,
                     });
                     if c.is_sensor {
                         let _ = world.insert_one(entity, TriggerVolume { tag: None });
@@ -423,6 +450,8 @@ pub fn load_scene(
                 friction: c.friction,
                 restitution: c.restitution,
                 is_sensor: c.is_sensor,
+                collision_group: c.collision_group,
+                collision_mask: c.collision_mask,
             });
         }
 

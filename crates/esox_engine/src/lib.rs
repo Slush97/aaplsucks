@@ -24,6 +24,7 @@
 pub mod animation_graph;
 pub mod assets;
 pub mod audio;
+pub mod camera;
 #[cfg(feature = "ui")]
 pub mod debug_overlay;
 pub mod ecs;
@@ -50,6 +51,7 @@ pub use ecs::{
 pub use engine::EngineConfig;
 pub use game::Game;
 pub use input::{ActionBinding, AxisBinding, InputManager, MouseAxis};
+pub use camera::{FpsCameraController, FollowCameraController, OrbitCameraController};
 pub use physics::{
     BodyDesc, BodyHandle, BodyType, ColliderDesc, ColliderShape, ContactEvent, NullPhysics,
     PhysicsBackend, RayHit, TriggerEvent, TriggerPhase,
@@ -81,6 +83,25 @@ pub struct Ctx<'a> {
     pub viewport: (u32, u32),
     #[cfg(feature = "audio")]
     pub audio: Option<&'a mut audio::AudioManager>,
+}
+
+impl<'a> Ctx<'a> {
+    /// Create a physics body, map it to an entity, and insert a [`RigidBodyComponent`].
+    ///
+    /// This is the recommended way to add physics to an entity. It replaces the
+    /// three-step pattern of calling `physics.add_body()`, `entity_map.insert()`,
+    /// and `world.insert_one(RigidBodyComponent { .. })` manually.
+    pub fn spawn_physics_body(
+        &mut self,
+        entity: hecs::Entity,
+        desc: BodyDesc,
+    ) -> BodyHandle {
+        let body_type = desc.body_type;
+        let handle = self.physics.add_body(desc);
+        self.entity_map.insert(handle, entity);
+        let _ = self.world.insert_one(entity, RigidBodyComponent { handle, body_type });
+        handle
+    }
 }
 
 /// Run the engine with the given config and game implementation.

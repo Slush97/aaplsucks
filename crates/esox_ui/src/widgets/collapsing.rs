@@ -42,7 +42,7 @@ impl<'f> Ui<'f> {
         let pad = self.theme.input_padding;
 
         // Draw header row.
-        let rect = self.allocate_rect(self.region.w, item_h);
+        let rect = self.allocate_rect_keyed(id, self.region.w, item_h);
         self.register_widget(id, rect, WidgetKind::Button);
         let mut response = self.widget_response(id, rect);
 

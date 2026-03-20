@@ -101,12 +101,16 @@ fn f32_to_f16_bytes(value: f32) -> [u8; 2] {
 /// Owns irradiance cubemap, prefiltered environment map, and BRDF integration LUT.
 pub struct IblState {
     /// Diffuse irradiance cubemap (32x32 per face).
+    /// Kept alive so the GPU texture isn't deallocated while the view is in use.
+    #[allow(dead_code)]
     pub(crate) irradiance_texture: wgpu::Texture,
     pub(crate) irradiance_view: wgpu::TextureView,
     /// Specular prefiltered environment map (128x128 per face, 5 mip levels).
+    #[allow(dead_code)]
     pub(crate) prefiltered_texture: wgpu::Texture,
     pub(crate) prefiltered_view: wgpu::TextureView,
     /// BRDF integration LUT (256x256, Rg16Float).
+    #[allow(dead_code)]
     pub(crate) brdf_lut_texture: wgpu::Texture,
     pub(crate) brdf_lut_view: wgpu::TextureView,
 }

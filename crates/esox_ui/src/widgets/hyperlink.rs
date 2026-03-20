@@ -16,7 +16,7 @@ impl<'f> Ui<'f> {
         let text_w = self.text.measure_text(label, font_size);
         let h = self.theme.item_height;
 
-        let rect = self.allocate_rect(text_w, h);
+        let rect = self.allocate_rect_keyed(id, text_w, h);
         self.register_widget(id, rect, WidgetKind::Hyperlink);
         let response = self.widget_response(id, rect);
 

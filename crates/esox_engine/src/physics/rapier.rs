@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use rapier3d::na::UnitQuaternion;
+use rapier3d::parry::query::details::ShapeCastOptions;
 
 use super::{
     BodyDesc, BodyHandle, BodyType, ColliderDesc, ColliderShape, ContactEvent, PhysicsBackend,
@@ -72,23 +73,42 @@ impl RapierPhysics {
         h
     }
 
-    fn build_collider(desc: &ColliderDesc) -> Collider {
-        let shape: SharedShape = match desc.shape {
+    /// Convert an engine `ColliderShape` into a rapier `SharedShape`.
+    fn shared_shape(shape: &ColliderShape) -> SharedShape {
+        match shape {
             ColliderShape::Box { half_extents } => SharedShape::cuboid(
                 half_extents.x,
                 half_extents.y,
                 half_extents.z,
             ),
-            ColliderShape::Sphere { radius } => SharedShape::ball(radius),
+            ColliderShape::Sphere { radius } => SharedShape::ball(*radius),
             ColliderShape::Capsule {
                 half_height,
                 radius,
-            } => SharedShape::capsule_y(half_height, radius),
-        };
+            } => SharedShape::capsule_y(*half_height, *radius),
+            ColliderShape::ConvexHull { points } => {
+                let pts: Vec<_> = points.iter().map(|p| point![p.x, p.y, p.z]).collect();
+                SharedShape::convex_hull(&pts)
+                    .unwrap_or_else(|| SharedShape::ball(0.01))
+            }
+            ColliderShape::TriMesh { vertices, indices } => {
+                let verts: Vec<_> = vertices.iter().map(|v| point![v.x, v.y, v.z]).collect();
+                let idx: Vec<_> = indices.to_vec();
+                SharedShape::trimesh(verts, idx)
+            }
+        }
+    }
+
+    fn build_collider(desc: &ColliderDesc) -> Collider {
+        let shape = Self::shared_shape(&desc.shape);
 
         let mut builder = ColliderBuilder::new(shape)
             .friction(desc.friction)
-            .restitution(desc.restitution);
+            .restitution(desc.restitution)
+            .collision_groups(InteractionGroups::new(
+                Group::from_bits_truncate(desc.collision_group),
+                Group::from_bits_truncate(desc.collision_mask),
+            ));
 
         if desc.is_sensor {
             builder = builder
@@ -366,6 +386,132 @@ impl PhysicsBackend for RapierPhysics {
     fn set_gravity(&mut self, gravity: Vec3) {
         self.gravity = vector![gravity.x, gravity.y, gravity.z];
     }
+
+    fn get_linear_velocity(&self, handle: BodyHandle) -> Option<Vec3> {
+        let rb_handle = self.handle_map.get(&handle)?;
+        let rb = self.bodies.get(*rb_handle)?;
+        let v = rb.linvel();
+        Some(Vec3::new(v.x, v.y, v.z))
+    }
+
+    fn set_linear_velocity(&mut self, handle: BodyHandle, vel: Vec3) {
+        if let Some(&rb_handle) = self.handle_map.get(&handle) {
+            if let Some(rb) = self.bodies.get_mut(rb_handle) {
+                rb.set_linvel(vector![vel.x, vel.y, vel.z], true);
+            }
+        }
+    }
+
+    fn get_angular_velocity(&self, handle: BodyHandle) -> Option<Vec3> {
+        let rb_handle = self.handle_map.get(&handle)?;
+        let rb = self.bodies.get(*rb_handle)?;
+        let v = rb.angvel();
+        Some(Vec3::new(v.x, v.y, v.z))
+    }
+
+    fn set_angular_velocity(&mut self, handle: BodyHandle, vel: Vec3) {
+        if let Some(&rb_handle) = self.handle_map.get(&handle) {
+            if let Some(rb) = self.bodies.get_mut(rb_handle) {
+                rb.set_angvel(vector![vel.x, vel.y, vel.z], true);
+            }
+        }
+    }
+
+    fn overlap_sphere(&self, center: Vec3, radius: f32) -> Vec<BodyHandle> {
+        let shape = SharedShape::ball(radius);
+        let iso = Isometry::translation(center.x, center.y, center.z);
+        let mut handles = Vec::new();
+        let mut seen = HashSet::new();
+
+        self.query_pipeline.intersections_with_shape(
+            &self.bodies,
+            &self.colliders,
+            &iso,
+            shape.as_ref(),
+            QueryFilter::default(),
+            |collider_handle| {
+                if let Some(parent) = self.colliders.get(collider_handle).and_then(|c| c.parent()) {
+                    if let Some(&engine_handle) = self.reverse_map.get(&parent) {
+                        if seen.insert(engine_handle) {
+                            handles.push(engine_handle);
+                        }
+                    }
+                }
+                true // continue searching
+            },
+        );
+
+        handles
+    }
+
+    fn overlap_box(&self, center: Vec3, half_extents: Vec3) -> Vec<BodyHandle> {
+        let shape = SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z);
+        let iso = Isometry::translation(center.x, center.y, center.z);
+        let mut handles = Vec::new();
+        let mut seen = HashSet::new();
+
+        self.query_pipeline.intersections_with_shape(
+            &self.bodies,
+            &self.colliders,
+            &iso,
+            shape.as_ref(),
+            QueryFilter::default(),
+            |collider_handle| {
+                if let Some(parent) = self.colliders.get(collider_handle).and_then(|c| c.parent()) {
+                    if let Some(&engine_handle) = self.reverse_map.get(&parent) {
+                        if seen.insert(engine_handle) {
+                            handles.push(engine_handle);
+                        }
+                    }
+                }
+                true
+            },
+        );
+
+        handles
+    }
+
+    fn shape_cast(
+        &self,
+        shape: &ColliderShape,
+        from: Vec3,
+        dir: Vec3,
+        max_dist: f32,
+    ) -> Option<RayHit> {
+        let shared = RapierPhysics::shared_shape(shape);
+        let iso = Isometry::translation(from.x, from.y, from.z);
+        let vel = vector![dir.x, dir.y, dir.z];
+
+        let (collider_handle, toi) = self.query_pipeline.cast_shape(
+            &self.bodies,
+            &self.colliders,
+            &iso,
+            &vel,
+            shared.as_ref(),
+            ShapeCastOptions {
+                max_time_of_impact: max_dist,
+                ..Default::default()
+            },
+            QueryFilter::default(),
+        )?;
+
+        let collider = self.colliders.get(collider_handle)?;
+        let hit_point = from + dir * toi.time_of_impact;
+        let normal = Vec3::new(toi.normal1.x, toi.normal1.y, toi.normal1.z);
+
+        let body_handle = collider
+            .parent()
+            .and_then(|rb| self.reverse_map.get(&rb))
+            .copied()
+            .unwrap_or(BodyHandle(0));
+
+        Some(RayHit {
+            point: hit_point,
+            normal,
+            distance: toi.time_of_impact,
+            body: body_handle,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -569,5 +715,112 @@ mod tests {
         assert!(physics.query_transform(handle).is_some());
         physics.remove_body(handle);
         assert!(physics.query_transform(handle).is_none());
+    }
+
+    #[test]
+    fn velocity_read_write() {
+        let mut physics = RapierPhysics::new(Vec3::ZERO);
+        let handle = physics.add_body(BodyDesc {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Dynamic,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Sphere { radius: 0.5 },
+                ..Default::default()
+            }),
+        });
+
+        physics.set_linear_velocity(handle, Vec3::new(1.0, 2.0, 3.0));
+        let v = physics.get_linear_velocity(handle).unwrap();
+        assert!((v - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5);
+
+        physics.set_angular_velocity(handle, Vec3::new(0.0, 5.0, 0.0));
+        let av = physics.get_angular_velocity(handle).unwrap();
+        assert!((av.y - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn overlap_sphere_finds_bodies() {
+        let mut physics = RapierPhysics::new(Vec3::ZERO);
+
+        // Body inside the query sphere.
+        let inside = physics.add_body(BodyDesc {
+            position: Vec3::new(1.0, 0.0, 0.0),
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Static,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Sphere { radius: 0.5 },
+                ..Default::default()
+            }),
+        });
+
+        // Body far outside.
+        physics.add_body(BodyDesc {
+            position: Vec3::new(100.0, 0.0, 0.0),
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Static,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Sphere { radius: 0.5 },
+                ..Default::default()
+            }),
+        });
+
+        physics.step(1.0 / 60.0);
+
+        let hits = physics.overlap_sphere(Vec3::ZERO, 5.0);
+        assert!(hits.contains(&inside), "should find the nearby body");
+        assert_eq!(hits.len(), 1, "should not find the far body");
+    }
+
+    #[test]
+    fn overlap_box_finds_bodies() {
+        let mut physics = RapierPhysics::new(Vec3::ZERO);
+
+        let inside = physics.add_body(BodyDesc {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Static,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Box {
+                    half_extents: Vec3::splat(0.5),
+                },
+                ..Default::default()
+            }),
+        });
+
+        physics.step(1.0 / 60.0);
+
+        let hits = physics.overlap_box(Vec3::ZERO, Vec3::splat(2.0));
+        assert!(hits.contains(&inside));
+    }
+
+    #[test]
+    fn shape_cast_hits_body() {
+        let mut physics = RapierPhysics::new(Vec3::ZERO);
+
+        physics.add_body(BodyDesc {
+            position: Vec3::new(0.0, 0.0, 10.0),
+            rotation: Quat::IDENTITY,
+            body_type: BodyType::Static,
+            collider: Some(ColliderDesc {
+                shape: ColliderShape::Box {
+                    half_extents: Vec3::splat(1.0),
+                },
+                ..Default::default()
+            }),
+        });
+
+        physics.step(1.0 / 60.0);
+
+        let hit = physics.shape_cast(
+            &ColliderShape::Sphere { radius: 0.5 },
+            Vec3::ZERO,
+            Vec3::Z,
+            100.0,
+        );
+        assert!(hit.is_some(), "shape cast should hit the box");
+        let hit = hit.unwrap();
+        assert!(hit.distance < 10.0, "should hit before z=10");
+        assert!(hit.distance > 5.0, "should not hit too early");
     }
 }

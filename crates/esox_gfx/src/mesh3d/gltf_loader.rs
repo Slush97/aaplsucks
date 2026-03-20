@@ -405,6 +405,9 @@ fn convert_material(
         metallic_roughness_texture: mr_tex_idx.map(|i| TextureHandle(i as u32)),
         emissive_texture: emissive_tex_idx.map(|i| TextureHandle(i as u32)),
         normal_scale,
+        toon_bands: 3.0,
+        rim_power: 3.0,
+        rim_intensity: 0.4,
     }
 }
 

@@ -13,7 +13,7 @@ use esox_engine::*;
 use esox_engine::glam::{Quat, Vec3};
 use esox_gfx::mesh3d::{
     Aabb, AnimationPlayer, GltfScene, MaterialDescriptor, MaterialType,
-    MeshData, ParticlePoolHandle, PostProcess3DConfig, ShadowConfig, SsaoConfig,
+    MeshData, PostProcess3DConfig, ShadowConfig, SsaoConfig,
 };
 
 use std::f32::consts::{FRAC_PI_4, TAU};
@@ -110,10 +110,6 @@ struct GameAudio {
 // ── Particles ──
 
 struct ParticleEffects {
-    particle_mat: esox_gfx::mesh3d::MaterialHandle,
-    jump_pool: ParticlePoolHandle,
-    collect_pool: ParticlePoolHandle,
-    win_pool: ParticlePoolHandle,
     /// Entity for the jump dust emitter (burst-only, dormant).
     jump_emitter: hecs::Entity,
     /// Entity for the collect sparkle emitter (burst-only, dormant).
@@ -136,8 +132,7 @@ struct Platformer {
     coyote_timer: u32,
 
     camera_entity: Option<hecs::Entity>,
-    orbit_angle: f32,
-    orbit_target: f32,
+    orbit: OrbitCameraController,
 
     platforms: Vec<PlatformRuntime>,
     collectibles: Vec<CollectibleState>,
@@ -165,8 +160,12 @@ impl Platformer {
             coyote_timer: 0,
 
             camera_entity: None,
-            orbit_angle: 0.0,
-            orbit_target: 0.0,
+            orbit: {
+                let mut o = OrbitCameraController::new(CAM_DISTANCE, CAM_PITCH);
+                o.height_offset = CAM_HEIGHT_OFFSET;
+                o.lerp_speed = ORBIT_LERP_SPEED;
+                o
+            },
 
             platforms: Vec::new(),
             collectibles: Vec::new(),
@@ -181,18 +180,6 @@ impl Platformer {
         }
     }
 
-    fn player_aabb(&self) -> Aabb {
-        Aabb::new(self.player_pos - PLAYER_HALF, self.player_pos + PLAYER_HALF)
-    }
-
-    fn camera_position(&self, target: Vec3) -> Vec3 {
-        let (sin_o, cos_o) = self.orbit_angle.sin_cos();
-        Vec3::new(
-            target.x + CAM_DISTANCE * CAM_PITCH.cos() * sin_o,
-            target.y + CAM_HEIGHT_OFFSET + CAM_DISTANCE * CAM_PITCH.sin(),
-            target.z + CAM_DISTANCE * CAM_PITCH.cos() * cos_o,
-        )
-    }
 }
 
 impl Game for Platformer {
@@ -317,18 +304,6 @@ impl Game for Platformer {
             if def.collectible {
                 let coll_pos = Vec3::new(def.center.x, def.center.y + def.half_extents.y + 0.5, def.center.z);
 
-                // Create a sensor body for trigger-based pickup detection.
-                let coll_handle = ctx.physics.add_body(BodyDesc {
-                    position: coll_pos,
-                    rotation: Quat::IDENTITY,
-                    body_type: BodyType::Static,
-                    collider: Some(ColliderDesc {
-                        shape: ColliderShape::Box { half_extents: COLLECTIBLE_HALF },
-                        is_sensor: true,
-                        ..ColliderDesc::default()
-                    }),
-                });
-
                 let coll_entity = ctx.world.spawn((
                     Transform3D {
                         position: coll_pos,
@@ -342,14 +317,18 @@ impl Game for Platformer {
                         visible: true,
                     },
                     TriggerVolume { tag: Some("collectible") },
-                    RigidBodyComponent {
-                        handle: coll_handle,
-                        body_type: BodyType::Static,
-                    },
                 ));
 
-                // Register in entity map so trigger events can resolve to entities.
-                ctx.entity_map.insert(coll_handle, coll_entity);
+                let coll_handle = ctx.spawn_physics_body(coll_entity, BodyDesc {
+                    position: coll_pos,
+                    rotation: Quat::IDENTITY,
+                    body_type: BodyType::Static,
+                    collider: Some(ColliderDesc {
+                        shape: ColliderShape::Box { half_extents: COLLECTIBLE_HALF },
+                        is_sensor: true,
+                        ..ColliderDesc::default()
+                    }),
+                });
 
                 self.collectibles.push(CollectibleState {
                     entity: coll_entity,
@@ -614,11 +593,13 @@ impl Game for Platformer {
         ));
 
         // ── Camera ──
-        let cam_pos = self.camera_position(self.player_pos);
+        self.orbit.set_target(self.player_pos);
+        self.orbit.set_target(self.player_pos); // twice so prev == current
+        let (cam_pos, cam_rot) = self.orbit.apply(1.0);
         let cam_entity = ctx.world.spawn((
             Transform3D {
                 position: cam_pos,
-                rotation: look_at_quat(cam_pos, self.player_pos + Vec3::Y * 0.5),
+                rotation: cam_rot,
                 ..Transform3D::default()
             },
             GlobalTransform::default(),
@@ -652,7 +633,10 @@ impl Game for Platformer {
             bloom_soft_knee: 0.3,
             tone_map_enabled: true,
             ssao_enabled: true,
-            motion_blur_enabled: false,
+            fog_enabled: false,
+            fog_color: [0.75, 0.82, 0.90],
+            fog_start: 50.0,
+            fog_end: 200.0,
         });
 
         ctx.renderer.set_ssao_config(SsaoConfig {
@@ -737,10 +721,6 @@ impl Game for Platformer {
         ));
 
         self.particles = Some(ParticleEffects {
-            particle_mat,
-            jump_pool,
-            collect_pool,
-            win_pool,
             jump_emitter,
             collect_emitter,
             win_emitter,
@@ -876,7 +856,7 @@ impl Game for Platformer {
         let move_z = ctx.input.axis("move_z");
 
         // Camera-relative movement (use target so controls snap immediately)
-        let (sin_o, cos_o) = self.orbit_target.sin_cos();
+        let (sin_o, cos_o) = self.orbit.yaw_target.sin_cos();
         let dir = Vec3::new(
             move_x * cos_o - move_z * sin_o,
             0.0,
@@ -1060,14 +1040,13 @@ impl Game for Platformer {
 
         // ── Camera orbit input ──
         if ctx.input.just_pressed("orbit_left") {
-            self.orbit_target -= ORBIT_SNAP;
+            self.orbit.rotate(-ORBIT_SNAP);
         }
         if ctx.input.just_pressed("orbit_right") {
-            self.orbit_target += ORBIT_SNAP;
+            self.orbit.rotate(ORBIT_SNAP);
         }
-        // Smooth lerp toward target angle.
-        let diff = self.orbit_target - self.orbit_angle;
-        self.orbit_angle += diff * (ORBIT_LERP_SPEED * dt).min(1.0);
+        self.orbit.set_target(self.player_pos);
+        self.orbit.update(ctx.input, ctx.time);
     }
 
     fn render(&mut self, ctx: &mut Ctx, alpha: f32) {
@@ -1079,13 +1058,13 @@ impl Game for Platformer {
             }
         }
 
-        // Camera tracks the interpolated visual position to avoid jitter
+        // Camera tracks the interpolated target position to avoid jitter
         // between fixed-rate physics ticks and variable-rate rendering.
-        let cam_pos = self.camera_position(visual_pos);
+        let (cam_pos, cam_rot) = self.orbit.apply(alpha);
         if let Some(ce) = self.camera_entity {
             if let Ok(mut t) = ctx.world.get::<&mut Transform3D>(ce) {
                 t.position = cam_pos;
-                t.rotation = look_at_quat(cam_pos, visual_pos + Vec3::Y * 0.5);
+                t.rotation = cam_rot;
             }
         }
     }
@@ -1122,14 +1101,6 @@ impl Game for Platformer {
     fn should_exit(&self) -> bool {
         self.exit
     }
-}
-
-/// Compute a quaternion that looks from `eye` toward `target` (Y-up).
-fn look_at_quat(eye: Vec3, target: Vec3) -> Quat {
-    let forward = (target - eye).normalize();
-    let right = forward.cross(Vec3::Y).normalize();
-    let up = right.cross(forward);
-    Quat::from_mat3(&esox_engine::glam::Mat3::from_cols(right, up, -forward))
 }
 
 fn main() {

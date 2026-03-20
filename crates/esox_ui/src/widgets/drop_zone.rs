@@ -10,7 +10,7 @@ use crate::Ui;
 impl<'f> Ui<'f> {
     /// Draw a file drop zone. Returns Response where `clicked` means open file dialog.
     pub fn drop_zone(&mut self, id: u64, files: &[PathBuf]) -> Response {
-        let rect = self.allocate_rect(self.region.w, self.theme.drop_zone_height);
+        let rect = self.allocate_rect_keyed(id, self.region.w, self.theme.drop_zone_height);
         self.register_widget(id, rect, WidgetKind::DropZone);
 
         let response = self.widget_response(id, rect);

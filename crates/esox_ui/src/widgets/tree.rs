@@ -28,7 +28,7 @@ impl<'f> Ui<'f> {
         let font_size = self.theme.font_size;
         let pad = self.theme.input_padding;
 
-        let rect = self.allocate_rect(self.region.w, item_h);
+        let rect = self.allocate_rect_keyed(id, self.region.w, item_h);
         self.register_widget(id, rect, WidgetKind::TreeNode);
         let mut response = self.widget_response(id, rect);
 

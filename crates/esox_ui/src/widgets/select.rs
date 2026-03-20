@@ -18,7 +18,7 @@ impl<'f> Ui<'f> {
         select: &mut SelectState,
         choices: &[&str],
     ) -> Response {
-        let rect = self.allocate_rect(self.region.w, self.theme.button_height);
+        let rect = self.allocate_rect_keyed(id, self.region.w, self.theme.button_height);
         self.register_widget(id, rect, WidgetKind::Select);
 
         let mut response = self.widget_response(id, rect);

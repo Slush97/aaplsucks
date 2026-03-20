@@ -16,7 +16,7 @@ impl<'f> Ui<'f> {
         let th = self.theme.toggle_height;
         let inset = self.theme.toggle_knob_inset;
 
-        let rect = self.allocate_rect(self.region.w, row_h);
+        let rect = self.allocate_rect_keyed(id, self.region.w, row_h);
         self.register_widget(id, rect, WidgetKind::Toggle);
 
         let mut response = self.widget_response(id, rect);

@@ -37,6 +37,7 @@
 pub mod a11y;
 pub mod id;
 pub mod layout;
+pub mod layout_tree;
 pub mod paint;
 pub mod response;
 pub mod rich_text;
@@ -65,6 +66,7 @@ pub use widgets::menu_bar::{Menu, MenuEntry, MenuItem};
 
 use esox_gfx::{Color, Frame, GpuContext, RenderResources};
 use layout::{Direction, LayoutContext, Vec2};
+use layout_tree::{LayoutStyle, LayoutTree, TreeBuildContext};
 
 /// Responsive width classification for container queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,241 +128,116 @@ impl<'a, 'f> FlexBuilder<'a, 'f> {
 
     /// Draw a flex layout with per-child grow/shrink via `FlexUi`.
     ///
-    /// Uses frame-cached child sizes: on frame N, children render at natural size
-    /// and sizes are recorded. On frame N+1, cached sizes compute grow/shrink
-    /// distribution before rendering. Converges in 1 frame for static layouts.
+    /// The tree solver handles grow/shrink distribution and justification.
+    /// On frame 1 (no prev_layout), children render at natural cursor positions.
+    /// On frame 2+, `allocate_rect` picks up solved positions from the tree.
     pub fn show_flex(self, id: u64, f: impl FnOnce(&mut FlexUi<'_, 'f>)) {
-        let is_horizontal = self.direction == Direction::Horizontal;
-        let available = if is_horizontal { self.ui.region.w } else { self.ui.region.h };
-        let cached = self.ui.state.flex_child_sizes.get(&id).map(|(v, _)| v.clone());
+        self.ui.tree_build.open_container(Some(id), LayoutStyle {
+            direction: self.direction,
+            gap: self.gap,
+            align_items: self.align,
+            justify_content: self.justify,
+            flex_wrap: self.wrap,
+            ..Default::default()
+        });
 
         let saved_cursor = self.ui.cursor;
         let saved_region = self.ui.region;
         let saved_spacing = self.ui.spacing;
-        let start_idx = self.ui.frame.instance_len();
+
+        // Set up cursor direction for fallback positioning.
+        if self.direction == Direction::Horizontal {
+            self.ui.spacing = self.gap;
+            let ctx = LayoutContext {
+                direction: Direction::Horizontal,
+                origin: self.ui.cursor,
+                region: self.ui.region,
+                saved_cursor: self.ui.cursor,
+                spacing: self.gap,
+                max_cross: 0.0,
+                clip_rect: None,
+            };
+            self.ui.layout_stack.push(ctx);
+        } else {
+            self.ui.spacing = self.gap;
+        }
 
         let mut flex_ui = FlexUi {
             ui: self.ui,
             direction: self.direction,
-            gap: self.gap,
-            align: self.align,
-            justify: self.justify,
-            wrap: self.wrap,
-            cached_sizes: cached.as_deref(),
-            recorded_sizes: Vec::new(),
             child_index: 0,
-            available,
-            wrap_lines: Vec::new(),
-            current_wrap_main: 0.0,
-            current_wrap_cross: 0.0_f32,
         };
 
         f(&mut flex_ui);
 
-        let recorded = flex_ui.recorded_sizes;
-        let wrap_lines = flex_ui.wrap_lines;
         let child_count = flex_ui.child_index;
 
-        // Store recorded sizes for next frame (reset age to 0).
-        self.ui.state.flex_child_sizes.insert(id, (recorded, 0));
-
-        let end_idx = self.ui.frame.instance_len();
-
-        // Compute content extent for justification.
-        if is_horizontal {
-            let content_w = self.ui.cursor.x - saved_cursor.x
-                - if child_count > 0 { self.gap } else { 0.0 };
-
-            let offset_x = match self.justify {
-                layout::Justify::Center => (saved_region.w - content_w) / 2.0,
-                layout::Justify::End => saved_region.w - content_w,
-                _ => 0.0,
-            };
-
-            if offset_x.abs() > 0.01 {
-                for i in start_idx..end_idx {
-                    self.ui.frame.translate_instance(i, offset_x, 0.0);
-                }
-            }
-
-            // Find max cross from wrap lines or direct tracking.
-            let max_cross = if !wrap_lines.is_empty() {
-                wrap_lines.iter().map(|wl| wl.cross).sum::<f32>()
-                    + (wrap_lines.len().saturating_sub(1)) as f32 * self.gap
-            } else {
-                self.ui.layout_stack.last()
-                    .map(|ctx| ctx.max_cross)
-                    .unwrap_or(0.0)
-            };
-
+        if self.direction == Direction::Horizontal {
+            let ctx = self.ui.layout_stack.pop().unwrap();
+            let max_cross = ctx.max_cross;
             self.ui.cursor.x = saved_cursor.x;
             self.ui.cursor.y = saved_cursor.y + max_cross + saved_spacing;
-        } else {
-            let content_h = self.ui.cursor.y - saved_cursor.y
-                - if child_count > 0 { self.gap } else { 0.0 };
-
-            let offset_y = match self.justify {
-                layout::Justify::Center => (saved_region.h - content_h) / 2.0,
-                layout::Justify::End => saved_region.h - content_h,
-                _ => 0.0,
-            };
-
-            if offset_y.abs() > 0.01 {
-                for i in start_idx..end_idx {
-                    self.ui.frame.translate_instance(i, 0.0, offset_y);
-                }
+            // If no children advanced the cursor, keep y stable.
+            if child_count == 0 {
+                self.ui.cursor.y = saved_cursor.y;
             }
         }
 
         self.ui.region = saved_region;
         self.ui.spacing = saved_spacing;
+        self.ui.tree_build.close_container();
     }
 
     /// Draw the flex layout with the given content closure.
+    ///
+    /// Opens a tree container so the solver handles justification on frame 2+.
+    /// Falls back to cursor-based positioning on frame 1.
     pub fn show(self, f: impl FnOnce(&mut Ui<'f>)) {
         let is_horizontal = self.direction == Direction::Horizontal;
 
-        match (self.justify, is_horizontal) {
-            (layout::Justify::Start, true) => {
-                // Fast path: same as row_spaced.
-                self.ui.row_spaced(self.gap, |ui| {
-                    f(ui);
-                });
-                // Apply cross-axis alignment if needed (Stretch handled below).
-                // For Start justification + Align::Start this is a no-op.
-            }
-            (layout::Justify::Start, false) => {
-                // Vertical start: just set spacing.
-                self.ui.with_spacing(self.gap, |ui| {
-                    f(ui);
-                });
-            }
-            (_, true) => {
-                // Two-pass: record instances, measure, then shift.
-                let saved_cursor = self.ui.cursor;
-                let saved_region = self.ui.region;
-                let saved_spacing = self.ui.spacing;
+        self.ui.tree_build.open_container(None, LayoutStyle {
+            direction: self.direction,
+            gap: self.gap,
+            align_items: self.align,
+            justify_content: self.justify,
+            flex_wrap: self.wrap,
+            ..Default::default()
+        });
 
-                let start_idx = self.ui.frame.instance_len();
-                let start_x = self.ui.cursor.x;
-
-                // Push horizontal layout context.
-                self.ui.spacing = self.gap;
-                let ctx = LayoutContext {
-                    direction: Direction::Horizontal,
-                    origin: self.ui.cursor,
-                    region: self.ui.region,
-                    saved_cursor: self.ui.cursor,
-                    spacing: self.ui.spacing,
-                    max_cross: 0.0,
-                    clip_rect: None,
-                };
-                self.ui.layout_stack.push(ctx);
-                f(self.ui);
-                let ctx = self.ui.layout_stack.pop().unwrap();
-                let max_cross = ctx.max_cross;
-
-                let end_idx = self.ui.frame.instance_len();
-                let content_w = self.ui.cursor.x - start_x - self.gap; // subtract trailing gap
-                let available_w = saved_region.w;
-
-                // Compute horizontal offset.
-                let offset_x = match self.justify {
-                    layout::Justify::Center => (available_w - content_w) / 2.0,
-                    layout::Justify::End => available_w - content_w,
-                    layout::Justify::SpaceBetween => 0.0, // handled differently
-                    layout::Justify::Start => 0.0,
-                };
-
-                if self.justify == layout::Justify::SpaceBetween {
-                    // Count children by gaps: measure spacing intervals.
-                    // For SpaceBetween we need to redistribute. This is approximate:
-                    // shift each instance proportionally. For accurate results we'd
-                    // need per-child widths, but we approximate by scaling existing positions.
-                    if content_w > 0.0 && content_w < available_w {
-                        let scale = available_w / content_w;
-                        for i in start_idx..end_idx {
-                            self.ui.frame.offset_instance_x(i, start_x, scale);
-                        }
-                    }
-                } else if offset_x.abs() > 0.01 {
-                    for i in start_idx..end_idx {
-                        self.ui.frame.translate_instance(i, offset_x, 0.0);
-                    }
-                }
-
-                // Cross-axis alignment.
-                if self.align == layout::Align::Center && max_cross > 0.0 {
-                    // We'd need per-widget height tracking for precise centering.
-                    // Skip for now — Start is default behavior.
-                }
-
-                // Restore cursor.
-                self.ui.cursor.x = saved_cursor.x;
-                self.ui.cursor.y = saved_cursor.y + max_cross + saved_spacing;
-                self.ui.region = saved_region;
-                self.ui.spacing = saved_spacing;
-            }
-            (_, false) => {
-                // Vertical non-Start justification: two-pass.
-                let saved_cursor = self.ui.cursor;
-                let saved_region = self.ui.region;
-                let saved_spacing = self.ui.spacing;
-
-                let start_idx = self.ui.frame.instance_len();
-                let start_y = self.ui.cursor.y;
-
-                self.ui.spacing = self.gap;
-                f(self.ui);
-
-                let end_idx = self.ui.frame.instance_len();
-                let content_h = self.ui.cursor.y - start_y - self.gap;
-                let available_h = saved_region.h;
-
-                let offset_y = match self.justify {
-                    layout::Justify::Center => (available_h - content_h) / 2.0,
-                    layout::Justify::End => available_h - content_h,
-                    _ => 0.0,
-                };
-
-                if offset_y.abs() > 0.01 {
-                    for i in start_idx..end_idx {
-                        self.ui.frame.translate_instance(i, 0.0, offset_y);
-                    }
-                }
-
-                self.ui.cursor = saved_cursor;
-                self.ui.cursor.y += content_h + self.gap;
-                self.ui.region = saved_region;
-                self.ui.spacing = saved_spacing;
-            }
+        if is_horizontal {
+            let saved_spacing = self.ui.spacing;
+            self.ui.spacing = self.gap;
+            let ctx = LayoutContext {
+                direction: Direction::Horizontal,
+                origin: self.ui.cursor,
+                region: self.ui.region,
+                saved_cursor: self.ui.cursor,
+                spacing: self.ui.spacing,
+                max_cross: 0.0,
+                clip_rect: None,
+            };
+            self.ui.layout_stack.push(ctx);
+            f(self.ui);
+            let ctx = self.ui.layout_stack.pop().unwrap();
+            self.ui.cursor.x = ctx.saved_cursor.x;
+            self.ui.cursor.y = ctx.saved_cursor.y + ctx.max_cross + saved_spacing;
+            self.ui.spacing = saved_spacing;
+        } else {
+            let saved_spacing = self.ui.spacing;
+            self.ui.spacing = self.gap;
+            f(self.ui);
+            self.ui.spacing = saved_spacing;
         }
-    }
-}
 
-/// Tracks a single wrap line in flex-wrap mode.
-struct WrapLine {
-    /// Cross-axis extent of this wrap line.
-    cross: f32,
+        self.ui.tree_build.close_container();
+    }
 }
 
 /// Context for placing flex items with grow/shrink within a `FlexBuilder::show_flex()`.
 pub struct FlexUi<'a, 'f> {
     ui: &'a mut Ui<'f>,
     direction: Direction,
-    gap: f32,
-    #[allow(dead_code)]
-    align: layout::Align,
-    #[allow(dead_code)]
-    justify: layout::Justify,
-    wrap: layout::FlexWrap,
-    cached_sizes: Option<&'a [(f32, f32)]>,
-    recorded_sizes: Vec<(f32, f32)>,
     child_index: usize,
-    available: f32,
-    wrap_lines: Vec<WrapLine>,
-    current_wrap_main: f32,
-    current_wrap_cross: f32,
 }
 
 impl<'a, 'f> FlexUi<'a, 'f> {
@@ -371,103 +248,40 @@ impl<'a, 'f> FlexUi<'a, 'f> {
 
     /// Place a flex item with explicit grow/shrink/alignment properties.
     pub fn item(&mut self, props: layout::FlexItem, f: impl FnOnce(&mut Ui<'f>)) {
-        let is_horizontal = self.direction == Direction::Horizontal;
-        let idx = self.child_index;
-        self.child_index += 1;
+        let cross_dir = if self.direction == Direction::Horizontal {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        };
 
-        // Apply margin: advance cursor by margin.left/top.
-        if is_horizontal {
+        self.ui.tree_build.open_container(None, LayoutStyle {
+            direction: cross_dir,
+            flex_grow: props.grow,
+            flex_shrink: props.shrink,
+            flex_basis: props.basis,
+            align_self: props.align_self,
+            margin: props.margin,
+            gap: self.ui.spacing,
+            ..Default::default()
+        });
+
+        // Apply margin for cursor fallback.
+        if self.direction == Direction::Horizontal {
             self.ui.cursor.x += props.margin.left;
         } else {
             self.ui.cursor.y += props.margin.top;
         }
 
-        // Determine the size to allocate based on cached sizes + grow/shrink.
-        let cached = self.cached_sizes.and_then(|c| c.get(idx)).copied();
-        let basis = props.basis.or_else(|| cached.map(|(m, _)| m));
+        f(self.ui);
 
-        if let Some(basis_size) = basis {
-            if props.grow > 0.0 {
-                // Compute extra space and distribute by grow factor.
-                // For now, simple: give this child its proportional share.
-                let total_cached_main: f32 = self.cached_sizes
-                    .map(|c| c.iter().map(|(m, _)| m).sum())
-                    .unwrap_or(0.0);
-                let total_gaps = if let Some(c) = self.cached_sizes {
-                    (c.len().saturating_sub(1)) as f32 * self.gap
-                } else {
-                    0.0
-                };
-                let remaining = (self.available - total_cached_main - total_gaps).max(0.0);
-
-                if remaining > 0.0 {
-                    let extra = remaining * props.grow; // simplified: single-child grow
-                    let new_size = basis_size + extra;
-                    if is_horizontal {
-                        let saved_region = self.ui.region;
-                        self.ui.region = layout::Rect::new(
-                            self.ui.cursor.x,
-                            self.ui.region.y,
-                            new_size,
-                            self.ui.region.h,
-                        );
-                        f(self.ui);
-                        self.ui.region = saved_region;
-                    } else {
-                        f(self.ui);
-                    }
-                } else {
-                    f(self.ui);
-                }
-            } else {
-                f(self.ui);
-            }
-        } else {
-            // No cached size yet — render at natural size.
-            f(self.ui);
-        }
-
-        // Record the size this child actually took.
-        let (main_size, cross_size) = if is_horizontal {
-            let main = self.ui.cursor.x - (self.recorded_sizes.iter().map(|(m, _)| m).sum::<f32>()
-                + (idx as f32) * self.gap
-                + props.margin.left);
-            let cross = self.ui.layout_stack.last().map(|c| c.max_cross).unwrap_or(0.0);
-            (main.max(0.0), cross)
-        } else {
-            // For vertical, approximate using cursor delta.
-            let main = 0.0; // vertical tracking is implicit via cursor.y
-            let cross = self.ui.region.w;
-            (main, cross)
-        };
-        self.recorded_sizes.push((main_size, cross_size));
-
-        // Apply margin: advance cursor by margin.right/bottom.
-        if is_horizontal {
+        if self.direction == Direction::Horizontal {
             self.ui.cursor.x += props.margin.right;
         } else {
             self.ui.cursor.y += props.margin.bottom;
         }
 
-        // Flex-wrap: check if we exceeded the main axis.
-        if self.wrap != layout::FlexWrap::NoWrap && is_horizontal {
-            self.current_wrap_main += main_size + self.gap + props.margin.horizontal();
-            self.current_wrap_cross = self.current_wrap_cross.max(cross_size);
-
-            if self.current_wrap_main > self.available && idx > 0 {
-                // Wrap: start new line.
-                self.wrap_lines.push(WrapLine {
-                    cross: self.current_wrap_cross,
-                });
-                // Reset cursor to start of next line.
-                let wrap_y_offset = self.wrap_lines.iter().map(|wl| wl.cross).sum::<f32>()
-                    + self.wrap_lines.len().saturating_sub(1) as f32 * self.gap;
-                self.ui.cursor.x = self.ui.region.x;
-                self.ui.cursor.y = self.ui.region.y + wrap_y_offset;
-                self.current_wrap_main = 0.0;
-                self.current_wrap_cross = 0.0;
-            }
-        }
+        self.ui.tree_build.close_container();
+        self.child_index += 1;
     }
 
     /// Access the inner `Ui` for direct widget calls outside flex items.
@@ -496,6 +310,10 @@ pub struct Ui<'f> {
     disabled: bool,
     /// Style override stack for per-widget styling.
     style_stack: Vec<WidgetStyle>,
+    /// Layout tree being built this frame.
+    tree_build: TreeBuildContext,
+    /// Solved layout tree from the previous frame (for position lookups).
+    prev_layout: Option<LayoutTree>,
 }
 
 impl<'f> Ui<'f> {
@@ -519,6 +337,16 @@ impl<'f> Ui<'f> {
             frame.begin_partial(grid);
         }
 
+        // Move the solved layout tree from last frame into prev_layout.
+        let prev_layout = state.layout_cache.take();
+
+        let mut tree_build = TreeBuildContext::new();
+        tree_build.open_container(Some(u64::MAX), LayoutStyle {
+            direction: Direction::Vertical,
+            gap: theme.padding,
+            ..Default::default()
+        });
+
         Self {
             frame,
             gpu,
@@ -536,6 +364,8 @@ impl<'f> Ui<'f> {
             hit_clip: None,
             disabled: false,
             style_stack: Vec::new(),
+            tree_build,
+            prev_layout,
         }
     }
 
@@ -566,6 +396,14 @@ impl<'f> Ui<'f> {
             self.frame.finalize_partial(grid);
         }
 
+        // Close root container and solve the layout tree.
+        self.tree_build.close_container();
+        debug_assert_eq!(self.tree_build.open_stack_len(), 0, "unclosed layout container");
+        let viewport = self.region;
+        let mut tree = self.tree_build.tree;
+        tree.solve(viewport);
+        self.state.layout_cache = Some(tree);
+
         self.state.end_frame();
         selection
     }
@@ -574,24 +412,42 @@ impl<'f> Ui<'f> {
 
     /// Allocate a rectangle in the current layout direction.
     pub fn allocate_rect(&mut self, w: f32, h: f32) -> Rect {
-        let rect = match self.layout_stack.last() {
-            Some(ctx) if ctx.direction == Direction::Horizontal => {
-                let r = Rect::new(self.cursor.x, self.cursor.y, w, h);
-                self.cursor.x += w + self.spacing;
-                r
+        // Record this leaf in the layout tree.
+        let node_id = self.tree_build.add_leaf(None, w, h);
+        let node_key = self.tree_build.tree.node(node_id).key;
+
+        let rect = if let Some(solved) = self.prev_layout.as_ref().and_then(|t| t.lookup(node_key)) {
+            // Use solved position from previous frame. Advance cursor for compatibility.
+            match self.layout_stack.last() {
+                Some(ctx) if ctx.direction == Direction::Horizontal => {
+                    self.cursor.x = solved.x + solved.w + self.spacing;
+                }
+                _ => {
+                    self.cursor.y = solved.y + solved.h + self.spacing;
+                }
             }
-            _ => {
-                // Vertical: respect the requested width, clamped to the region.
-                let actual_w = w.min(self.region.w);
-                let r = Rect::new(self.cursor.x, self.cursor.y, actual_w, h);
-                self.cursor.y += h + self.spacing;
-                r
+            solved
+        } else {
+            // Cursor fallback (first frame / new widgets).
+            match self.layout_stack.last() {
+                Some(ctx) if ctx.direction == Direction::Horizontal => {
+                    let r = Rect::new(self.cursor.x, self.cursor.y, w, h);
+                    self.cursor.x += w + self.spacing;
+                    r
+                }
+                _ => {
+                    let actual_w = w.min(self.region.w);
+                    let r = Rect::new(self.cursor.x, self.cursor.y, actual_w, h);
+                    self.cursor.y += h + self.spacing;
+                    r
+                }
             }
         };
+
         // Track max_cross for horizontal layouts.
         if let Some(ctx) = self.layout_stack.last_mut() {
-            if ctx.direction == Direction::Horizontal && h > ctx.max_cross {
-                ctx.max_cross = h;
+            if ctx.direction == Direction::Horizontal && rect.h > ctx.max_cross {
+                ctx.max_cross = rect.h;
             }
         }
         // Debug overlay: collect layout bounds.
@@ -607,8 +463,24 @@ impl<'f> Ui<'f> {
         rect
     }
 
+    /// Set a key override for the next `allocate_rect` call.
+    pub fn keyed(&mut self, key: u64) {
+        self.tree_build.push_key_scope(key);
+    }
+
+    /// Allocate a rectangle with an explicit key for cross-frame stability.
+    pub fn allocate_rect_keyed(&mut self, key: u64, w: f32, h: f32) -> Rect {
+        self.tree_build.push_key_scope(key);
+        self.allocate_rect(w, h)
+    }
+
     /// Run a closure in a horizontal row layout.
     pub fn row(&mut self, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Horizontal,
+            gap: self.spacing,
+            ..Default::default()
+        });
         let ctx = LayoutContext {
             direction: Direction::Horizontal,
             origin: self.cursor,
@@ -624,6 +496,7 @@ impl<'f> Ui<'f> {
         // Restore cursor to below the tallest child.
         self.cursor.x = ctx.saved_cursor.x;
         self.cursor.y = ctx.saved_cursor.y + ctx.max_cross + self.spacing;
+        self.tree_build.close_container();
     }
 
     /// Set spacing between subsequent widgets.
@@ -638,6 +511,12 @@ impl<'f> Ui<'f> {
 
     /// Run a closure within a max-width container, centered horizontally.
     pub fn max_width(&mut self, max_w: f32, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            max_width: Some(max_w),
+            direction: Direction::Vertical,
+            gap: self.spacing,
+            ..Default::default()
+        });
         let col_w = self.region.w.min(max_w);
         let col_x = self.cursor.x + (self.region.w - col_w) / 2.0;
 
@@ -653,10 +532,17 @@ impl<'f> Ui<'f> {
         self.cursor = saved_cursor;
         self.cursor.y = new_y;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     /// Run a closure with padding on all sides.
     pub fn padding(&mut self, amount: f32, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Vertical,
+            padding: Spacing::all(amount),
+            gap: self.spacing,
+            ..Default::default()
+        });
         let saved_cursor = self.cursor;
         let saved_region = self.region;
 
@@ -675,6 +561,7 @@ impl<'f> Ui<'f> {
         self.cursor = saved_cursor;
         self.cursor.y = new_y;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     /// Get the current cursor X position.
@@ -712,10 +599,16 @@ impl<'f> Ui<'f> {
 
     /// Run a closure with a temporary spacing value. Restores original spacing after.
     pub fn with_spacing(&mut self, gap: f32, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Vertical,
+            gap,
+            ..Default::default()
+        });
         let saved = self.spacing;
         self.spacing = gap;
         f(self);
         self.spacing = saved;
+        self.tree_build.close_container();
     }
 
     /// Run a closure in a horizontal row with a specific inter-widget gap.
@@ -758,6 +651,12 @@ impl<'f> Ui<'f> {
     ///
     /// `content_width` is the expected width of the content inside.
     pub fn center_horizontal(&mut self, content_width: f32, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            max_width: Some(content_width),
+            direction: Direction::Vertical,
+            gap: self.spacing,
+            ..Default::default()
+        });
         let cw = content_width.min(self.region.w);
         let offset = (self.region.w - cw) / 2.0;
 
@@ -773,6 +672,7 @@ impl<'f> Ui<'f> {
         self.cursor = saved_cursor;
         self.cursor.y = new_y;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     /// In a row, advance cursor.x to right-align the remaining content.
@@ -828,6 +728,12 @@ impl<'f> Ui<'f> {
         let total_gap = gap * (n as f32 - 1.0).max(0.0);
         let available = self.region.w - total_gap;
 
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Horizontal,
+            gap,
+            ..Default::default()
+        });
+
         let saved_cursor = self.cursor;
         let saved_region = self.region;
         let saved_spacing = self.spacing;
@@ -837,6 +743,13 @@ impl<'f> Ui<'f> {
 
         for (i, &w) in weights.iter().enumerate() {
             let col_w = available * w / total_weight;
+
+            self.tree_build.open_container(None, LayoutStyle {
+                direction: Direction::Vertical,
+                gap: self.spacing,
+                flex_grow: w / total_weight,
+                ..Default::default()
+            });
 
             self.cursor = Vec2 { x: col_x, y: saved_cursor.y };
             self.region = Rect::new(col_x, saved_region.y, col_w, saved_region.h);
@@ -850,18 +763,29 @@ impl<'f> Ui<'f> {
             }
 
             col_x += col_w + gap;
+            self.tree_build.close_container();
         }
 
         self.cursor = saved_cursor;
         self.cursor.y += max_height;
         self.region = saved_region;
         self.spacing = saved_spacing;
+        self.tree_build.close_container();
     }
 
     // ── Constrained layout ──
 
     /// Run a closure within layout constraints.
     pub fn constrained(&mut self, c: layout::Constraints, f: impl FnOnce(&mut Self)) {
+        self.tree_build.open_container(None, LayoutStyle {
+            min_width: c.min_width,
+            max_width: c.max_width,
+            min_height: c.min_height,
+            max_height: c.max_height,
+            direction: Direction::Vertical,
+            gap: self.spacing,
+            ..Default::default()
+        });
         let saved_cursor = self.cursor;
         let saved_region = self.region;
 
@@ -876,6 +800,7 @@ impl<'f> Ui<'f> {
         self.cursor.x = saved_cursor.x;
         self.cursor.y = saved_cursor.y + ch;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     // ── Tree indent ──
@@ -883,6 +808,12 @@ impl<'f> Ui<'f> {
     /// Indent children of an expanded tree node.
     pub fn tree_indent(&mut self, f: impl FnOnce(&mut Self)) {
         let indent = self.theme.tree_indent;
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Vertical,
+            padding: Spacing { left: indent, ..Default::default() },
+            gap: self.spacing,
+            ..Default::default()
+        });
         let saved_cursor_x = self.cursor.x;
         let saved_region = self.region;
 
@@ -898,6 +829,7 @@ impl<'f> Ui<'f> {
 
         self.cursor.x = saved_cursor_x;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     /// Animated tree indent — draws children with a clip-rect height animation.
@@ -921,6 +853,12 @@ impl<'f> Ui<'f> {
             return;
         }
 
+        self.tree_build.open_container(None, LayoutStyle {
+            direction: Direction::Vertical,
+            padding: Spacing { left: indent, ..Default::default() },
+            gap: self.spacing,
+            ..Default::default()
+        });
         let saved_cursor_x = self.cursor.x;
         let saved_cursor_y = self.cursor.y;
         let saved_region = self.region;
@@ -966,6 +904,7 @@ impl<'f> Ui<'f> {
         self.cursor.x = saved_cursor_x;
         self.cursor.y = saved_cursor_y + visible_h;
         self.region = saved_region;
+        self.tree_build.close_container();
     }
 
     // ── Drag and Drop ──

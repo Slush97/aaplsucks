@@ -67,7 +67,7 @@ impl<'f> Ui<'f> {
         let lh = self.text.line_height(font_size);
         let pad = self.theme.input_padding;
         let visible_height = rows as f32 * lh + pad * 2.0;
-        let rect = self.allocate_rect(self.region.w, visible_height);
+        let rect = self.allocate_rect_keyed(id, self.region.w, visible_height);
         self.register_widget(id, rect, WidgetKind::TextInput);
 
         let mut response = self.widget_response(id, rect);
@@ -398,7 +398,7 @@ impl<'f> Ui<'f> {
         let pad = self.theme.input_padding;
         let visible_height = rows as f32 * lh + pad * 2.0;
         let content_width = self.region.w - pad * 2.0;
-        let rect = self.allocate_rect(self.region.w, visible_height);
+        let rect = self.allocate_rect_keyed(id, self.region.w, visible_height);
         self.register_widget(id, rect, WidgetKind::TextInput);
 
         let mut response = self.widget_response(id, rect);

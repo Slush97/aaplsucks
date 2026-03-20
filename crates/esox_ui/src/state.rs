@@ -968,9 +968,8 @@ pub struct UiState {
     pub scroll_velocity: HashMap<u64, [f32; 2]>,
     /// Tile grid for partial redraw caching.
     pub tile_grid: Option<esox_gfx::TileGrid>,
-    /// Frame-cached child sizes for flex layout grow/shrink distribution.
-    /// Key = flex container ID, Value = (per-child (main_size, cross_size), age_counter).
-    pub(crate) flex_child_sizes: HashMap<u64, (Vec<(f32, f32)>, u32)>,
+    /// Cached solved layout tree from the previous frame.
+    pub(crate) layout_cache: Option<crate::layout_tree::LayoutTree>,
     /// Whether the debug overlay is enabled (toggle with Alt+D or programmatically).
     pub debug_overlay: bool,
     /// Collected widget rects for debug overlay (populated when `debug_overlay` is true).
@@ -1048,7 +1047,7 @@ impl UiState {
             combobox_inputs: HashMap::new(),
             scroll_velocity: HashMap::new(),
             tile_grid: None,
-            flex_child_sizes: HashMap::new(),
+            layout_cache: None,
             debug_overlay: false,
             debug_widget_rects: Vec::new(),
             focused_kind: None,
@@ -1553,11 +1552,6 @@ impl UiState {
         if self.hover_anims.len() > 256 {
             self.hover_anims.retain(|_, anim| !anim.is_settled());
         }
-        // Prune stale flex_child_sizes (not accessed for >300 frames).
-        self.flex_child_sizes.retain(|_, (_, age)| {
-            *age += 1;
-            *age <= 300
-        });
         // Prune stale prev_max_scroll (not accessed for >300 frames).
         self.prev_max_scroll.retain(|_, (_, age)| {
             *age += 1;

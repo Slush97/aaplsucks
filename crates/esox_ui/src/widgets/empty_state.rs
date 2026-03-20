@@ -58,7 +58,7 @@ impl<'f> Ui<'f> {
         self.add_space(pad_y);
 
         // Centered message.
-        let msg_rect = self.allocate_rect(self.region.w, font_size + self.theme.label_pad_y);
+        let msg_rect = self.allocate_rect_keyed(id, self.region.w, font_size + self.theme.label_pad_y);
         let tx = msg_rect.x + (msg_rect.w - text_w) / 2.0;
         self.text.draw_text(
             message,

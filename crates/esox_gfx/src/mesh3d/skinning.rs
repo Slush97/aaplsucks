@@ -272,7 +272,7 @@ impl super::renderer::Renderer3D {
             index_count: mesh_data.indices.len() as u32,
         };
 
-        let mesh_handle = MeshHandle(self.meshes.len() as u32 | super::renderer::SKINNED_MESH_BIT);
+        let mesh_handle = MeshHandle(self.meshes.len() as u32 | super::render_types::SKINNED_MESH_BIT);
         self.meshes.push(mesh);
 
         let skinned_index = self.skinned_meshes.len();

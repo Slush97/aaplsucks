@@ -18,7 +18,7 @@ impl<'f> Ui<'f> {
         label: &str,
     ) -> Response {
         let row_h = self.theme.button_height;
-        let rect = self.allocate_rect(self.region.w, row_h);
+        let rect = self.allocate_rect_keyed(id, self.region.w, row_h);
         self.register_widget(id, rect, WidgetKind::Radio);
 
         let mut response = self.widget_response(id, rect);

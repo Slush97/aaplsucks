@@ -7,10 +7,9 @@
 use std::path::PathBuf;
 
 use super::material::MaterialType;
-use super::renderer::{SHADER_PREAMBLE, FS_UNLIT, FS_LIT, FS_PBR, COMPOSITE_SHADER_3D};
+use super::shaders_embedded::{SHADER_PREAMBLE, FS_UNLIT, FS_LIT, FS_PBR, FS_TOON, COMPOSITE_SHADER_3D};
 use super::shadow::SHADOW_VERTEX_SHADER;
 use super::ssao::{SSAO_SHADER, SSAO_BLUR_SHADER};
-use super::motion_blur::{VELOCITY_SHADER, MOTION_BLUR_SHADER};
 use super::depth_resolve::DEPTH_RESOLVE_SHADER;
 use super::skinning::SKINNING_SHADER;
 use crate::bloom;
@@ -22,12 +21,11 @@ pub enum ShaderSlot {
     FsUnlit,
     FsLit,
     FsPbr,
+    FsToon,
     Composite,
     ShadowVertex,
     Ssao,
     SsaoBlur,
-    Velocity,
-    MotionBlur,
     Skinning,
     DepthResolve,
     BloomDownsample,
@@ -42,12 +40,11 @@ impl ShaderSlot {
         ShaderSlot::FsUnlit,
         ShaderSlot::FsLit,
         ShaderSlot::FsPbr,
+        ShaderSlot::FsToon,
         ShaderSlot::Composite,
         ShaderSlot::ShadowVertex,
         ShaderSlot::Ssao,
         ShaderSlot::SsaoBlur,
-        ShaderSlot::Velocity,
-        ShaderSlot::MotionBlur,
         ShaderSlot::Skinning,
         ShaderSlot::DepthResolve,
         ShaderSlot::BloomDownsample,
@@ -62,12 +59,11 @@ impl ShaderSlot {
             ShaderSlot::FsUnlit => "fs_unlit",
             ShaderSlot::FsLit => "fs_lit",
             ShaderSlot::FsPbr => "fs_pbr",
+            ShaderSlot::FsToon => "fs_toon",
             ShaderSlot::Composite => "composite",
             ShaderSlot::ShadowVertex => "shadow_vertex",
             ShaderSlot::Ssao => "ssao",
             ShaderSlot::SsaoBlur => "ssao_blur",
-            ShaderSlot::Velocity => "velocity",
-            ShaderSlot::MotionBlur => "motion_blur",
             ShaderSlot::Skinning => "skinning",
             ShaderSlot::DepthResolve => "depth_resolve",
             ShaderSlot::BloomDownsample => "bloom_downsample",
@@ -82,12 +78,11 @@ impl ShaderSlot {
             ShaderSlot::FsUnlit => FS_UNLIT,
             ShaderSlot::FsLit => FS_LIT,
             ShaderSlot::FsPbr => FS_PBR,
+            ShaderSlot::FsToon => FS_TOON,
             ShaderSlot::Composite => COMPOSITE_SHADER_3D,
             ShaderSlot::ShadowVertex => SHADOW_VERTEX_SHADER,
             ShaderSlot::Ssao => SSAO_SHADER,
             ShaderSlot::SsaoBlur => SSAO_BLUR_SHADER,
-            ShaderSlot::Velocity => VELOCITY_SHADER,
-            ShaderSlot::MotionBlur => MOTION_BLUR_SHADER,
             ShaderSlot::Skinning => SKINNING_SHADER,
             ShaderSlot::DepthResolve => DEPTH_RESOLVE_SHADER,
             // Bloom slots: compose from parts as fallback.
@@ -137,6 +132,7 @@ impl ShaderLibrary {
             MaterialType::Unlit => self.get(ShaderSlot::FsUnlit),
             MaterialType::Lit => self.get(ShaderSlot::FsLit),
             MaterialType::PBR => self.get(ShaderSlot::FsPbr),
+            MaterialType::Toon => self.get(ShaderSlot::FsToon),
         };
         format!("{preamble}\n{fragment}")
     }
@@ -246,6 +242,7 @@ impl ShaderLibrary {
             MaterialType::Unlit => self.get(ShaderSlot::FsUnlit),
             MaterialType::Lit => self.get(ShaderSlot::FsLit),
             MaterialType::PBR => self.get(ShaderSlot::FsPbr),
+            MaterialType::Toon => self.get(ShaderSlot::FsToon),
         };
         format!("{preamble}\n{fragment}")
     }
@@ -295,7 +292,7 @@ impl ShaderLibrary {
             // Validate with naga before accepting.
             let validate_src = match slot {
                 // Material shaders need preamble prepended for validation.
-                ShaderSlot::FsUnlit | ShaderSlot::FsLit | ShaderSlot::FsPbr => {
+                ShaderSlot::FsUnlit | ShaderSlot::FsLit | ShaderSlot::FsPbr | ShaderSlot::FsToon => {
                     let preamble = self.get(ShaderSlot::Preamble);
                     format!("{preamble}\n{content}")
                 }

@@ -103,7 +103,7 @@ impl<'f> Ui<'f> {
         }
 
         // Header row.
-        let header_rect = self.allocate_rect(self.region.w, header_h);
+        let header_rect = self.allocate_rect_keyed(id, self.region.w, header_h);
         self.frame.push(
             ShapeBuilder::rect(header_rect.x, header_rect.y, header_rect.w, header_h)
                 .color(self.theme.bg_surface)

@@ -10,7 +10,8 @@
 //! });
 //! ```
 
-use crate::layout::{Rect, Vec2};
+use crate::layout::{Direction, Rect, Vec2};
+use crate::layout_tree::{LayoutStyle, Overflow};
 use crate::paint;
 use crate::response::Response;
 use crate::state::WidgetKind;
@@ -33,7 +34,7 @@ impl<'f> Ui<'f> {
 
         // Always reserve scrollbar width for layout stability.
         let content_width = self.region.w - scrollbar_w;
-        let container = self.allocate_rect(self.region.w, visible_height);
+        let container = self.allocate_rect_keyed(id, self.region.w, visible_height);
 
         // Read current scroll offset (and mark as accessed).
         // Pre-clamp using previous frame's max_scroll to avoid stranded offsets on content shrink.
@@ -83,9 +84,16 @@ impl<'f> Ui<'f> {
         });
 
         // --- Run child content ---
+        self.tree_build.open_container(Some(id), LayoutStyle {
+            direction: Direction::Vertical,
+            gap: self.spacing,
+            overflow: Overflow::Scroll,
+            ..Default::default()
+        });
         let content_start_y = self.cursor.y;
         f(self);
         let content_height = self.cursor.y - content_start_y - self.spacing; // subtract trailing spacing
+        self.tree_build.close_container();
 
         // --- Restore layout state ---
         self.cursor = saved_cursor;
@@ -236,7 +244,7 @@ impl<'f> Ui<'f> {
     ) -> Response {
         let scrollbar_w = self.theme.scrollbar_width;
         let content_height = self.region.h - scrollbar_w;
-        let container = self.allocate_rect(visible_width, content_height + scrollbar_w);
+        let container = self.allocate_rect_keyed(id, visible_width, content_height + scrollbar_w);
 
         let scroll_offset = match self.state.scroll_offsets.get_mut(&id) {
             Some((off, age)) => {
@@ -280,9 +288,16 @@ impl<'f> Ui<'f> {
             None => container_clip,
         });
 
+        self.tree_build.open_container(Some(id), LayoutStyle {
+            direction: Direction::Horizontal,
+            gap: self.spacing,
+            overflow: Overflow::Scroll,
+            ..Default::default()
+        });
         let content_start_x = self.cursor.x;
         f(self);
         let content_width = self.cursor.x - content_start_x - self.spacing;
+        self.tree_build.close_container();
 
         self.cursor = saved_cursor;
         self.cursor.y = container.y + container.h + saved_spacing;
@@ -368,7 +383,7 @@ impl<'f> Ui<'f> {
         let scrollbar_w = self.theme.scrollbar_width;
         let content_area_w = visible_w - scrollbar_w;
         let content_area_h = visible_h - scrollbar_w;
-        let container = self.allocate_rect(visible_w, visible_h);
+        let container = self.allocate_rect_keyed(id, visible_w, visible_h);
 
         let (scroll_y, scroll_x) = match self.state.scroll_offsets.get_mut(&id) {
             Some((off, age)) => {
@@ -413,10 +428,17 @@ impl<'f> Ui<'f> {
             None => content_clip,
         });
 
+        self.tree_build.open_container(Some(id), LayoutStyle {
+            direction: Direction::Vertical,
+            gap: self.spacing,
+            overflow: Overflow::Scroll,
+            ..Default::default()
+        });
         let content_start = self.cursor;
         f(self);
         let content_width = self.cursor.x - content_start.x - self.spacing;
         let content_height = self.cursor.y - content_start.y - self.spacing;
+        self.tree_build.close_container();
 
         self.cursor = saved_cursor;
         self.cursor.y = container.y + container.h + saved_spacing;

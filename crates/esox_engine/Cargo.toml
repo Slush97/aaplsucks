@@ -10,7 +10,7 @@ audio = ["dep:kira", "dep:mint"]
 gamepad = ["dep:gilrs"]
 hot-reload = ["dep:notify", "esox_gfx/hot-reload"]
 rapier = ["dep:rapier3d"]
-serialization = ["dep:serde", "dep:ron", "glam/serde"]
+serialization = ["dep:serde", "dep:ron", "glam/serde", "esox_gfx/serde"]
 ui = ["dep:esox_ui", "dep:esox_font"]
 
 [dependencies]

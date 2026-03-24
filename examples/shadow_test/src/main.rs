@@ -467,7 +467,7 @@ impl Game for ShadowTest {
         let cam_entity = ctx.world.spawn((
             Transform3D { position: self.camera_pos, ..Default::default() },
             GlobalTransform::default(),
-            Camera3D { active: true, fov_y: FRAC_PI_4, near: 0.1, far: 100.0 },
+            Camera3D { active: true, fov_y: FRAC_PI_4, near: 0.1, far: 100.0, ..Default::default() },
         ));
         self.camera_entity = Some(cam_entity);
 

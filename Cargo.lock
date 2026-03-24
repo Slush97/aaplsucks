@@ -993,6 +993,7 @@ dependencies = [
  "naga",
  "notify",
  "raw-window-handle",
+ "serde",
  "thiserror 2.0.18",
  "tracing",
  "wgpu",

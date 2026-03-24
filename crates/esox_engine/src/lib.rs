@@ -25,12 +25,19 @@ pub mod animation_graph;
 pub mod assets;
 pub mod audio;
 pub mod camera;
+pub mod chunk;
+#[cfg(feature = "serialization")]
+pub mod chunk_serde;
 #[cfg(feature = "ui")]
 pub mod debug_overlay;
 pub mod ecs;
 pub mod engine;
 pub mod game;
+pub mod ground_overlay;
+pub mod ground_plane;
 pub mod input;
+pub mod picking;
+pub mod placement;
 pub mod physics;
 #[cfg(feature = "serialization")]
 pub mod scene;
@@ -44,9 +51,9 @@ pub use animation_graph::{
 pub use assets::{AssetHandle, AssetId, AssetManager, MaterialAsset, MeshAsset, TextureAsset};
 pub use ecs::{
     AnimGraphController, Animator, Camera3D, Children, ColliderComponent,
-    DirectionalLightComponent, GlobalTransform, MeshRenderer, Parent, ParticleEmitter,
-    PointLightComponent, RigidBodyComponent, SpotLightComponent, Tag, Transform3D, TriggerVolume,
-    physics_sync_system,
+    DirectionalLightComponent, GlobalTransform, LodLevel, LodMesh, MeshRenderer, Parent,
+    ParticleEmitter, PointLightComponent, RigidBodyComponent, SpotLightComponent, Tag,
+    Transform3D, TriggerVolume, physics_sync_system,
 };
 pub use engine::EngineConfig;
 pub use game::Game;
@@ -81,6 +88,8 @@ pub struct Ctx<'a> {
     pub physics: &'a mut dyn PhysicsBackend,
     pub entity_map: &'a mut PhysicsEntityMap,
     pub viewport: (u32, u32),
+    /// Chunk manager for spatial partitioning (None if not using chunks).
+    pub chunks: Option<&'a mut chunk::ChunkManager>,
     #[cfg(feature = "audio")]
     pub audio: Option<&'a mut audio::AudioManager>,
 }

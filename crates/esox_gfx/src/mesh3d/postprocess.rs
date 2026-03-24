@@ -450,11 +450,8 @@ impl super::renderer::Renderer3D {
 
         // SSAO (reads depth buffer, writes occlusion texture).
         if let Some(ssao) = &mut self.ssao_pass {
-            let proj = glam::Mat4::perspective_rh(
-                camera.fov_y,
+            let proj = camera.projection_matrix(
                 viewport_width as f32 / viewport_height.max(1) as f32,
-                camera.near,
-                camera.far,
             );
             ssao.encode(&gpu.device, encoder, &gpu.queue, &self.depth_sample_view, proj);
         }

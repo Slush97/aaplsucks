@@ -2,6 +2,7 @@
 
 pub mod components;
 pub mod hierarchy;
+pub mod lod;
 pub mod particle_components;
 pub mod physics_components;
 pub mod physics_sync;
@@ -14,8 +15,9 @@ pub use components::{
 pub use hierarchy::{Children, Parent, hierarchy_system};
 pub use physics_components::{ColliderComponent, RigidBodyComponent, TriggerVolume};
 pub use particle_components::ParticleEmitter;
+pub use lod::{LodLevel, LodMesh};
 pub use physics_sync::physics_sync_system;
 pub use systems::{
-    animation_system, camera_sync_system, light_collection_system, particle_system,
-    render_extraction_system,
+    animation_system, camera_sync_system, chunked_render_extraction_system,
+    light_collection_system, particle_system, render_extraction_system,
 };

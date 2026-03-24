@@ -374,6 +374,7 @@ impl Game for EditorApp {
                 near: 0.1,
                 far: 500.0,
                 active: true,
+                ..Default::default()
             },
         ));
         self.camera_entity = Some(cam_entity);
@@ -1920,6 +1921,7 @@ impl EditorApp {
                         near: 0.1,
                         far: 500.0,
                         active: false,
+                        ..Default::default()
                     },
                     Tag("Camera".to_string()),
                 ));

@@ -608,6 +608,7 @@ impl Game for Platformer {
                 fov_y: FRAC_PI_4,
                 near: 0.1,
                 far: 200.0,
+                ..Default::default()
             },
         ));
         self.camera_entity = Some(cam_entity);

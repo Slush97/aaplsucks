@@ -44,7 +44,7 @@ pub mod transform;
 pub mod vertex;
 
 pub use bounds::{Aabb, Containment, Frustum};
-pub use camera::Camera;
+pub use camera::{Camera, CameraMode};
 pub use gltf_loader::{AnimationClip, GltfScene, GltfSceneHandles};
 pub use ibl::IblState;
 pub use instance::InstanceData;

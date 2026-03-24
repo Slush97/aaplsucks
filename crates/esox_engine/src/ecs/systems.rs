@@ -13,26 +13,78 @@ use super::components::{
     AnimGraphController, Animator, Camera3D, DirectionalLightComponent, GlobalTransform,
     MeshRenderer, PointLightComponent, SpotLightComponent,
 };
+use super::lod::LodMesh;
 use super::particle_components::ParticleEmitter;
+use crate::chunk::{ChunkManager, ChunkMembership};
 
 /// Extract renderable entities and issue draw calls to the renderer.
 ///
 /// Queries all entities with `(GlobalTransform, MeshRenderer)`, groups by
-/// (mesh, material), and batches draw calls.
-pub fn render_extraction_system(world: &World, renderer: &mut Renderer3D) {
-    // Collect draw data grouped by (mesh, material).
-    // Simple approach: just issue one draw per entity for now,
-    // relying on the renderer's internal batching/sorting.
-    for (_entity, (gt, mr)) in world.query::<(&GlobalTransform, &MeshRenderer)>().iter() {
+/// (mesh, material), and batches draw calls. If an entity has a [`LodMesh`]
+/// component, the mesh is selected based on distance to `camera_pos`.
+pub fn render_extraction_system(world: &World, renderer: &mut Renderer3D, camera_pos: Vec3) {
+    for (_entity, (gt, mr, lod)) in world
+        .query::<(&GlobalTransform, &MeshRenderer, Option<&LodMesh>)>()
+        .iter()
+    {
         if !mr.visible {
             continue;
         }
+        let mesh = lod
+            .and_then(|l| {
+                let pos = gt.0.col(3).truncate();
+                l.select(camera_pos.distance_squared(pos))
+            })
+            .unwrap_or(mr.mesh);
         let instance = InstanceData {
             model: gt.0.to_cols_array_2d(),
             color: mr.tint,
             params: [0.0; 4],
         };
-        renderer.draw_with_material(mr.mesh, mr.material, &[instance]);
+        renderer.draw_with_material(mesh, mr.material, &[instance]);
+    }
+}
+
+/// Chunk-aware render extraction: skips entities in inactive chunks.
+///
+/// Entities with [`ChunkMembership`] are only rendered if their chunk is active.
+/// Entities *without* `ChunkMembership` always render (global entities like lights, sky).
+pub fn chunked_render_extraction_system(
+    world: &World,
+    renderer: &mut Renderer3D,
+    camera_pos: Vec3,
+    chunk_manager: &ChunkManager,
+) {
+    for (_entity, (gt, mr, membership, lod)) in world
+        .query::<(
+            &GlobalTransform,
+            &MeshRenderer,
+            Option<&ChunkMembership>,
+            Option<&LodMesh>,
+        )>()
+        .iter()
+    {
+        if !mr.visible {
+            continue;
+        }
+        // Skip entities in inactive chunks.
+        if let Some(m) = membership {
+            if !chunk_manager.is_active(m.0) {
+                continue;
+            }
+        }
+        let mesh = lod
+            .and_then(|l| {
+                let pos = gt.0.col(3).truncate();
+                l.select(camera_pos.distance_squared(pos))
+            })
+            .unwrap_or(mr.mesh);
+        let instance = InstanceData {
+            model: gt.0.to_cols_array_2d(),
+            color: mr.tint,
+            params: [0.0; 4],
+        };
+        renderer.draw_with_material(mesh, mr.material, &[instance]);
     }
 }
 
@@ -192,6 +244,7 @@ pub fn camera_sync_system(world: &World) -> Option<Camera> {
             position,
             target,
             up,
+            mode: cam.mode,
             fov_y: cam.fov_y,
             near: cam.near,
             far: cam.far,
@@ -222,6 +275,7 @@ mod tests {
                 near: 0.1,
                 far: 100.0,
                 active: true,
+                ..Default::default()
             },
         ));
 

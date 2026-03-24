@@ -990,7 +990,7 @@ impl Game for PokemonViewer {
         self.camera_entity = Some(ctx.world.spawn((
             Transform3D { position: cp, rotation: cr, ..Transform3D::default() },
             GlobalTransform::default(),
-            Camera3D { active: true, fov_y: 55.0_f32.to_radians(), near: 0.1, far: 200.0 },
+            Camera3D { active: true, fov_y: 55.0_f32.to_radians(), near: 0.1, far: 200.0, ..Default::default() },
         )));
 
         // ── Sun ──

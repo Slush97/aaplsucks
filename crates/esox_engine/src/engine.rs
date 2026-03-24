@@ -9,8 +9,8 @@ use crate::assets::AssetManager;
 #[cfg(feature = "ui")]
 use crate::debug_overlay::{EngineStats, draw_debug_overlay};
 use crate::ecs::{
-    animation_system, camera_sync_system, hierarchy_system, light_collection_system,
-    particle_system, physics_sync_system, render_extraction_system,
+    animation_system, camera_sync_system, chunked_render_extraction_system, hierarchy_system,
+    light_collection_system, particle_system, physics_sync_system, render_extraction_system,
 };
 use crate::game::Game;
 use crate::input::InputManager;
@@ -35,6 +35,8 @@ pub struct EngineConfig {
     pub shadows: bool,
     /// Optional physics backend. Defaults to `NullPhysics` if `None`.
     pub physics: Option<Box<dyn PhysicsBackend>>,
+    /// Optional chunk config for spatial world partitioning.
+    pub chunk_config: Option<crate::chunk::ChunkConfig>,
 }
 
 impl Default for EngineConfig {
@@ -62,6 +64,7 @@ impl Default for EngineConfig {
             },
             shadows: true,
             physics: None,
+            chunk_config: None,
         }
     }
 }
@@ -84,6 +87,8 @@ struct EngineState {
     viewport: (u32, u32),
     frame_count: u32,
     initialized: bool,
+    last_camera_pos: glam::Vec3,
+    chunk_manager: Option<crate::chunk::ChunkManager>,
     #[cfg(feature = "audio")]
     audio: Option<crate::audio::AudioManager>,
     #[cfg(feature = "ui")]
@@ -122,6 +127,7 @@ impl EngineState {
             physics: &mut *self.physics,
             entity_map: &mut self.entity_map,
             viewport: self.viewport,
+            chunks: self.chunk_manager.as_mut(),
             #[cfg(feature = "audio")]
             audio: self.audio.as_mut(),
         }
@@ -142,7 +148,16 @@ impl EngineState {
         let lights = light_collection_system(&self.world);
         renderer.set_lights(&lights);
 
-        render_extraction_system(&self.world, renderer);
+        if let Some(ref chunk_mgr) = self.chunk_manager {
+            chunked_render_extraction_system(
+                &self.world,
+                renderer,
+                self.last_camera_pos,
+                chunk_mgr,
+            );
+        } else {
+            render_extraction_system(&self.world, renderer, self.last_camera_pos);
+        }
 
         let frame_dt = self.timestep.time_state_cache.frame_dt;
         animation_system(&mut self.world, renderer, gpu, frame_dt);
@@ -169,6 +184,7 @@ impl EngineState {
     /// Sync the active camera from ECS and update the audio listener.
     fn sync_camera_and_audio(&mut self) -> esox_gfx::mesh3d::Camera {
         let camera = camera_sync_system(&self.world).unwrap_or_default();
+        self.last_camera_pos = camera.position;
         #[cfg(feature = "audio")]
         if let Some(ref mut audio) = self.audio {
             let cam_forward = (camera.target - camera.position).normalize_or_zero();
@@ -191,6 +207,10 @@ impl Engine {
     pub fn new(mut config: EngineConfig, game: Box<dyn Game>) -> Self {
         let tick_rate = config.platform.frame.tick_rate;
         let physics = config.physics.take().unwrap_or_else(|| Box::new(NullPhysics));
+        let chunk_manager = config
+            .chunk_config
+            .take()
+            .map(crate::chunk::ChunkManager::new);
         Self {
             game,
             renderer: None,
@@ -205,6 +225,8 @@ impl Engine {
                 viewport: (1280, 720),
                 frame_count: 0,
                 initialized: false,
+                last_camera_pos: glam::Vec3::ZERO,
+                chunk_manager,
                 #[cfg(feature = "audio")]
                 audio: crate::audio::AudioManager::new(),
                 #[cfg(feature = "ui")]
@@ -387,6 +409,7 @@ impl AppDelegate for Engine {
                 physics: &mut *self.state.physics,
                 entity_map: &mut self.state.entity_map,
                 viewport: self.state.viewport,
+                chunks: self.state.chunk_manager.as_mut(),
                 #[cfg(feature = "audio")]
                 audio: self.state.audio.as_mut(),
             };

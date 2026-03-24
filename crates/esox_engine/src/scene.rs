@@ -365,6 +365,7 @@ pub fn load_scene(
                     near: cam.near,
                     far: cam.far,
                     active: cam.active,
+                    mode: cam.mode,
                 },
             );
         }
@@ -710,6 +711,7 @@ mod tests {
             near: 0.5,
             far: 500.0,
             active: true,
+            ..Default::default()
         };
         let pl = PointLightComponent {
             color: [1.0, 0.8, 0.6],

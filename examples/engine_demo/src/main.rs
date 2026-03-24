@@ -208,6 +208,7 @@ impl Game for EngineDemo {
                 near: 0.1,
                 far: 200.0,
                 active: true,
+                ..Default::default()
             },
         ));
     }

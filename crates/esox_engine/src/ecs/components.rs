@@ -68,6 +68,9 @@ pub struct Camera3D {
     pub near: f32,
     pub far: f32,
     pub active: bool,
+    /// Projection mode (perspective or orthographic).
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub mode: esox_gfx::mesh3d::CameraMode,
 }
 
 impl Default for Camera3D {
@@ -77,6 +80,7 @@ impl Default for Camera3D {
             near: 0.1,
             far: 1000.0,
             active: false,
+            mode: esox_gfx::mesh3d::CameraMode::Perspective,
         }
     }
 }

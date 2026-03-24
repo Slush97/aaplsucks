@@ -194,8 +194,8 @@ fn compute_cascade_matrix(
     light_dir: Vec3,
     light_distance: f32,
 ) -> Mat4 {
-    // Build a projection for this sub-frustum.
-    let proj = Mat4::perspective_rh(camera.fov_y, aspect, near_split, far_split);
+    // Build a projection for this sub-frustum (handles both perspective and ortho).
+    let proj = camera.sub_projection(aspect, near_split, far_split);
     let view = camera.view_matrix();
     let inv_vp = (proj * view).inverse();
 

@@ -341,6 +341,9 @@ impl AppDelegate for App {
         if let Some(loaded) = &mut self.loaded {
             if let Some(player) = loaded.anim_player.as_mut() {
                 player.advance(dt, &loaded.anim_clips);
+
+                // (debug removed)
+
                 for &si in loaded.handles.skinned_mesh_indices.iter().flatten() {
                     renderer.update_joints(gpu, si, player.skinning_matrices());
                 }

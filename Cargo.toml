@@ -19,6 +19,7 @@ members = [
     "examples/material_showcase",
     "examples/pokemon",
     "examples/pokemon_viewer",
+    "examples/factory",
 ]
 exclude = ["apps/dwnldr-gui"]
 

@@ -1,0 +1,42 @@
+[
+    (
+        id: "iron-ore",
+        name: "Iron Ore",
+        stack_size: 50,
+    ),
+    (
+        id: "copper-ore",
+        name: "Copper Ore",
+        stack_size: 50,
+    ),
+    (
+        id: "coal",
+        name: "Coal",
+        stack_size: 50,
+    ),
+    (
+        id: "stone",
+        name: "Stone",
+        stack_size: 50,
+    ),
+    (
+        id: "iron-plate",
+        name: "Iron Plate",
+        stack_size: 100,
+    ),
+    (
+        id: "copper-plate",
+        name: "Copper Plate",
+        stack_size: 100,
+    ),
+    (
+        id: "gear",
+        name: "Iron Gear",
+        stack_size: 100,
+    ),
+    (
+        id: "circuit",
+        name: "Electronic Circuit",
+        stack_size: 200,
+    ),
+]

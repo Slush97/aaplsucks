@@ -1,0 +1,10 @@
+[package]
+name = "factory"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_engine = { workspace = true, features = ["ui", "serialization"] }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }

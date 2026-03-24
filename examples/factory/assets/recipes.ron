@@ -31,4 +31,14 @@
         inputs: [("iron-plate", 1), ("copper-plate", 3)],
         outputs: [("circuit", 1)],
     ),
+    (
+        id: "refine-petroleum",
+        name: "Refine Crude Oil",
+        machine_type: Refinery,
+        duration_ticks: 120,
+        inputs: [],
+        outputs: [],
+        fluid_inputs: [("crude-oil", 60.0)],
+        fluid_outputs: [("petroleum", 40.0)],
+    ),
 ]

@@ -6,8 +6,9 @@
 
 use esox_engine::hecs;
 
-use crate::belt::{BeltSegment, GridPos};
+use crate::belt::{BeltSegment, GridPos, UndergroundBelt, UndergroundBeltMode};
 use crate::inventory::{Inventory, ItemId, ItemRegistry};
+use crate::power::PowerConsumer;
 
 /// How many ticks an inserter takes to complete one pickup-and-drop cycle.
 pub const INSERTER_CYCLE_TICKS: u32 = 30; // 0.5 seconds at 60Hz
@@ -63,10 +64,12 @@ impl Inserter {
     }
 }
 
-/// Source or destination for an inserter: either an inventory entity or a belt entity.
+/// Source or destination for an inserter: either an inventory entity, a belt entity,
+/// or an underground belt entity (Entry for dropoff, Exit for pickup).
 enum InsertTarget {
     Inventory(hecs::Entity),
     Belt(hecs::Entity),
+    UndergroundBelt(hecs::Entity),
 }
 
 /// Find the entity at a grid position that can be a source/target.
@@ -75,6 +78,12 @@ fn find_target_at(world: &hecs::World, pos: GridPos) -> Option<InsertTarget> {
     for (entity, belt) in world.query::<&BeltSegment>().iter() {
         if belt.grid_pos == pos {
             return Some(InsertTarget::Belt(entity));
+        }
+    }
+    // Check underground belts.
+    for (entity, ub) in world.query::<&UndergroundBelt>().iter() {
+        if ub.grid_pos == pos {
+            return Some(InsertTarget::UndergroundBelt(entity));
         }
     }
     // Check entities with Inventory + GridPos tag.
@@ -103,6 +112,20 @@ fn try_pickup(
                 }
             }
             belt.take_front()
+        }
+        InsertTarget::UndergroundBelt(entity) => {
+            let mut ub = world.get::<&mut UndergroundBelt>(*entity).ok()?;
+            // Only pick from Exit underground belts.
+            if ub.mode != UndergroundBeltMode::Exit {
+                return None;
+            }
+            let item = ub.held_item?;
+            if let Some(f) = filter {
+                if item != f {
+                    return None;
+                }
+            }
+            ub.held_item.take()
         }
         InsertTarget::Inventory(entity) => {
             let mut inv = world.get::<&mut Inventory>(*entity).ok()?;
@@ -137,6 +160,22 @@ fn try_dropoff(
                 false
             }
         }
+        InsertTarget::UndergroundBelt(entity) => {
+            if let Ok(mut ub) = world.get::<&mut UndergroundBelt>(*entity) {
+                // Only drop into Entry underground belts.
+                if ub.mode != UndergroundBeltMode::Entry {
+                    return false;
+                }
+                if ub.held_item.is_none() {
+                    ub.held_item = Some(item);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
         InsertTarget::Inventory(entity) => {
             if let Ok(mut inv) = world.get::<&mut Inventory>(*entity) {
                 inv.insert(item, 1, registry) == 0
@@ -160,6 +199,17 @@ pub fn inserter_tick_system(world: &mut hecs::World, registry: &ItemRegistry) {
             .collect();
 
     for (entity, pickup_pos, dropoff_pos, state, held_item, progress, cycle_ticks, filter) in inserters {
+        // Check power before starting a new pickup. In-flight swings finish unpowered.
+        if state == InserterState::Idle {
+            let powered = world
+                .get::<&PowerConsumer>(entity)
+                .map(|c| c.is_powered())
+                .unwrap_or(true);
+            if !powered {
+                continue;
+            }
+        }
+
         match state {
             InserterState::Idle => {
                 // Try to pick up an item.

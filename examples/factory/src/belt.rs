@@ -13,6 +13,9 @@ use crate::inventory::ItemId;
 /// Items move from slot 0 (back) to SLOTS-1 (front).
 pub const SLOTS_PER_BELT: usize = 4;
 
+/// Maximum tunnel distance for underground belts (in tiles, exclusive of entry/exit).
+pub const MAX_UNDERGROUND_DISTANCE: i32 = 5;
+
 /// Ticks per slot advance. Lower = faster belt. At 60Hz tick rate:
 /// - 8 ticks/slot = 7.5 items/sec throughput
 /// - 4 ticks/slot = 15 items/sec
@@ -152,13 +155,51 @@ impl BeltSegment {
     }
 }
 
+/// Whether an underground belt is an entry (items go in) or exit (items come out).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndergroundBeltMode {
+    Entry,
+    Exit,
+}
+
+/// An underground belt that teleports items between an Entry and a paired Exit.
+pub struct UndergroundBelt {
+    /// Direction items travel (Entry→Exit).
+    pub direction: Dir4,
+    /// Entry or Exit.
+    pub mode: UndergroundBeltMode,
+    /// Grid position.
+    pub grid_pos: GridPos,
+    /// Paired underground belt entity (Entry↔Exit).
+    pub pair: Option<hecs::Entity>,
+    /// Single item buffer.
+    pub held_item: Option<ItemId>,
+}
+
+impl UndergroundBelt {
+    pub fn new(grid_pos: GridPos, direction: Dir4, mode: UndergroundBeltMode) -> Self {
+        Self {
+            direction,
+            mode,
+            grid_pos,
+            pair: None,
+            held_item: None,
+        }
+    }
+}
+
 /// Run the belt advancement system for one tick.
 ///
-/// Two phases:
-/// 1. **Transfer**: For each belt with a front item, try to hand it off to the
-///    next belt (the neighbor in this belt's direction).
-/// 2. **Advance**: Shift items forward within each belt (back toward front).
+/// Phases:
+/// 1. **Underground teleport**: Entry with item + paired Exit empty → teleport.
+/// 2. **Transfer**: For each belt with a front item, try to hand it off to the
+///    next belt or an Entry underground belt (the neighbor in this belt's direction).
+/// 3. **Exit→Belt**: Exit buffers feed into downstream belt back slots.
+/// 4. **Advance**: Shift items forward within each belt (back toward front).
 pub fn belt_tick_system(world: &mut hecs::World) {
+    // ── Phase 0: Underground teleport (Entry → paired Exit) ──
+    underground_belt_tick_system(world);
+
     // Collect belt data to avoid borrow conflicts.
     let belt_data: Vec<(hecs::Entity, GridPos, Dir4, [Option<ItemId>; SLOTS_PER_BELT], u32)> = world
         .query_mut::<&BeltSegment>()
@@ -173,30 +214,48 @@ pub fn belt_tick_system(world: &mut hecs::World) {
         grid_lookup.insert(grid_pos, entity);
     }
 
-    // Phase 1: Transfer front items to neighbor belts.
-    // Collect transfers as (source_entity, dest_entity) pairs.
-    let mut transfers: Vec<(hecs::Entity, hecs::Entity)> = Vec::new();
+    // Collect underground belt data for cross-system transfers.
+    let ub_data: Vec<(hecs::Entity, GridPos, Dir4, UndergroundBeltMode, Option<ItemId>)> = world
+        .query_mut::<&UndergroundBelt>()
+        .into_iter()
+        .map(|(e, ub)| (e, ub.grid_pos, ub.direction, ub.mode, ub.held_item))
+        .collect();
+    let mut ub_grid_lookup: std::collections::HashMap<GridPos, usize> =
+        std::collections::HashMap::with_capacity(ub_data.len());
+    for (i, &(_, grid_pos, _, _, _)) in ub_data.iter().enumerate() {
+        ub_grid_lookup.insert(grid_pos, i);
+    }
+
+    // Phase 1: Transfer front items to neighbor belts OR Entry underground belts.
+    let mut belt_transfers: Vec<(hecs::Entity, hecs::Entity)> = Vec::new();
+    let mut belt_to_ub_transfers: Vec<(hecs::Entity, hecs::Entity)> = Vec::new();
     for &(entity, grid_pos, direction, items, _) in &belt_data {
         if items[SLOTS_PER_BELT - 1].is_some() {
             let neighbor_pos = grid_pos.neighbor(direction);
+            // Try neighbor belt first.
             if let Some(&neighbor_entity) = grid_lookup.get(&neighbor_pos) {
-                // Check that the neighbor can accept (back slot empty).
-                // Find neighbor in belt_data.
                 if let Some(&(_, _, _, neighbor_items, _)) = belt_data
                     .iter()
                     .find(|(e, _, _, _, _)| *e == neighbor_entity)
                 {
                     if neighbor_items[0].is_none() {
-                        transfers.push((entity, neighbor_entity));
+                        belt_transfers.push((entity, neighbor_entity));
+                        continue;
                     }
+                }
+            }
+            // No belt neighbor — check for Entry underground belt at neighbor_pos facing same direction.
+            if let Some(&ub_idx) = ub_grid_lookup.get(&neighbor_pos) {
+                let (ub_entity, _, ub_dir, ub_mode, ub_held) = ub_data[ub_idx];
+                if ub_dir == direction && ub_mode == UndergroundBeltMode::Entry && ub_held.is_none() {
+                    belt_to_ub_transfers.push((entity, ub_entity));
                 }
             }
         }
     }
 
-    // Execute transfers.
-    for (src, dst) in &transfers {
-        // Take from source front.
+    // Execute belt→belt transfers.
+    for (src, dst) in &belt_transfers {
         let item = {
             let mut src_belt = world.get::<&mut BeltSegment>(*src).unwrap();
             src_belt.items[SLOTS_PER_BELT - 1].take()
@@ -207,7 +266,59 @@ pub fn belt_tick_system(world: &mut hecs::World) {
         }
     }
 
-    // Phase 2: Advance items within each belt.
+    // Execute belt→Entry underground belt transfers.
+    for (src, dst) in &belt_to_ub_transfers {
+        let item = {
+            let mut src_belt = world.get::<&mut BeltSegment>(*src).unwrap();
+            src_belt.items[SLOTS_PER_BELT - 1].take()
+        };
+        if let Some(item) = item {
+            let mut ub = world.get::<&mut UndergroundBelt>(*dst).unwrap();
+            ub.held_item = Some(item);
+        }
+    }
+
+    // Phase 2: Exit underground belt → downstream belt back slot.
+    let mut ub_to_belt_transfers: Vec<(hecs::Entity, hecs::Entity)> = Vec::new();
+    // Re-read underground belt data after teleport phase may have changed buffers.
+    let ub_data_fresh: Vec<(hecs::Entity, GridPos, Dir4, UndergroundBeltMode, Option<ItemId>)> = world
+        .query_mut::<&UndergroundBelt>()
+        .into_iter()
+        .map(|(e, ub)| (e, ub.grid_pos, ub.direction, ub.mode, ub.held_item))
+        .collect();
+    for &(ub_entity, ub_pos, ub_dir, ub_mode, ub_held) in &ub_data_fresh {
+        if ub_mode == UndergroundBeltMode::Exit && ub_held.is_some() {
+            let downstream_pos = ub_pos.neighbor(ub_dir);
+            if let Some(&belt_entity) = grid_lookup.get(&downstream_pos) {
+                if let Some(&(_, _, _, _, _)) = belt_data
+                    .iter()
+                    .find(|(e, _, _, _, _)| *e == belt_entity)
+                {
+                    // Check current state (belt back slot may have been filled by belt→belt transfer).
+                    let back_free = world.get::<&BeltSegment>(belt_entity)
+                        .map(|b| b.items[0].is_none())
+                        .unwrap_or(false);
+                    if back_free {
+                        ub_to_belt_transfers.push((ub_entity, belt_entity));
+                    }
+                }
+            }
+        }
+    }
+
+    // Execute Exit→belt transfers.
+    for (src, dst) in &ub_to_belt_transfers {
+        let item = {
+            let mut ub = world.get::<&mut UndergroundBelt>(*src).unwrap();
+            ub.held_item.take()
+        };
+        if let Some(item) = item {
+            let mut belt = world.get::<&mut BeltSegment>(*dst).unwrap();
+            belt.items[0] = Some(item);
+        }
+    }
+
+    // Phase 3: Advance items within each belt.
     for (entity, _, _, _, _) in &belt_data {
         let mut belt = world.get::<&mut BeltSegment>(*entity).unwrap();
         belt.advance_tick += 1;
@@ -218,6 +329,40 @@ pub fn belt_tick_system(world: &mut hecs::World) {
                 if belt.items[i].is_none() && belt.items[i - 1].is_some() {
                     belt.items[i] = belt.items[i - 1].take();
                 }
+            }
+        }
+    }
+}
+
+/// Teleport items from Entry underground belts to their paired Exit.
+fn underground_belt_tick_system(world: &mut hecs::World) {
+    // Collect Entry belts with items and a pair.
+    let entries: Vec<(hecs::Entity, hecs::Entity)> = world
+        .query_mut::<&UndergroundBelt>()
+        .into_iter()
+        .filter_map(|(e, ub)| {
+            if ub.mode == UndergroundBeltMode::Entry && ub.held_item.is_some() {
+                ub.pair.map(|pair| (e, pair))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (entry_entity, exit_entity) in entries {
+        // Check exit has empty buffer.
+        let exit_empty = world
+            .get::<&UndergroundBelt>(exit_entity)
+            .map(|ub| ub.held_item.is_none())
+            .unwrap_or(false);
+        if exit_empty {
+            let item = {
+                let mut entry = world.get::<&mut UndergroundBelt>(entry_entity).unwrap();
+                entry.held_item.take()
+            };
+            if let Some(item) = item {
+                let mut exit = world.get::<&mut UndergroundBelt>(exit_entity).unwrap();
+                exit.held_item = Some(item);
             }
         }
     }
@@ -312,5 +457,202 @@ mod tests {
             let back = neighbor.neighbor(dir.opposite());
             assert_eq!(back, pos);
         }
+    }
+
+    // ── Underground belt tests ──
+
+    #[test]
+    fn underground_entry_exit_teleport() {
+        let mut world = hecs::World::new();
+
+        let entry_e = world.spawn((
+            UndergroundBelt::new(GridPos::new(0, 0), Dir4::East, UndergroundBeltMode::Entry),
+        ));
+        let exit_e = world.spawn((
+            UndergroundBelt::new(GridPos::new(3, 0), Dir4::East, UndergroundBeltMode::Exit),
+        ));
+
+        // Pair them.
+        world.get::<&mut UndergroundBelt>(entry_e).unwrap().pair = Some(exit_e);
+        world.get::<&mut UndergroundBelt>(exit_e).unwrap().pair = Some(entry_e);
+
+        // Put an item in the entry buffer.
+        world.get::<&mut UndergroundBelt>(entry_e).unwrap().held_item = Some(0);
+
+        // One tick should teleport to exit.
+        belt_tick_system(&mut world);
+
+        {
+            let entry = world.get::<&UndergroundBelt>(entry_e).unwrap();
+            assert!(entry.held_item.is_none(), "entry should be empty after teleport");
+        }
+        {
+            let exit = world.get::<&UndergroundBelt>(exit_e).unwrap();
+            assert_eq!(exit.held_item, Some(0), "exit should have the item");
+        }
+    }
+
+    #[test]
+    fn underground_pairing_within_range() {
+        // Test helper: simulate pairing logic (same as main.rs will do).
+        fn try_pair(world: &mut hecs::World, new_pos: GridPos, dir: Dir4, mode: UndergroundBeltMode) -> hecs::Entity {
+            let entity = world.spawn((UndergroundBelt::new(new_pos, dir, mode),));
+
+            // If placing an Exit, scan backward for unpaired Entry.
+            // If placing an Entry, scan forward for unpaired Exit.
+            let (scan_dir, target_mode) = match mode {
+                UndergroundBeltMode::Exit => (dir.opposite(), UndergroundBeltMode::Entry),
+                UndergroundBeltMode::Entry => (dir, UndergroundBeltMode::Exit),
+            };
+
+            let mut scan_pos = new_pos;
+            let mut found_pair = None;
+            for _ in 0..MAX_UNDERGROUND_DISTANCE {
+                scan_pos = scan_pos.neighbor(scan_dir);
+                // Find underground belt at scan_pos.
+                for (e, ub) in world.query::<&UndergroundBelt>().iter() {
+                    if e != entity && ub.grid_pos == scan_pos && ub.direction == dir
+                        && ub.mode == target_mode && ub.pair.is_none()
+                    {
+                        found_pair = Some(e);
+                        break;
+                    }
+                }
+                if found_pair.is_some() {
+                    break;
+                }
+            }
+
+            if let Some(pair_entity) = found_pair {
+                world.get::<&mut UndergroundBelt>(entity).unwrap().pair = Some(pair_entity);
+                world.get::<&mut UndergroundBelt>(pair_entity).unwrap().pair = Some(entity);
+            }
+
+            entity
+        }
+
+        let mut world = hecs::World::new();
+
+        // Place entry at (0,0) facing East.
+        let entry = try_pair(&mut world, GridPos::new(0, 0), Dir4::East, UndergroundBeltMode::Entry);
+        // Place exit at (3,0) facing East — within range (distance=3).
+        let exit = try_pair(&mut world, GridPos::new(3, 0), Dir4::East, UndergroundBeltMode::Exit);
+
+        assert_eq!(world.get::<&UndergroundBelt>(entry).unwrap().pair, Some(exit));
+        assert_eq!(world.get::<&UndergroundBelt>(exit).unwrap().pair, Some(entry));
+    }
+
+    #[test]
+    fn underground_max_distance_exceeded() {
+        // Same helper as above.
+        fn try_pair(world: &mut hecs::World, new_pos: GridPos, dir: Dir4, mode: UndergroundBeltMode) -> hecs::Entity {
+            let entity = world.spawn((UndergroundBelt::new(new_pos, dir, mode),));
+
+            let (scan_dir, target_mode) = match mode {
+                UndergroundBeltMode::Exit => (dir.opposite(), UndergroundBeltMode::Entry),
+                UndergroundBeltMode::Entry => (dir, UndergroundBeltMode::Exit),
+            };
+
+            let mut scan_pos = new_pos;
+            let mut found_pair = None;
+            for _ in 0..MAX_UNDERGROUND_DISTANCE {
+                scan_pos = scan_pos.neighbor(scan_dir);
+                for (e, ub) in world.query::<&UndergroundBelt>().iter() {
+                    if e != entity && ub.grid_pos == scan_pos && ub.direction == dir
+                        && ub.mode == target_mode && ub.pair.is_none()
+                    {
+                        found_pair = Some(e);
+                        break;
+                    }
+                }
+                if found_pair.is_some() {
+                    break;
+                }
+            }
+
+            if let Some(pair_entity) = found_pair {
+                world.get::<&mut UndergroundBelt>(entity).unwrap().pair = Some(pair_entity);
+                world.get::<&mut UndergroundBelt>(pair_entity).unwrap().pair = Some(entity);
+            }
+
+            entity
+        }
+
+        let mut world = hecs::World::new();
+
+        let entry = try_pair(&mut world, GridPos::new(0, 0), Dir4::East, UndergroundBeltMode::Entry);
+        // Place exit at (6,0) — distance 6, exceeds MAX_UNDERGROUND_DISTANCE (5).
+        let exit = try_pair(&mut world, GridPos::new(6, 0), Dir4::East, UndergroundBeltMode::Exit);
+
+        assert!(world.get::<&UndergroundBelt>(entry).unwrap().pair.is_none(), "entry should not pair");
+        assert!(world.get::<&UndergroundBelt>(exit).unwrap().pair.is_none(), "exit should not pair");
+    }
+
+    #[test]
+    fn belt_to_entry_transfer() {
+        let mut world = hecs::World::new();
+
+        // Belt at (0,0) facing East, front slot has item.
+        let mut belt = BeltSegment::new(GridPos::new(0, 0), Dir4::East);
+        belt.items[SLOTS_PER_BELT - 1] = Some(0);
+        world.spawn((belt,));
+
+        // Entry underground belt at (1,0) facing East (neighbor in belt's direction).
+        let entry_e = world.spawn((
+            UndergroundBelt::new(GridPos::new(1, 0), Dir4::East, UndergroundBeltMode::Entry),
+        ));
+
+        belt_tick_system(&mut world);
+
+        // Belt front should be empty, entry should have item.
+        for (_, b) in world.query_mut::<&BeltSegment>() {
+            assert!(b.items[SLOTS_PER_BELT - 1].is_none(), "belt front should be empty");
+        }
+        let entry = world.get::<&UndergroundBelt>(entry_e).unwrap();
+        assert_eq!(entry.held_item, Some(0), "entry should have the item");
+    }
+
+    #[test]
+    fn exit_to_belt_transfer() {
+        let mut world = hecs::World::new();
+
+        // Exit underground belt at (0,0) facing East with item.
+        let exit_e = world.spawn((
+            UndergroundBelt::new(GridPos::new(0, 0), Dir4::East, UndergroundBeltMode::Exit),
+        ));
+        world.get::<&mut UndergroundBelt>(exit_e).unwrap().held_item = Some(0);
+
+        // Belt at (1,0) facing East (downstream of exit).
+        world.spawn((BeltSegment::new(GridPos::new(1, 0), Dir4::East),));
+
+        belt_tick_system(&mut world);
+
+        // Exit buffer should be empty, belt back slot should have item.
+        {
+            let exit = world.get::<&UndergroundBelt>(exit_e).unwrap();
+            assert!(exit.held_item.is_none(), "exit should be empty");
+        }
+        for (_, b) in world.query_mut::<&BeltSegment>() {
+            assert_eq!(b.items[0], Some(0), "belt back should have item");
+        }
+    }
+
+    #[test]
+    fn unpaired_entry_holds_item() {
+        let mut world = hecs::World::new();
+
+        // Entry with no pair.
+        let entry_e = world.spawn((
+            UndergroundBelt::new(GridPos::new(0, 0), Dir4::East, UndergroundBeltMode::Entry),
+        ));
+        world.get::<&mut UndergroundBelt>(entry_e).unwrap().held_item = Some(0);
+
+        // Several ticks — item should stay.
+        for _ in 0..10 {
+            belt_tick_system(&mut world);
+        }
+
+        let entry = world.get::<&UndergroundBelt>(entry_e).unwrap();
+        assert_eq!(entry.held_item, Some(0), "unpaired entry should keep its item");
     }
 }

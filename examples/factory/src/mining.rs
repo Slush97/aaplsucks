@@ -4,6 +4,7 @@ use esox_engine::hecs;
 
 use crate::belt::GridPos;
 use crate::inventory::{ItemId, ItemRegistry};
+use crate::power::PowerConsumer;
 use crate::recipe::OutputInventory;
 
 /// An ore patch on the world grid.
@@ -93,6 +94,18 @@ pub fn mining_tick_system(world: &mut hecs::World, items: &ItemRegistry) {
             }
             continue;
         };
+
+        // Check power. Entities without a PowerConsumer are always powered (e.g. in tests).
+        let powered = world
+            .get::<&PowerConsumer>(miner_entity)
+            .map(|c| c.is_powered())
+            .unwrap_or(true);
+        if !powered {
+            if let Ok(mut miner) = world.get::<&mut Miner>(miner_entity) {
+                miner.active = false;
+            }
+            continue;
+        }
 
         // Check if output inventory is full.
         let output_full = world

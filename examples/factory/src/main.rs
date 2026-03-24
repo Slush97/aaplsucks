@@ -1,20 +1,25 @@
 //! Factory game — 3D Factorio-style factory builder on the ESOX engine.
 //!
-//! Phase 2: inventory, belts, inserters, machines, and mining.
+//! Phase 2+3: inventory, belts, inserters, machines, mining, power, and fluids.
 //!
 //! Controls:
 //!   WASD / Arrow keys — Pan camera
 //!   Q/E — Rotate camera
 //!   Scroll — Zoom in/out
-//!   1-5 — Select building (1=Belt, 2=Inserter, 3=Smelter, 4=Assembler, 5=Miner)
+//!   1-9,0 — Select building (1=Belt, 2=Inserter, 3=Smelter, 4=Assembler,
+//!            5=Miner, 6=Steam Engine, 7=Power Pole, 8=Pipe, 9=Refinery,
+//!            0=Underground Belt)
 //!   R — Rotate placement
 //!   LMB — Place building
 //!   Escape — Cancel placement / Exit
 
 mod belt;
+mod fluid;
+mod hud;
 mod inserter;
 mod inventory;
 mod mining;
+mod power;
 mod recipe;
 
 use esox_engine::*;
@@ -22,10 +27,12 @@ use esox_engine::esox_input::KeyCode;
 use esox_engine::glam::{Quat, Vec3};
 use esox_gfx::mesh3d::{CameraMode, MaterialDescriptor, MaterialType, MeshData, MeshHandle, MaterialHandle};
 
-use belt::{BeltSegment, Dir4, GridPos, SLOTS_PER_BELT};
+use belt::{BeltSegment, Dir4, GridPos, UndergroundBelt, UndergroundBeltMode, MAX_UNDERGROUND_DISTANCE, SLOTS_PER_BELT};
+use fluid::{FluidIO, FluidSource, FluidType, Pipe};
 use inserter::Inserter;
 use inventory::{Inventory, ItemRegistry};
 use mining::{Miner, ResourceNode};
+use power::{PowerConsumer, PowerPole, PowerSource};
 use recipe::{Machine, MachineType, OutputInventory, RecipeRegistry};
 
 /// Grid cell size in world units.
@@ -39,6 +46,11 @@ enum BuildTool {
     Smelter,
     Assembler,
     Miner,
+    SteamEngine,
+    PowerPole,
+    Pipe,
+    Refinery,
+    UndergroundBelt,
 }
 
 struct FactoryGame {
@@ -66,6 +78,12 @@ struct FactoryGame {
     assembler_mat: Option<MaterialHandle>,
     miner_mat: Option<MaterialHandle>,
     ore_node_mat: Option<MaterialHandle>,
+    steam_engine_mat: Option<MaterialHandle>,
+    power_pole_mat: Option<MaterialHandle>,
+    pipe_mat: Option<MaterialHandle>,
+    refinery_mat: Option<MaterialHandle>,
+    underground_belt_mat: Option<MaterialHandle>,
+    oil_well_mat: Option<MaterialHandle>,
     ghost_mat: Option<MaterialHandle>,
     ground_mat: Option<MaterialHandle>,
     item_mat: Option<MaterialHandle>,
@@ -100,6 +118,12 @@ impl Default for FactoryGame {
             assembler_mat: None,
             miner_mat: None,
             ore_node_mat: None,
+            steam_engine_mat: None,
+            power_pole_mat: None,
+            pipe_mat: None,
+            refinery_mat: None,
+            underground_belt_mat: None,
+            oil_well_mat: None,
             ghost_mat: None,
             ground_mat: None,
             item_mat: None,
@@ -148,6 +172,11 @@ impl Game for FactoryGame {
         ctx.input.bind_action("tool_smelter", ActionBinding::Key(KeyCode::Digit3));
         ctx.input.bind_action("tool_assembler", ActionBinding::Key(KeyCode::Digit4));
         ctx.input.bind_action("tool_miner", ActionBinding::Key(KeyCode::Digit5));
+        ctx.input.bind_action("tool_steam_engine", ActionBinding::Key(KeyCode::Digit6));
+        ctx.input.bind_action("tool_power_pole", ActionBinding::Key(KeyCode::Digit7));
+        ctx.input.bind_action("tool_pipe", ActionBinding::Key(KeyCode::Digit8));
+        ctx.input.bind_action("tool_refinery", ActionBinding::Key(KeyCode::Digit9));
+        ctx.input.bind_action("tool_underground_belt", ActionBinding::Key(KeyCode::Digit0));
 
         ctx.input.bind_axis("pan_x", AxisBinding::Keys {
             negative: KeyCode::KeyA,
@@ -195,6 +224,12 @@ impl Game for FactoryGame {
         self.assembler_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.2, 0.5, 0.8, 1.0], 0.4, 0.5));
         self.miner_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.7, 0.5, 0.2, 1.0], 0.6, 0.4));
         self.ore_node_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.4, 0.25, 0.15, 1.0], 0.9, 0.0));
+        self.steam_engine_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.5, 0.2, 0.15, 1.0], 0.5, 0.6));
+        self.power_pole_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.55, 0.35, 0.15, 1.0], 0.8, 0.1));
+        self.pipe_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.6, 0.6, 0.65, 1.0], 0.3, 0.8));
+        self.refinery_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.45, 0.42, 0.4, 1.0], 0.4, 0.7));
+        self.underground_belt_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.4, 0.4, 0.35, 1.0], 0.8, 0.15));
+        self.oil_well_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.15, 0.12, 0.1, 1.0], 0.9, 0.2));
         self.ghost_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.5, 1.0, 0.5, 0.4], 0.5, 0.0));
         self.ground_mat = Some(make_mat(ctx.renderer, ctx.gpu, [0.28, 0.32, 0.22, 1.0], 0.95, 0.0));
         self.item_mat = Some(make_mat(ctx.renderer, ctx.gpu, [1.0, 0.9, 0.3, 1.0], 0.3, 0.7));
@@ -309,6 +344,30 @@ impl Game for FactoryGame {
                 ));
             }
         }
+
+        // Crude oil wells.
+        for row in 0..2 {
+            for col in 0..2 {
+                let pos = GridPos::new(7 + col, 7 + row);
+                let world_pos = pos.to_world(CELL_SIZE);
+                ctx.world.spawn((
+                    FluidSource::new(FluidType::CrudeOil, fluid::CRUDE_OIL_RATE),
+                    pos,
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.1, world_pos.z),
+                        scale: Vec3::new(0.9, 0.2, 0.9),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: cube_mesh,
+                        material: self.oil_well_mat.unwrap(),
+                        tint: [0.15, 0.12, 0.1, 1.0],
+                        visible: true,
+                    },
+                ));
+            }
+        }
     }
 
     fn update(&mut self, ctx: &mut Ctx) {
@@ -362,6 +421,21 @@ impl Game for FactoryGame {
         if ctx.input.just_pressed("tool_miner") {
             self.build_tool = Some(BuildTool::Miner);
         }
+        if ctx.input.just_pressed("tool_steam_engine") {
+            self.build_tool = Some(BuildTool::SteamEngine);
+        }
+        if ctx.input.just_pressed("tool_power_pole") {
+            self.build_tool = Some(BuildTool::PowerPole);
+        }
+        if ctx.input.just_pressed("tool_pipe") {
+            self.build_tool = Some(BuildTool::Pipe);
+        }
+        if ctx.input.just_pressed("tool_refinery") {
+            self.build_tool = Some(BuildTool::Refinery);
+        }
+        if ctx.input.just_pressed("tool_underground_belt") {
+            self.build_tool = Some(BuildTool::UndergroundBelt);
+        }
 
         // ── Rotation ──
         if ctx.input.just_pressed("rotate") {
@@ -386,6 +460,8 @@ impl Game for FactoryGame {
         }
 
         // ── Game systems ──
+        power::power_tick_system(ctx.world);
+        fluid::fluid_tick_system(ctx.world);
         belt::belt_tick_system(ctx.world);
         inserter::inserter_tick_system(ctx.world, self.items());
         recipe::machine_tick_system(ctx.world, self.items(), self.recipes());
@@ -409,6 +485,11 @@ impl Game for FactoryGame {
                 BuildTool::Smelter => (Vec3::new(0.9, 0.8, 0.9), 0.4),
                 BuildTool::Assembler => (Vec3::new(0.9, 0.7, 0.9), 0.35),
                 BuildTool::Miner => (Vec3::new(0.85, 0.5, 0.85), 0.25),
+                BuildTool::SteamEngine => (Vec3::new(0.9, 0.9, 0.9), 0.45),
+                BuildTool::PowerPole => (Vec3::new(0.2, 1.4, 0.2), 0.7),
+                BuildTool::Pipe => (Vec3::new(0.5, 0.3, 0.5), 0.15),
+                BuildTool::Refinery => (Vec3::new(0.9, 1.0, 0.9), 0.5),
+                BuildTool::UndergroundBelt => (Vec3::new(0.9, 0.12, 0.9), 0.06),
             };
             let pos = Vec3::new(world_pos.x, y_offset, world_pos.z);
             let rot = Quat::from_rotation_y(self.build_direction.angle_y());
@@ -442,30 +523,18 @@ impl Game for FactoryGame {
         self.overlay_renderer.draw(ctx.renderer);
     }
 
-    fn ui(&mut self, ui: &mut esox_ui::Ui, _ctx: &Ctx) {
-        let tool_name = match self.build_tool {
-            None => "None",
-            Some(BuildTool::Belt) => "Belt",
-            Some(BuildTool::Inserter) => "Inserter",
-            Some(BuildTool::Smelter) => "Smelter",
-            Some(BuildTool::Assembler) => "Assembler",
-            Some(BuildTool::Miner) => "Miner",
-        };
-        let dir_name = match self.build_direction {
-            Dir4::North => "N",
-            Dir4::East => "E",
-            Dir4::South => "S",
-            Dir4::West => "W",
-        };
-        let text = format!(
-            "Tool: {} | Dir: {} | Grid: ({}, {}) | Tick: {}",
-            tool_name,
-            dir_name,
-            self.cursor_grid.0.x,
-            self.cursor_grid.0.y,
+    fn ui(&mut self, ui: &mut esox_ui::Ui, ctx: &Ctx) {
+        hud::draw_hud(
+            ui,
+            ctx.world,
+            self.items.as_ref().unwrap(),
+            self.recipes.as_ref().unwrap(),
+            self.build_tool,
+            self.build_direction,
+            self.cursor_grid,
             self.tick_count,
+            ctx.viewport,
         );
-        ui.label(&text);
     }
 
     fn should_exit(&self) -> bool {
@@ -546,6 +615,7 @@ impl FactoryGame {
                 let dropoff = pos.neighbor(dir);
                 ctx.world.spawn((
                     Inserter::new(pickup, dropoff),
+                    PowerConsumer::new(power::INSERTER_WATTS),
                     Transform3D {
                         position: Vec3::new(world_pos.x, 0.3, world_pos.z),
                         rotation: Quat::from_rotation_y(dir.angle_y()),
@@ -568,6 +638,7 @@ impl FactoryGame {
                     Machine::with_recipe(MachineType::Smelter, recipe.unwrap_or(0)),
                     Inventory::new(4),
                     OutputInventory(Inventory::new(4)),
+                    PowerConsumer::new(power::SMELTER_WATTS),
                     pos,
                     Transform3D {
                         position: Vec3::new(world_pos.x, 0.4, world_pos.z),
@@ -590,6 +661,7 @@ impl FactoryGame {
                     Machine::with_recipe(MachineType::Assembler, recipe.unwrap_or(0)),
                     Inventory::new(8),
                     OutputInventory(Inventory::new(4)),
+                    PowerConsumer::new(power::ASSEMBLER_WATTS),
                     pos,
                     Transform3D {
                         position: Vec3::new(world_pos.x, 0.35, world_pos.z),
@@ -610,6 +682,7 @@ impl FactoryGame {
                 ctx.world.spawn((
                     Miner::new(pos),
                     OutputInventory(Inventory::new(4)),
+                    PowerConsumer::new(power::MINER_WATTS),
                     pos,
                     Transform3D {
                         position: Vec3::new(world_pos.x, 0.25, world_pos.z),
@@ -626,6 +699,142 @@ impl FactoryGame {
                     },
                 ));
             }
+            BuildTool::SteamEngine => {
+                ctx.world.spawn((
+                    PowerSource::new(power::STEAM_ENGINE_WATTS),
+                    pos,
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.45, world_pos.z),
+                        rotation: Quat::from_rotation_y(dir.angle_y()),
+                        scale: Vec3::new(0.9, 0.9, 0.9),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: self.cube_mesh.unwrap(),
+                        material: self.steam_engine_mat.unwrap(),
+                        tint: [1.0; 4],
+                        visible: true,
+                    },
+                ));
+            }
+            BuildTool::PowerPole => {
+                ctx.world.spawn((
+                    PowerPole::new(power::POLE_REACH),
+                    pos,
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.7, world_pos.z),
+                        rotation: Quat::IDENTITY,
+                        scale: Vec3::new(0.2, 1.4, 0.2),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: self.cube_mesh.unwrap(),
+                        material: self.power_pole_mat.unwrap(),
+                        tint: [1.0; 4],
+                        visible: true,
+                    },
+                ));
+            }
+            BuildTool::Pipe => {
+                ctx.world.spawn((
+                    Pipe::new(pos),
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.15, world_pos.z),
+                        rotation: Quat::IDENTITY,
+                        scale: Vec3::new(0.5, 0.3, 0.5),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: self.cube_mesh.unwrap(),
+                        material: self.pipe_mat.unwrap(),
+                        tint: [1.0; 4],
+                        visible: true,
+                    },
+                ));
+            }
+            BuildTool::Refinery => {
+                let (recipe_id, fio) = {
+                    let recipes = self.recipes();
+                    let rid = recipes.id_of("refine-petroleum").unwrap();
+                    let recipe = recipes.get(rid);
+                    (rid, FluidIO::from_recipe(&recipe.fluid_inputs, &recipe.fluid_outputs))
+                };
+                ctx.world.spawn((
+                    Machine::with_recipe(MachineType::Refinery, recipe_id),
+                    Inventory::new(4),
+                    OutputInventory(Inventory::new(4)),
+                    PowerConsumer::new(power::REFINERY_WATTS),
+                    fio,
+                    pos,
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.5, world_pos.z),
+                        rotation: Quat::from_rotation_y(dir.angle_y()),
+                        scale: Vec3::new(0.9, 1.0, 0.9),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: self.cube_mesh.unwrap(),
+                        material: self.refinery_mat.unwrap(),
+                        tint: [1.0; 4],
+                        visible: true,
+                    },
+                ));
+            }
+            BuildTool::UndergroundBelt => {
+                // Auto-detect: if there's an unpaired Entry within range facing the same
+                // direction, place an Exit and pair. Otherwise place an Entry.
+                let mut found_entry: Option<hecs::Entity> = None;
+                {
+                    let mut scan_pos = pos;
+                    for _ in 0..MAX_UNDERGROUND_DISTANCE {
+                        scan_pos = scan_pos.neighbor(dir.opposite());
+                        for (e, ub) in ctx.world.query::<&UndergroundBelt>().iter() {
+                            if ub.grid_pos == scan_pos && ub.direction == dir
+                                && ub.mode == UndergroundBeltMode::Entry && ub.pair.is_none()
+                            {
+                                found_entry = Some(e);
+                                break;
+                            }
+                        }
+                        if found_entry.is_some() {
+                            break;
+                        }
+                    }
+                }
+
+                let (mode, tint) = if found_entry.is_some() {
+                    (UndergroundBeltMode::Exit, [0.7, 0.8, 0.7, 1.0])
+                } else {
+                    (UndergroundBeltMode::Entry, [0.8, 0.7, 0.7, 1.0])
+                };
+
+                let entity = ctx.world.spawn((
+                    UndergroundBelt::new(pos, dir, mode),
+                    Transform3D {
+                        position: Vec3::new(world_pos.x, 0.06, world_pos.z),
+                        rotation: Quat::from_rotation_y(dir.angle_y()),
+                        scale: Vec3::new(0.9, 0.12, 0.9),
+                        ..Transform3D::default()
+                    },
+                    GlobalTransform::default(),
+                    MeshRenderer {
+                        mesh: self.cube_mesh.unwrap(),
+                        material: self.underground_belt_mat.unwrap(),
+                        tint,
+                        visible: true,
+                    },
+                ));
+
+                // Pair with found entry.
+                if let Some(entry_entity) = found_entry {
+                    ctx.world.get::<&mut UndergroundBelt>(entity).unwrap().pair = Some(entry_entity);
+                    ctx.world.get::<&mut UndergroundBelt>(entry_entity).unwrap().pair = Some(entity);
+                }
+            }
         }
     }
 
@@ -633,6 +842,16 @@ impl FactoryGame {
     fn is_grid_occupied(&self, ctx: &Ctx, pos: GridPos) -> bool {
         for (_, belt) in ctx.world.query::<&BeltSegment>().iter() {
             if belt.grid_pos == pos {
+                return true;
+            }
+        }
+        for (_, ub) in ctx.world.query::<&UndergroundBelt>().iter() {
+            if ub.grid_pos == pos {
+                return true;
+            }
+        }
+        for (_, pipe) in ctx.world.query::<&Pipe>().iter() {
+            if pipe.grid_pos == pos {
                 return true;
             }
         }

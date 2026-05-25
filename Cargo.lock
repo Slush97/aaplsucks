@@ -1365,6 +1365,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "glb_viewer"
+version = "0.1.0"
+dependencies = [
+ "esox_gfx",
+ "esox_platform",
+ "glam 0.29.3",
+ "tracing-subscriber",
+ "wgpu",
+]
+
+[[package]]
 name = "gltf"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

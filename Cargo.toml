@@ -20,6 +20,7 @@ members = [
     "examples/pokemon",
     "examples/pokemon_viewer",
     "examples/glb_viewer",
+    "examples/vpk_viewer",
     "examples/factory",
 ]
 exclude = ["apps/dwnldr-gui"]

@@ -1,0 +1,17 @@
+[package]
+name = "vpk_viewer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+esox_gfx = { workspace = true, features = ["mesh3d"] }
+esox_platform = { workspace = true }
+glam = "0.29"
+tracing-subscriber = { workspace = true }
+wgpu = { workspace = true }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+notify = "7"
+# Sibling workspace: the Deadlock .vmdl_c -> GLB exporter. Machine-local path
+# dep is intentional; this example is a dev tool, not a shipped artifact.
+vpkmerge-core = { path = "../../../grimoire-workspace/vpkmerge/vpkmerge-core" }

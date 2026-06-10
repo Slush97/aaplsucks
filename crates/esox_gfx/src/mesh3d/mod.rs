@@ -53,7 +53,7 @@ pub use material::{BlendMode3D, MaterialDescriptor, MaterialHandle, MaterialType
 pub use mesh::{MeshData, MeshHandle};
 pub use postprocess::PostProcess3DConfig;
 pub use render_types::BatchStats3D;
-pub use renderer::Renderer3D;
+pub use renderer::{Renderer3D, SceneCheckpoint};
 pub use scene::Scene3D;
 pub use shadow::{OmniShadowUniforms, PointShadowPass, ShadowConfig, ShadowPass, ShadowUniforms, SpotShadowPass};
 pub use ssao::{SsaoConfig, SsaoParams, SsaoPass};

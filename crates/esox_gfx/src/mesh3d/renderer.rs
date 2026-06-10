@@ -39,6 +39,22 @@ use super::shaders_embedded::{SHADER_PREAMBLE, compile_shader_modules};
 
 // ── Renderer ──
 
+/// A snapshot of the renderer's resource arenas, taken with
+/// [`Renderer3D::scene_checkpoint`] and restored with
+/// [`Renderer3D::clear_scene`]. Lets scene-reload flows (model viewers, level
+/// switches) release everything uploaded after a known-good baseline without
+/// invalidating the baseline's handles.
+#[derive(Debug, Clone, Copy)]
+pub struct SceneCheckpoint {
+    mesh_regions: usize,
+    mega_vertex_used: u32,
+    mega_index_used: u32,
+    meshes: usize,
+    skinned_meshes: usize,
+    textures: usize,
+    materials: usize,
+}
+
 /// 3D mesh renderer.
 ///
 /// Manages render pipelines, materials, lighting, depth buffer, instance buffer,
@@ -704,6 +720,53 @@ impl Renderer3D {
             depth_resolve_pass,
             sample_count: gpu.sample_count,
         }
+    }
+
+    /// Snapshot the resource arenas so everything uploaded afterwards can be
+    /// released in one call with [`Renderer3D::clear_scene`].
+    ///
+    /// Take it after uploading long-lived resources (ground plane, shared
+    /// materials); reload flows then clear back to it before re-uploading.
+    pub fn scene_checkpoint(&self) -> SceneCheckpoint {
+        SceneCheckpoint {
+            mesh_regions: self.mesh_regions.len(),
+            mega_vertex_used: self.mega_buffer.vertex_used,
+            mega_index_used: self.mega_buffer.index_used,
+            meshes: self.meshes.len(),
+            skinned_meshes: self.skinned_meshes.len(),
+            textures: self.textures.len(),
+            materials: self.materials.len(),
+        }
+    }
+
+    /// Release every mesh, skinned mesh, texture and material uploaded after
+    /// `checkpoint` was taken: the arenas are truncated and the mega-buffer
+    /// write cursors rewind, so the freed GPU memory is reused by later
+    /// uploads instead of accumulating across scene reloads.
+    ///
+    /// Handles obtained after the checkpoint become dangling and must be
+    /// dropped before the next draw (a stale static-mesh handle would read
+    /// another mesh's region once the space is reused). Handles from before
+    /// the checkpoint stay valid. In-flight GPU work is unaffected; wgpu keeps
+    /// the underlying resources alive until submitted frames complete.
+    pub fn clear_scene(&mut self, checkpoint: &SceneCheckpoint) {
+        self.mesh_regions.truncate(checkpoint.mesh_regions);
+        self.mega_buffer.vertex_used = checkpoint
+            .mega_vertex_used
+            .min(self.mega_buffer.vertex_used);
+        self.mega_buffer.index_used = checkpoint.mega_index_used.min(self.mega_buffer.index_used);
+        self.meshes.truncate(checkpoint.meshes);
+        self.skinned_meshes.truncate(checkpoint.skinned_meshes);
+        self.textures.truncate(checkpoint.textures);
+        self.materials.truncate(checkpoint.materials);
+        tracing::debug!(
+            mesh_regions = self.mesh_regions.len(),
+            meshes = self.meshes.len(),
+            skinned_meshes = self.skinned_meshes.len(),
+            textures = self.textures.len(),
+            materials = self.materials.len(),
+            "cleared scene resources back to checkpoint"
+        );
     }
 
     /// Upload mesh geometry to the shared mega-buffer and return a handle.

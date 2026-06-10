@@ -363,6 +363,7 @@ fn spawn_watcher(
         .and_then(|s| s.to_str())
         .unwrap_or_default();
     let prefix = stem.strip_suffix("dir").unwrap_or(stem).to_string();
+    let ext = file.extension().map(|e| e.to_os_string());
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
@@ -381,10 +382,15 @@ fn spawn_watcher(
         if !content_change {
             return;
         }
+        // Same extension AND same stem family. The extension check matters:
+        // prefix alone also caught unrelated files in the watched dir (e.g. a
+        // `live_demo.log` next to `live_dir.vpk` that the viewer's own output
+        // was piped into, which retriggered the watcher on every log line).
         let relevant = event.paths.iter().any(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&prefix))
+            p.extension().map(|e| e.to_os_string()) == ext
+                && p.file_stem()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
         });
         if relevant {
             *dirty.lock().unwrap() = Some(Instant::now());
